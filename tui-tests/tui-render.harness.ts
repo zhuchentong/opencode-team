@@ -158,6 +158,10 @@ console.log(`插件 id: ${t.id}`);
   // Show 无 fallback（undefined 返回风险）——session.panel render 必须带 fallback 或不用 Show
   const showNoFallback = src.match(/<Show when=\{panel\?\.name[^}]*\}>\s*\n\s*<WfBoardPanel/);
   ok("P4 session.panel 的 Show 带 fallback（或无 Show）", !showNoFallback);
+  // r27 防退化：WfBoardPanel 区域内禁止「JSX 中调用返回 JSX 的函数」（真机崩溃死点：
+  // rows-set 后 IIFE 整树重建与 Show 挂载交互 → 宿主 e.length；见 ERR-20261110-005）
+  const panelRegion = src.slice(src.indexOf("function WfBoardPanel"), src.indexOf("export default"));
+  ok("P4 WfBoardPanel 无 rc(IIFE) 子树重建模式", !panelRegion.includes("rc(() =>"), "panel 内函数子节点必须返回字符串而非 JSX");
 }
 
 // ── P5：侧边栏挂件 ─────────────────────────────────────────────────
