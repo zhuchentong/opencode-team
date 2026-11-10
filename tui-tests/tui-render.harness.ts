@@ -178,5 +178,95 @@ console.log(`插件 id: ${t.id}`);
   }
 }
 
+// ── P6：宿主完整管线复刻（S$ → H0(ErrorBoundary) → gDt(children().toArray()) → 容器数组 children）──
+// 依据二进制提取：slot 容器把每个贡献包成 H0(lT=ErrorBoundary)，gDt 用 solid children() 规范化
+// 为节点数组；session.panel 上宿主内置贡献（diffs 等，when=false）与我们的贡献同容器共存；
+// panel.input 是带 getter 的响应对象，open 过程 name 会经历 false→true 响应切换。
+{
+  const $solid = await import("solid-js");
+  const { children: $children, createMemo, createSignal } = $solid;
+
+  // harness 的 solid-js 解析到 server 构建，其 Show/ErrorBoundary 语义与宿主客户端构建有差异
+  // → 手写等价物；崩溃用 try/catch 捕获成可见错误。
+  const gDtReplica = (childrenGetter: () => any) => {
+    const r = $children(childrenGetter);
+    return createMemo(() => {
+      const i = r.toArray();
+      if (i.some((o: any) => typeof o === "string" || typeof o === "number")) throw new Error("rendered bare text; wrap it in <text>");
+      return i;
+    });
+  };
+  const showReplica = (when: () => boolean, children: () => any, fallback?: () => any) =>
+    createMemo(() => (when() ? children() : fallback ? fallback() : undefined));
+
+  const { ctx, slots, setSessions, listeners } = makeCtx();
+  t.setup(ctx as any);
+  const panelRender = slots["session.panel"];
+
+  // P6a：内置 diffs 贡献（when=false 渲染空）+ 我们的贡献（匹配）经 gDt 共存首渲染
+  {
+    let crash: any = null;
+    let setup: any = null;
+    try {
+      setSessions([{ sessionID: "s1", slug: "task-one", phase: "building", rounds: {}, testPlanWritten: true, updatedAt: "2026-11-10T10:00:00Z" }]);
+      setup = await testRender(() => {
+        const diffs = gDtReplica(() => showReplica(() => false, () => () => null));
+        const ours = gDtReplica(() => panelRender({ name: "wf.board", sessionID: "ses_m" }));
+        return [diffs(), ours()] as any;
+      }, { width: 60, height: 30 });
+      await setup.flush();
+      ok("P6a gDt 多贡献首渲染不崩", true);
+      ok("P6a 帧含看板标题", setup.captureCharFrame().includes("WF 看板"));
+    } catch (e: any) {
+      ok("P6a gDt 多贡献首渲染不崩", false, `${e?.message} @ ${String(e?.stack).split("\n").slice(1, 4).join(" <- ")}`);
+    }
+    if (setup) await setup.dispose();
+  }
+
+  // P6b：panel.name diffs→wf.board 响应切换（打开面板时容器的真实 reconcile 序列）
+  {
+    let crash: any = null;
+    let setup: any = null;
+    try {
+      const [pn, setPn] = createSignal("diffs");
+      const panelObj = { get name() { return pn(); }, sessionID: "ses_m" };
+      setup = await testRender(() => {
+        const diffs = gDtReplica(() => showReplica(() => panelObj.name === "diffs", () => () => null));
+        const ours = gDtReplica(() => panelRender(panelObj));
+        return [diffs(), ours()] as any;
+      }, { width: 60, height: 30 });
+      await setup.flush();
+      setPn("wf.board");
+      await setup.flush();
+      await setup.flush();
+      ok("P6b name 响应切换 diffs→wf.board 不崩", true);
+    } catch (e: any) {
+      ok("P6b name 响应切换 diffs→wf.board 不崩", false, `${e?.message} @ ${String(e?.stack).split("\n").slice(1, 4).join(" <- ")}`);
+    }
+    if (setup) await setup.dispose();
+  }
+
+  // P6c：已挂载面板收到 updated 事件 → refresh → rows 更新（按 a/r 后的真实更新路径）
+  {
+    let crash: any = null;
+    let setup: any = null;
+    try {
+      setSessions([{ sessionID: "s9", slug: "after-a", phase: "done", rounds: {}, testPlanWritten: false, updatedAt: "2026-11-10T13:00:00Z" }]);
+      setup = await testRender(() => {
+        const ours = gDtReplica(() => panelRender({ name: "wf.board", sessionID: "ses_m" }));
+        return ours() as any;
+      }, { width: 60, height: 30 });
+      await setup.flush();
+      for (const cb of listeners) cb();
+      await setup.flush();
+      await setup.flush();
+      ok("P6c updated 事件驱动重渲染不崩", true);
+    } catch (e: any) {
+      ok("P6c updated 事件驱动重渲染不崩", false, `${e?.message} @ ${String(e?.stack).split("\n").slice(1, 4).join(" <- ")}`);
+    }
+    if (setup) await setup.dispose();
+  }
+}
+
 console.log(`\n${pass} 通过, ${errors.length} 失败`);
 if (errors.length) { console.log("失败项：\n - " + errors.join("\n - ")); process.exit(1); }

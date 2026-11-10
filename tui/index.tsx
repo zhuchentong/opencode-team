@@ -189,11 +189,14 @@ const hhmm = (iso: unknown) => { const s = str(iso); return s.length >= 16 ? s.s
 
 function WfBoardPanel(props: any) {
   const ctx = props.context;
+  // M15.1 同款观测：面板死亡前最后证据（崩溃无 toast 落日志，靠此记录定位死点）
+  probeOnce({ panelEv: "mount", sid: String(props.panel?.sessionID ?? ""), pname: String(props.panel?.name ?? "") });
   const [rows, setRows] = createSignal<any[]>([]);
   const [err, setErr] = createSignal<string | null>(null);
   const [all, setAll] = createSignal(false); // M15②：a 键切换 当前项目/全部项目
 
   const refresh = async () => {
+    probeOnce({ panelEv: "refresh-start", sid: String(props.panel?.sessionID ?? "") });
     try {
       // M10-d A6：看板默认只显示当前项目（M14：附带 directory 供无 projectID 旧态回退）
       let pid = null;
@@ -204,9 +207,12 @@ function WfBoardPanel(props: any) {
         dir = cs?.location?.directory ?? null;
       } catch { }
       const r = await ctx.client.rpc(Wf).list(all() ? {} : (pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {}));
+      probeOnce({ panelEv: "rpc-list-ok", n: Array.isArray(r?.sessions) ? r.sessions.length : -1 });
       setRows(Array.isArray(r?.sessions) ? r.sessions : []);
       setErr(null);
+      probeOnce({ panelEv: "rows-set" });
     } catch (e) {
+      probeOnce({ panelEv: "refresh-err", err: str((e as Error)?.message ?? e) });
       setErr(str((e as Error)?.message ?? e));
     }
   };
@@ -214,6 +220,7 @@ function WfBoardPanel(props: any) {
 
   const off = ctx.client.rpc(Wf).events.on("updated", () => { refresh(); });
   onCleanup(() => { try { off?.(); } catch { } });
+  probeOnce({ panelEv: "subscribed" });
 
   // 面板内按键（仅在面板持有输入时生效）
   ctx.keymap.layer(() => ({
@@ -224,6 +231,7 @@ function WfBoardPanel(props: any) {
       { id: "wf.board.close", title: "关闭看板", group: "wf 看板", bind: "q", run: () => props.panel?.close?.() },
     ],
   }));
+  probeOnce({ panelEv: "layer-ok" });
 
   // M15：每任务两行——主行（slug+阶段+进度条）/ 副行（轮次/关卡/时间/会话尾6位）
   const nth = (n: number) => {
@@ -258,6 +266,7 @@ function WfBoardPanel(props: any) {
   // 旧实现「错误/暂无/有数据」三分支子节点数量不同（2/2/20 个 text），宿主 slot 管线
   // 对子树形态变化崩溃（e.length）。统一为固定 19 个 <text>：1 状态行 + 6 任务 × 3 行，
   // 空槽位渲染空字符串；结构恒定、仅文本内容变化。
+  probeOnce({ panelEv: "pre-return" });
   return (
     <box flexDirection="column">
       <text fg={ctx.theme.text.base}>{"WF 看板"}</text>
@@ -269,6 +278,7 @@ function WfBoardPanel(props: any) {
         const status = err()
           ? `范围: ${scope} · ⚠️ 加载错误: ${str(err())}`
           : `范围: ${scope} · ${count === 0 ? "（暂无工作流任务）" : `共 ${count} 个任务（每任务 3 行），最多显示 ${PANEL_MAX}`}`;
+        probeOnce({ panelEv: "render", count, scope, hasErr: !!err() });
         return (
           <box flexDirection="column">
             <text fg={ctx.theme.text.muted}>{status}</text>
