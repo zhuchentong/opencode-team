@@ -15,7 +15,7 @@ const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
 const TUI_BUILD = "M15.1";
 const LOADED_AT = new Date().toISOString();
-const probeOnce = (data) => {
+const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
     try {
       const fs = await import("node:fs");
@@ -31,23 +31,26 @@ const probeOnce = (data) => {
 // M10-d A1：阶段定义单一来源 shared/phases.js（与 server 共用）
 import { STAGE_ORDER, STAGE_LABEL, FOLD, CANON } from "../shared/phases.ts";
 
-const stageOf = (phase) => {
+const stageOf = (phase: any) => {
   const p = FOLD[phase] ?? phase;
   const i = STAGE_ORDER.indexOf(p);
   return i < 0 ? 0 : i;
 };
 
-const str = (v) => (v === null || v === undefined ? "" : String(v));
+const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+
+// opentui JSX 类型不覆盖函数子节点（Solid 响应式 getter 合法，运行时实证 M15.1）——仅类型断言，运行时子节点仍是同一函数引用
+const rc = (f: () => any): any => f;
 
 // ── M8-a/M9：侧边栏挂件（当前会话状态）──────────────────────────────
-function WfBoard(props) {
-  const [st, setSt] = createSignal(null);
-  const [err, setErr] = createSignal(null);
+function WfBoard(props: any) {
+  const [st, setSt] = createSignal<any>(null);
+  const [err, setErr] = createSignal<string | null>(null);
   // M15①③：当前会话无活动任务时，回退显示本项目→全局的活跃任务（≤3 行，全部字符串）
-  const [oth, setOth] = createSignal([]);
+  const [oth, setOth] = createSignal<string[]>([]);
   const [othScope, setOthScope] = createSignal("");
 
-  const listLine = (x) => {
+  const listLine = (x: any) => {
     const r = x?.rounds ?? {};
     return `${str(x?.slug || "(未定)")} · ${str(x?.phase ?? "?")} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
   };
@@ -69,15 +72,15 @@ function WfBoard(props) {
       } catch { }
       try {
         const mine = await rpc.list(pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {});
-        const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+        const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x: any) => x?.phase && x.phase !== "done").slice(0, 3);
         if (act.length) { setOth(act.map(listLine)); setOthScope("本项目"); return; }
         const allR = await rpc.list({});
-        const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+        const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x: any) => x?.phase && x.phase !== "done").slice(0, 3);
         setOth(cross.map(listLine));
         setOthScope(cross.length ? "全局·其它项目" : "");
       } catch { setOth([]); setOthScope(""); }
     } catch (e) {
-      const m = str(e?.message ?? e);
+      const m = str((e as Error)?.message ?? e);
       probeOnce({ sessionID: props.sessionID, rpcErr: m });
       setErr(m);
     }
@@ -93,7 +96,7 @@ function WfBoard(props) {
 
   return (
     <box flexDirection="column">
-      {() => {
+      {rc(() => {
         try {
           if (err()) return <text fg={T.text.feedback.error}>{`wf 错误: ${str(err())}`}</text>;
           if (!props.sessionID) return <text fg={T.text.muted}>{"  wf: 无会话"}</text>;
@@ -103,7 +106,7 @@ function WfBoard(props) {
           if (!s.active) {
             const o = oth();
             if (o.length > 0) {
-              const line = (n) => (o[n] ? `  ${o[n]}` : "");
+              const line = (n: number) => (o[n] ? `  ${o[n]}` : "");
               return (
                 <box flexDirection="column">
                   <text fg={T.text.muted}>{"── wf ──────────────"}</text>
@@ -144,7 +147,7 @@ function WfBoard(props) {
           const bar = "●".repeat(done) + "○".repeat(total - done);
 
           const arts = s.artifacts ?? {};
-          const extraCount = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0).length;
+          const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0).length;
           const verdict = s.testReportVerdict;
 
           return (
@@ -172,9 +175,9 @@ function WfBoard(props) {
             </box>
           );
         } catch (e) {
-          return <text fg={T.text.feedback.error}>{`wf 渲染异常: ${str(e?.message ?? e)}`}</text>;
+          return <text fg={T.text.feedback.error}>{`wf 渲染异常: ${str((e as Error)?.message ?? e)}`}</text>;
         }
-      }}
+      })}
     </box>
   );
 }
@@ -182,12 +185,12 @@ function WfBoard(props) {
 // ── M8-b/M15：面板看板（全部工作流任务）───────────────────────────
 // 同样遵守渲染纪律：固定行数（每任务 2 行 × 最多 6 任务），全部是字符串子节点。
 const PANEL_MAX = 6;
-const hhmm = (iso) => { const s = str(iso); return s.length >= 16 ? s.slice(11, 16) : ""; };
+const hhmm = (iso: unknown) => { const s = str(iso); return s.length >= 16 ? s.slice(11, 16) : ""; };
 
-function WfBoardPanel(props) {
+function WfBoardPanel(props: any) {
   const ctx = props.context;
-  const [rows, setRows] = createSignal([]);
-  const [err, setErr] = createSignal(null);
+  const [rows, setRows] = createSignal<any[]>([]);
+  const [err, setErr] = createSignal<string | null>(null);
   const [all, setAll] = createSignal(false); // M15②：a 键切换 当前项目/全部项目
 
   const refresh = async () => {
@@ -204,7 +207,7 @@ function WfBoardPanel(props) {
       setRows(Array.isArray(r?.sessions) ? r.sessions : []);
       setErr(null);
     } catch (e) {
-      setErr(str(e?.message ?? e));
+      setErr(str((e as Error)?.message ?? e));
     }
   };
   refresh();
@@ -223,11 +226,11 @@ function WfBoardPanel(props) {
   }));
 
   // M15：每任务两行——主行（slug+阶段+进度条）/ 副行（轮次/关卡/时间/会话尾6位）
-  const nth = (n) => {
+  const nth = (n: number) => {
     const list = rows();
     return Array.isArray(list) ? list[n] : null;
   };
-  const rowMain = (n) => {
+  const rowMain = (n: number) => {
     const s = nth(n);
     if (!s) return " ";
     const i = stageOf(s.phase);
@@ -238,13 +241,13 @@ function WfBoardPanel(props) {
     const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
     return `▸ ${str(s.slug || "(未定)")} · F${i} ${label} ${bar} ${doneN}/${total}`;
   };
-  const rowSub = (n) => {
+  const rowSub = (n: number) => {
     const s = nth(n);
     if (!s) return " ";
     const r = s.rounds ?? {};
     return `    轮次 plan ${r.plan_review ?? 0}/3 build ${r.build_review ?? 0}/3 fix ${r.test_fix ?? 0}/3`;
   };
-  const rowSub2 = (n) => {
+  const rowSub2 = (n: number) => {
     const s = nth(n);
     if (!s) return " ";
     const verdict = s.testReportVerdict ? str(s.testReportVerdict) : "—";
@@ -259,7 +262,7 @@ function WfBoardPanel(props) {
     <box flexDirection="column">
       <text fg={ctx.theme.text.base}>{"WF 看板"}</text>
       <text fg={ctx.theme.text.muted}>{"r=刷新 a=范围 f=全屏 q=关闭"}</text>
-      {() => {
+      {rc(() => {
         const list = rows();
         const count = Array.isArray(list) ? list.length : 0;
         const scope = all() ? "全部项目" : "当前项目";
@@ -289,18 +292,18 @@ function WfBoardPanel(props) {
             <text fg={ctx.theme.text.muted}>{rowSub2(5)}</text>
           </box>
         );
-      }}
+      })}
     </box>
   );
 }
 
 export default Plugin.define({
   id: "wf-workflow-tui",
-  setup(context) {
+  setup(context: any) {
     // ① 侧边栏挂件
     context.ui.slot({
       append: "sidebar.content",
-      render: (props) => <WfBoard context={context} sessionID={props?.sessionID} />,
+      render: (props: any) => <WfBoard context={context} sessionID={props?.sessionID} />,
     });
 
     // ② 会话面板（名字由 panel.name 判定）。fallback 必须提供：Show 为 false 且无 fallback
@@ -308,7 +311,7 @@ export default Plugin.define({
     //    （wf-board 打开即崩 e.length 的根因，见 .learnings/ERRORS.md ERR-20261110-005）
     context.ui.slot({
       append: "session.panel",
-      render: (panel) => (
+      render: (panel: any) => (
         <Show when={panel?.name === "wf.board"} fallback={<box flexDirection="column" />}>
           <WfBoardPanel panel={panel} context={context} />
         </Show>
