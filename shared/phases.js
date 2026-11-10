@@ -10,3 +10,6 @@ export const STAGE_LABEL = {
 export const FOLD = { reconcile: "building", retrospect: "done" };
 export const CANON = ["plan.md", "test-plan.md", "test-report.md"];
 export const BLOCKING = ["planning", "review"];
+// TUI 视图别名：进度条阶段顺序（与 PHASE_ORDER 同值）。独立导出而非依赖 import-as 重命名，
+// 规避宿主二级模块加载器对 import { X as Y } 的导出名校验问题（ERR-20261110-002）
+export const STAGE_ORDER = PHASE_ORDER;

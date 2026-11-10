@@ -1,5 +1,5 @@
 // wf-workflow TUI 公共格式化（自 index.tsx 原样搬移）：阶段定位/字符串化/时间截取/回退列表行。
-import { PHASE_ORDER as STAGE_ORDER, FOLD } from "../shared/phases.js";
+import { STAGE_ORDER, FOLD } from "../shared/phases.js";
 
 export const str = (v) => (v === null || v === undefined ? "" : String(v));
 

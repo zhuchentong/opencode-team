@@ -5,7 +5,7 @@
 //   `wf-workflow-tui crashed in slot sidebar.content: undefined is not an object (evaluating 'e.length')`
 import { createSignal, onCleanup } from "solid-js";
 import { Wf } from "../shared/rpc.ts";
-import { PHASE_ORDER as STAGE_ORDER, STAGE_LABEL, CANON } from "../shared/phases.js";
+import { STAGE_ORDER, STAGE_LABEL, CANON } from "../shared/phases.js";
 import { stageOf, str, listLine } from "./format.ts";
 
 // 已知硬编码：probe 落盘路径，遗留待修（勿在本次重构中变更）——TUI 无法 headless 验证。

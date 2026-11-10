@@ -2,7 +2,7 @@
 // 同样遵守渲染纪律（M9 血泪）：固定行数（每任务 3 行 × 最多 6 任务），全部是字符串子节点。
 import { createSignal, onCleanup } from "solid-js";
 import { Wf } from "../shared/rpc.ts";
-import { PHASE_ORDER as STAGE_ORDER, STAGE_LABEL } from "../shared/phases.js";
+import { STAGE_ORDER, STAGE_LABEL } from "../shared/phases.js";
 import { stageOf, str, hhmm } from "./format.ts";
 
 const PANEL_MAX = 6;
