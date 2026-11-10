@@ -50,6 +50,7 @@ function makeCtx() {
   let listSessions: any[] = [];
   const listeners: Array<{ name: string; cb: (data?: any) => void }> = [];
   const toasts: any[] = [];
+  const dataCbs: any[] = [];
   const ctx = {
     theme,
     options: {},
@@ -68,9 +69,9 @@ function makeCtx() {
         };
       },
     },
-    data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) } },
+    data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) }, listen: (cb: any) => { dataCbs.push(cb); return () => { } } },
   };
-  return { ctx, slots, keymaps, listeners, toasts, setSessions: (s: any[]) => { listSessions = s; } };
+  return { ctx, slots, keymaps, listeners, toasts, dataCbs, setSessions: (s: any[]) => { listSessions = s; } };
 }
 
 const t = mod as { id: string; setup: (ctx: any) => void };
@@ -131,6 +132,33 @@ console.log(`插件 id: ${t.id}`);
     await setup.dispose();
   } catch (e: any) {
     ok("P6 report→toast 不崩", false, e?.message);
+  }
+}
+
+// ── P7：双通道兜底（context.data 全事件流）+ 跨通道去重（r29d）──
+{
+  const { ctx, slots, listeners, toasts, dataCbs } = makeCtx();
+  t.setup(ctx as any);
+  const sidebarRender = slots["sidebar.content"];
+  try {
+    const setup = await testRender(() => sidebarRender({ sessionID: "ses_d" }), { width: 50, height: 14 });
+    await setup.flush();
+    ok("P7 订阅了 data.listen 兜底通道", dataCbs.length >= 1);
+    // data 通道信封（宿主真实形状待真机 data-raw 探针确认，此处按文档 details.type/details.data）
+    dataCbs.forEach((cb) => cb({ details: { type: "rpc.wf.report", data: { sessionID: "ses_d", text: "data 通道报告" } } }));
+    ok("P7 data 通道 report → toast 呈现", toasts.some((x) => x.message === "data 通道报告"));
+    // 非 wf 事件被忽略（不产生 toast）
+    dataCbs.forEach((cb) => cb({ details: { type: "session.idle", data: {} } }));
+    ok("P7 非 rpc.wf 事件忽略", toasts.length === 1, `toasts=${toasts.length}`);
+    // 去重：同一文本 800ms 内两通道都到 → 只弹一次
+    const n0 = toasts.length;
+    dataCbs.forEach((cb) => cb({ details: { type: "rpc.wf.report", data: { sessionID: "ses_d", text: "dup 文本" } } }));
+    const rpCbs = listeners.filter((l) => l.name === "report");
+    rpCbs.forEach((l) => l.cb({ sessionID: "ses_d", text: "dup 文本" }));
+    ok("P7 跨通道同内容 800ms 去重", toasts.length - n0 === 1, `新增 ${toasts.length - n0} 条（应为 1）`);
+    await setup.dispose();
+  } catch (e: any) {
+    ok("P7 双通道不崩", false, e?.message);
   }
 }
 

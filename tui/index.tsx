@@ -15,7 +15,7 @@ import { Wf } from "../shared/rpc.ts";
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M16-r29c-probe2";
+const TUI_BUILD = "M16-r29d-dualchan";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
@@ -99,18 +99,37 @@ function WfBoard(props: any) {
   });
   // 命令输出 → toast（2.2.6 宿主 execute 返回值对用户不显示；server/commands.ts 经 report 事件广播，
   // 见 .learnings/ERRORS.md ERR-20261110-007）。只呈现本会话的报告，避免跨会话噪音。
-  const offReport = props.context.client.rpc(Wf).events.on("report", (e: any) => {
-    const d = unwrap(e);
-    probeOnce({ reportEv: "recv", got: str(d?.sessionID), cur: String(props.sessionID ?? ""), chars: String(d?.text ?? "").length });
+  // r29d 双通道：①RPC subclient events.on；②context.data 全事件流兜底（官方 TUI 文档——RPC 事件
+  // 同时以 `rpc.<id>.<name>` 类型出现在事件流）。两通道都到则 800ms 内同内容去重只弹一次。
+  let lastToast = { key: "", at: 0 };
+  const handleReport = (d: any, chan: string) => {
+    probeOnce({ reportEv: "recv", chan, got: str(d?.sessionID), cur: String(props.sessionID ?? ""), chars: String(d?.text ?? "").length });
     try {
-      if (String(d?.sessionID ?? "") === String(props.sessionID ?? "")) {
-        props.context.ui.toast.show({ message: str(d?.text), variant: "info" });
-        probeOnce({ reportEv: "toast-shown" });
-      }
+      if (String(d?.sessionID ?? "") !== String(props.sessionID ?? "")) return;
+      const key = str(d?.sessionID) + "|" + str(d?.text);
+      const now = Date.now();
+      if (key === lastToast.key && now - lastToast.at < 800) { probeOnce({ reportEv: "dup-skipped", chan }); return; }
+      lastToast = { key, at: now };
+      props.context.ui.toast.show({ message: str(d?.text), variant: "info" });
+      probeOnce({ reportEv: "toast-shown", chan });
     } catch (er) { probeOnce({ reportEv: "toast-err", err: str((er as Error)?.message ?? er) }); }
-  });
-  probeOnce({ evt: "subscribed", sid: String(props.sessionID ?? "") });
-  onCleanup(() => { try { off?.(); } catch { } try { offReport?.(); } catch { } });
+  };
+  const offReport = props.context.client.rpc(Wf).events.on("report", (e: any) => { handleReport(unwrap(e), "rpc"); });
+  // 兜底通道 ②：data.listen 全事件流——rpc subclient 投递失效时仍能收到（shape 未定，data-raw 探针记录）
+  let offData: any = null;
+  try {
+    offData = props.context.data?.listen?.((ev: any) => {
+      const details = ev?.details ?? ev;
+      const type = String(details?.type ?? "");
+      if (!type.startsWith("rpc.wf.")) return;
+      const payload = details?.data ?? details;
+      probeOnce({ evt: "data-raw", type, keys: Object.keys(details ?? {}).join(","), pkeys: Object.keys(payload ?? {}).join(",") });
+      if (type === "rpc.wf.report") handleReport(payload, "data");
+      else if (type === "rpc.wf.updated") refresh();
+    });
+  } catch { /* data.listen 不可用则仅走 RPC 通道 */ }
+  probeOnce({ evt: "subscribed", sid: String(props.sessionID ?? ""), hasDataListen: !!offData });
+  onCleanup(() => { try { off?.(); } catch { } try { offReport?.(); } catch { } try { offData?.(); } catch { } });
 
   const T = props.context.theme;
   const compact = props.context.options?.compact === true;
