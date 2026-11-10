@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# scripts/tui-restart.sh — wf-workflow TUI 插件「重启验证」助手
+# scripts/tui-restart.sh — wf-workflow 插件「完全重启验证」助手
 #
 # 背景（ERR-20261110-004）：宿主 opencode 的 CLI/TUI 进程对插件模块做**路径级永久缓存**，
 #   首次解析成功/失败的模块记录在进程存续期内永不失效；/reload 只重载 server 侧，
-#   无法清除 TUI 侧冻结缓存。因此修改插件文件后必须**完全重启进程**并验证新版加载。
+#   无法清除 TUI 侧冻结缓存。因此修改插件文件后必须**完全重启**并验证新版加载。
+#   后台服务（server）生命周期独立于 TUI——本脚本显式重启两者，保证完全重启。
 #
 # 用法：
-#   scripts/tui-restart.sh            # 确认后终止 opencode → 前台重启 → 退出时自动判定加载结果
+#   scripts/tui-restart.sh            # 终止 opencode → 重启后台服务 → 前台重启 TUI → 退出后自动判定
 #   scripts/tui-restart.sh --check    # 仅健康检查（不终止任何进程，可随时运行）
 #
-# 判定依据：
-#   ✅ 成功 = .workflow/_debug/tui-refresh.log 出现 loadedAt > 重启时刻 的新记录（新版挂件渲染探针）
-#   ❌ 失败 = opencode.log 重启时刻后出现 plugin operation failed（打印具体 error）
-#   ⚠️ 未判定 = 两者都没等到，请用 /plugins 面板人工确认
+# 判定依据（全部正面证据，不以「无错误」推断成功）：
+#   ✅ TUI  = .workflow/_debug/tui-refresh.log 出现 loadedAt > T0 的新记录（新版挂件渲染探针）
+#   ✅ 服务 = opencode.log T0 后出现 loading plugin entrypoint=.../server/index.ts
+#   ❌ 失败 = opencode.log T0 后出现 plugin operation failed（打印具体 error）
+#   ⚠️ 未判定 = 证据缺失，请用 /plugins 面板人工确认
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,19 +72,25 @@ check() {
   [[ $fail -eq 0 ]] && { echo "结论：✅ 健康"; return 0; } || { echo "结论：❌ 存在问题"; return 1; }
 }
 
-# ── 重启 + 自动判定 ────────────────────────────────────────────────
+# ── 完全重启（服务 + TUI）+ 自动判定 ────────────────────────────────
 restart() {
-  echo "⚠️  即将终止所有 opencode 进程（包含当前正在运行的 AI 会话）。"
+  echo "⚠️  即将完全重启：终止所有 opencode 进程（含当前 AI 会话）+ 重启后台服务。"
   echo "    请在 opencode **外部**的终端运行本脚本。"
   read -rp "确认继续？[y/N] " a
   [[ "$a" == "y" || "$a" == "Y" ]] || { echo "已取消"; exit 0; }
 
-  pkill -x opencode 2>/dev/null && echo "→ 已发送终止信号" || echo "→ 未发现 opencode 进程"
+  echo "→ [1/3] 终止 opencode 进程（TUI/CLI）"
+  pkill -x opencode 2>/dev/null && echo "  已发送终止信号" || echo "  未发现 opencode 进程"
   sleep 1
   pgrep -x opencode >/dev/null 2>&1 && { echo "❌ 仍有残留进程，请手动检查：pgrep -af opencode"; exit 1; }
 
+  echo "→ [2/3] 重启后台服务（server 插件随之重载新代码）"
+  opencode service restart 2>&1 | sed 's/^/  /' || true
+  sleep 1
+  opencode service status 2>&1 | sed 's/^/  status: /' || true
+
   local T0; T0=$(date -u '+%Y-%m-%dT%H:%M:%S')
-  echo "→ 前台重启 opencode（判定基准时刻 T0=$T0）"
+  echo "→ [3/3] 前台重启 opencode（判定基准时刻 T0=$T0 UTC）"
   echo "──────────────────────────────────────────────────"
   opencode
   # TUI 退出后自动判定
@@ -91,14 +99,29 @@ restart() {
 }
 
 judge() {
-  local T0="$1"
+  local T0="$1" rc=0
+
+  # ① server 侧正面证据：T0 后加载 server/index.ts
+  local srv
+  srv=$(awk -v t="$T0" 'index($0,"timestamp=")>0 { ts=substr($0,11,19);
+        if (ts>t && index($0,"loading plugin")>0 && index($0,"server/index.ts")>0) { print ts; exit } }' "$LOG" 2>/dev/null)
+  if [[ -n "$srv" ]]; then
+    echo "✅ 后台服务已以新代码加载 server/index.ts（$srv > T0=$T0）"
+  else
+    echo "⚠️ 未见 T0 后 server/index.ts 加载记录——服务可能未重启或加载失败（人工核对 opencode service status）"
+    rc=2
+  fi
+
+  # ② TUI 侧正面证据：loadedAt > T0
   local lat=""
   [[ -f "$REFRESH" ]] && lat=$(grep -o '"loadedAt":"[^"]*"' "$REFRESH" | tail -1 | cut -d'"' -f4)
   if [[ -n "$lat" && "${lat:0:19}" > "$T0" ]]; then
     echo "✅ 新版 TUI 已加载（loadedAt=$lat > T0=$T0）"
-    echo "   建议继续人工复核：/plugins 面板状态 + /wf:ping 工具通道"
-    return 0
+  else
+    rc=2
   fi
+
+  # ③ 插件错误扫描（无论证据有无都扫一遍）
   local err
   err=$(awk -v t="$T0" 'index($0,"timestamp=")>0 { ts=substr($0,11,19); if (ts>t && index($0,"plugin operation failed")>0) print $0 }' "$LOG" 2>/dev/null | tail -1)
   if [[ -n "$err" ]]; then
@@ -107,7 +130,13 @@ judge() {
     echo "   将错误文本反馈给 AI 定位。"
     return 1
   fi
-  echo "⚠️ 未判定（无新渲染记录也无新错误）——请在 opencode 内执行 /plugins 人工确认。"
+
+  if [[ $rc -eq 0 ]]; then
+    echo "结论：✅ 完全重启成功（server+TUI 双侧正面证据齐备）"
+    echo "   下一步人工复核：/wf:ping 应弹 toast；侧边栏挂件正常"
+    return 0
+  fi
+  echo "⚠️ 未完全判定——请在 opencode 内执行 /plugins 人工确认，并把结果反馈给 AI。"
   return 2
 }
 
