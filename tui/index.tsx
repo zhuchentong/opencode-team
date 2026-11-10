@@ -1,4 +1,5 @@
 // wf-workflow TUI 部件注册壳：侧边栏挂件见 widget.tsx、看板面板见 board.tsx、公共格式化见 format.ts。
+// bundle rev: r26-t1（TS-T1 后重启解析；宿主 TUI 运行时以本文件内容为模块图缓存键，二级模块变更须改此处才生效）
 // 数据源：server 侧 RPC（shared/rpc.ts 的 Wf.state / Wf.list）+ "updated" 事件驱动刷新。
 // 面板：/wf-board（slash）或命令面板 → context.ui.panel.open("wf.board")。
 // 渲染纪律（M9 血泪）见 widget.tsx / board.tsx 文件头——修改渲染代码前必读。
