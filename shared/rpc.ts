@@ -76,5 +76,18 @@ export const Wf = Rpc.define({
         additionalProperties: true,
       },
     },
+    // 命令输出广播（2.2.6 宿主 execute 契约 Promise<void>，返回值不显示给用户；
+    // TUI 订阅此事件以 toast 呈现命令报告——纯展示通道，不唤醒模型）
+    report: {
+      schema: {
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+          text: { type: "string" },
+        },
+        required: ["sessionID", "text"],
+        additionalProperties: true,
+      },
+    },
   },
 });

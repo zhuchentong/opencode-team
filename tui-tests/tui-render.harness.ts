@@ -48,14 +48,15 @@ function makeCtx() {
   const slots: Record<string, (props: any) => any> = {};
   const keymaps: any[] = [];
   let listSessions: any[] = [];
-  const listeners: Array<() => void> = [];
+  const listeners: Array<{ name: string; cb: (data?: any) => void }> = [];
+  const toasts: any[] = [];
   const ctx = {
     theme,
     options: {},
     ui: {
       slot: (cfg: any) => { slots[cfg.append] = cfg.render; },
       panel: { open: () => false },
-      toast: { show: () => {} },
+      toast: { show: (t: any) => { toasts.push(t); } },
     },
     keymap: { layer: (fn: any) => { keymaps.push(fn); } },
     client: {
@@ -63,13 +64,13 @@ function makeCtx() {
         return {
           state: async (_input: any) => ({ active: false, slug: "", phase: null }),
           list: async (_input: any) => ({ sessions: listSessions }),
-          events: { on: (_name: string, cb: () => void) => { listeners.push(cb); return () => {}; } },
+          events: { on: (name: string, cb: () => void) => { listeners.push({ name, cb }); return () => {}; } },
         };
       },
     },
     data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) } },
   };
-  return { ctx, slots, keymaps, listeners, setSessions: (s: any[]) => { listSessions = s; } };
+  return { ctx, slots, keymaps, listeners, toasts, setSessions: (s: any[]) => { listSessions = s; } };
 }
 
 const t = mod as { id: string; setup: (ctx: any) => void };
@@ -110,6 +111,26 @@ console.log(`插件 id: ${t.id}`);
     await setup.dispose();
   } catch (e: any) {
     ok("P5 侧边栏渲染不崩", false, e?.message);
+  }
+}
+
+// ── P6：report 事件 → toast（命令输出可见性通道，ERR-20261110-007）──
+{
+  const { ctx, slots, listeners, toasts } = makeCtx();
+  t.setup(ctx as any);
+  const sidebarRender = slots["sidebar.content"];
+  try {
+    const setup = await testRender(() => sidebarRender({ sessionID: "ses_z" }), { width: 50, height: 14 });
+    await setup.flush();
+    const reportCbs = listeners.filter((l) => l.name === "report");
+    ok("P6 侧边栏订阅了 report 事件", reportCbs.length >= 1, `listeners=${listeners.map((l) => l.name).join(",")}`);
+    reportCbs.forEach((l) => l.cb({ sessionID: "ses_z", text: "wf 健康检查报告" }));
+    ok("P6 report 本会话 → toast 呈现", toasts.some((x) => x.message === "wf 健康检查报告" && x.variant === "info"));
+    reportCbs.forEach((l) => l.cb({ sessionID: "ses_other", text: "跨会话报告" }));
+    ok("P6 report 他会话 → 不弹 toast", !toasts.some((x) => x.message === "跨会话报告"));
+    await setup.dispose();
+  } catch (e: any) {
+    ok("P6 report→toast 不崩", false, e?.message);
   }
 }
 

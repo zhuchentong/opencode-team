@@ -1,10 +1,13 @@
 // wf-workflow — 命令层（自 index.ts 原样搬移）：11 个流转命令表驱动（/wf:intake…/wf:done，全部经
 // transition 走状态机）+ 6 个辅助命令（status/diagnose/ping/lane/reset/debug）；transition 与
 // inject/listOverrides 编排亦在此（原 setup 闭包，行为不变）。
-// 已验证 API（实测 2026-11-09）：命令 editor.add({name, description,
-// execute(args={sessionID,prompt,delivery})})，返回值作为 prompt 送入会话。
+// 已验证 API（实测 2026-11-10，宿主 2.2.6）：命令 editor.add({name, description,
+// execute(args={sessionID,prompt,delivery})})。**execute 契约 Promise<void>，返回值不显示
+// 给用户**（实测：命令被接受但会话无输出）——故 add 处统一包装：字符串返回值经 RPC "report"
+// 事件广播（TUI toast 呈现），同时保留返回值（tests 行为锚）。流转 guidance 另经 inject() 写
+// instructions.entry 供 agent 消费——两条通道并行、互不干扰。
 // deps 来源：load/save/resolveProjectDir（state）、debugDirFor/probeOnce（observe）、
-// LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/WfDef/rpcErr（rpc-bridge）。
+// LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）。
 import * as fs from "node:fs";
 import {
   VERSION, FLOWS, NEXT, BLOCKING_PHASES,
@@ -15,7 +18,7 @@ import { ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX, logAdd } from "./state.ts"
 export function registerCommands(ctx: any, deps: any) {
   const S = ctx.storage;
   const E = ctx?.session?.instructions?.entry;
-  const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, WfDef, rpcErr } = deps;
+  const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr } = deps;
 
   // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
   const listOverrides = (dir: string) => {
@@ -69,7 +72,17 @@ export function registerCommands(ctx: any, deps: any) {
   };
 
   return ctx.command.transform((editor: any) => {
-    const add = (def: any) => editor.add(def);
+    // 统一输出通道：execute 返回值宿主不显示（2.2.6 契约 Promise<void>），广播 report 事件
+    // 由 TUI toast 呈现；原样 return 保持 tests 行为锚与宿主兼容（未来若显示返回值亦无害）。
+    const add = (def: any) => editor.add({
+      ...def,
+      execute: async (a: any) => {
+        const out = await def.execute(a);
+        const text = typeof out === "string" ? out : "";
+        if (text && emitReport) await emitReport(String(a?.sessionID ?? ""), text);
+        return out;
+      },
+    });
 
     // ── 11 个流转命令（表驱动：description 与原逐一注册逐字一致）────────
     const FLOW_COMMANDS = [

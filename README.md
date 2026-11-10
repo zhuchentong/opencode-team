@@ -44,7 +44,7 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 /wf:done                 # done：验收关卡（PASS）+ 并行 learner 复盘
 ```
 
-辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:ping`（角色注册与模型健康检查）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。
+辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:ping`（角色注册与模型健康检查）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。所有命令输出经 RPC `report` 事件由 TUI toast 呈现（宿主 2.2.6 契约 `execute(): Promise<void>`，返回值对用户不显示）。
 
 ## 架构
 
@@ -89,13 +89,13 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 .workflow/overrides/tester.md    ← 「集成测试一律打真 SQLite，不许 mock」
 ```
 
-## 真机验证清单（/reload 后）
+## 真机验证清单
 
-插件改动需 `/reload` 生效。首轮真机跑一遍：
-1. `/wf:intake probe-test` → 返回 intake guidance；查 `.workflow/probe-test/` 与系统提示中 `<context key="wf.phase">` 多行块是否渲染
-2. `/wf:ping` → 角色注册表；查 `_debug/agent-probe.json` 确认 `ctx.agent.list` 实际形状
+插件改动生效方式：**server/tui 代码改动需完全重启 TUI 进程**（宿主对插件模块路径级缓存，`/reload` 不重读——用 `./scripts/tui-restart.sh`）；仅改 `opencode.jsonc` 配置可 `/reload`。首轮真机跑一遍：
+1. `/wf:intake probe-test` → **toast 弹出 intake guidance**（命令输出经 RPC report 事件广播，r29 新增）；查 `.workflow/probe-test/` 与系统提示中 `<context key="wf.phase">` 多行块是否渲染
+2. `/wf:ping` → toast 弹角色注册表；查 `_debug/agent-probe.json` 确认 `ctx.agent.list` 实际形状
 3. 发一条含「走工作流」的新会话消息（无 wf 状态会话）→ 应出现 `wf.hint` 提示块；查 `_debug/chat-probe.json` 确认消息 hook 是否在本宿主（v2.2.6）触发
-4. `/wf:debug` → `_debug/state.json` 全量快照
+4. `/wf:debug` → toast 弹快照路径 + `_debug/state.json` 全量快照
 
 ## 角色模型路由（待选型）
 

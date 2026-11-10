@@ -6,6 +6,18 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import plugin from "../server/index.ts";
 
+// 虚拟模块占位包自举（node_modules 在 .gitignore，克隆后首次运行需生成；语义与 harness 一致）
+const mockDir = `${import.meta.dirname}/../node_modules/@opencode/plugin`;
+if (!fs.existsSync(mockDir)) {
+  fs.mkdirSync(mockDir, { recursive: true });
+  fs.writeFileSync(`${mockDir}package.json`, JSON.stringify({
+    name: "@opencode/plugin", version: "0.0.0-local-mock", private: true, type: "module",
+    exports: { "./tui": "./mock-tui.js", "./rpc": "./mock-rpc.js" },
+  }));
+  fs.writeFileSync(`${mockDir}mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
+}
+
 const DIR = "/tmp/opencode/wf-integ";
 
 const mkCtx = (opts = {}) => {
@@ -204,5 +216,22 @@ test("项目级 overrides：.workflow/overrides/*.md 存在 → entry guidance �
   const e = m.entries.find((x) => x.sessionID === "ses_o" && x.key === "wf.phase");
   assert.match(e.value, /📌 项目级角色定制（\.workflow\/overrides\/）：planner/);
   fs.rmSync(`${DIR}/.workflow/overrides`, { recursive: true, force: true });
+  dispose?.();
+});
+
+// ERR-20261110-007：2.2.6 宿主 execute 契约 Promise<void>，返回值不显示给用户。
+// 修复行为锚：命令字符串输出必须同时经 RPC "report" 事件广播（TUI toast 通道），
+// 且 execute 返回值保留（本文件其余测试的断言依赖返回值）。
+test("report 广播：命令输出经 RPC report 事件广播且返回值保留", async () => {
+  const m = mkCtx();
+  const emitted = [];
+  m.ctx.rpc = { register: async () => ({ events: { emit: async (name, data) => { emitted.push({ name, data }); } } }) };
+  const dispose = await plugin.setup(m.ctx);
+  const out = await cmd(m, "wf:ping").execute({ sessionID: "ses_rep" });
+  assert.equal(typeof out, "string"); // 返回值保留（tests 行为锚）
+  const rep = emitted.find((e) => e.name === "report");
+  assert.ok(rep, "应广播 report 事件");
+  assert.equal(rep.data.sessionID, "ses_rep");
+  assert.equal(rep.data.text, out); // 广播文本与返回值一致
   dispose?.();
 });

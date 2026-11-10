@@ -15,7 +15,7 @@ import { Wf } from "../shared/rpc.ts";
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M16-r28-noboard";
+const TUI_BUILD = "M16-r29-report-toast";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
@@ -91,7 +91,16 @@ function WfBoard(props: any) {
 
   // M15：回退列表是全项目视角——任何会话的 updated 事件都触发刷新
   const off = props.context.client.rpc(Wf).events.on("updated", () => { refresh(); });
-  onCleanup(() => { try { off?.(); } catch { } });
+  // 命令输出 → toast（2.2.6 宿主 execute 返回值对用户不显示；server/commands.ts 经 report 事件广播，
+  // 见 .learnings/ERRORS.md ERR-20261110-007）。只呈现本会话的报告，避免跨会话噪音。
+  const offReport = props.context.client.rpc(Wf).events.on("report", (d: any) => {
+    try {
+      if (String(d?.sessionID ?? "") === String(props.sessionID ?? "")) {
+        props.context.ui.toast.show({ message: str(d?.text), variant: "info" });
+      }
+    } catch { /* toast 失败不影响主流程 */ }
+  });
+  onCleanup(() => { try { off?.(); } catch { } try { offReport?.(); } catch { } });
 
   const T = props.context.theme;
   const compact = props.context.options?.compact === true;

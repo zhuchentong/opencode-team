@@ -34,7 +34,7 @@ export default {
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
     // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新，见 rpc-bridge.ts）──
-    const { rpcReg, rpcErr, WfDef, emitUpdated } = await createRpcBridge(ctx, { load, scanStates });
+    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates });
 
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
@@ -46,7 +46,7 @@ export default {
     const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
 
     // ── /wf:* 命令与 transition/inject 编排（见 commands.ts）────────
-    const commands = registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, WfDef, rpcErr });
+    const commands = registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr });
 
     return () => {
       for (const r of [commands, tools, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }

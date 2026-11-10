@@ -47,5 +47,13 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
     } catch { /* 事件失败不影响主流程 */ }
   };
 
-  return { rpcReg, rpcErr, WfDef, emitUpdated };
+  // 命令输出广播：宿主 execute 返回值不显示给用户（2.2.6 契约 Promise<void>），
+  // 经 report 事件由 TUI toast 呈现。fail-soft，同 emitUpdated。
+  const emitReport = async (sessionID: string, text: string) => {
+    try {
+      await rpcReg?.events?.emit("report", { sessionID: String(sessionID ?? ""), text: String(text ?? "") });
+    } catch { /* 事件失败不影响主流程 */ }
+  };
+
+  return { rpcReg, rpcErr, WfDef, emitUpdated, emitReport };
 }
