@@ -229,7 +229,7 @@ function WfBoardPanel(props) {
   };
   const rowMain = (n) => {
     const s = nth(n);
-    if (!s) return "";
+    if (!s) return " ";
     const i = stageOf(s.phase);
     const total = STAGE_ORDER.length;
     const isDone = s.phase === "done" || s.phase === "retrospect";
@@ -240,13 +240,13 @@ function WfBoardPanel(props) {
   };
   const rowSub = (n) => {
     const s = nth(n);
-    if (!s) return "";
+    if (!s) return " ";
     const r = s.rounds ?? {};
     return `    轮次 plan ${r.plan_review ?? 0}/3 build ${r.build_review ?? 0}/3 fix ${r.test_fix ?? 0}/3`;
   };
   const rowSub2 = (n) => {
     const s = nth(n);
-    if (!s) return "";
+    if (!s) return " ";
     const verdict = s.testReportVerdict ? str(s.testReportVerdict) : "—";
     return `    关卡 test-plan ${s.testPlanWritten ? "✓" : "✗"} report ${verdict} · 更新 ${hhmm(s.updatedAt)} · 会话…${str(s.sessionID).slice(-6)}`;
   };
