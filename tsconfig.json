@@ -10,6 +10,6 @@
     "jsxImportSource": "@opentui/solid",
     "strict": true,
     "skipLibCheck": true,
-    "types": []
+    "types": ["bun"]
   }
 }

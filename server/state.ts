@@ -4,33 +4,35 @@
 // 原则：只放与 storage/session 相关的存取逻辑；纯流转校验见 lib.js，组装接线见 index.js。
 // 已验证 API（实测 2026-11-09）：storage 为 string key get/set/remove；entry.put key 正则 ^[a-z0-9][a-z0-9._-]*$
 
+import { type FlowLogEntry } from "./lib.ts";
+
 export const ENTRY_KEY = "wf.phase";
 export const HINT_KEY = "wf.hint"; // P3：自动激活一次性提示（不入状态机，reset 一并清除）
-export const KEY = (sessionID) => `wf-workflow/state/${sessionID}`;
+export const KEY = (sessionID: string) => `wf-workflow/state/${sessionID}`;
 // M10-b：项目索引——子会话（agent 匹配 wf/*）经 projectID 反查管辖状态（实测 session 记录无 parentID）
-export const IDX = (projectID) => `wf-workflow/project/${projectID}`;
+export const IDX = (projectID: string) => `wf-workflow/project/${projectID}`;
 export const STATE_PREFIX = KEY("");
 
-export const logAdd = (st, entry) => {
+export const logAdd = (st: any, entry: FlowLogEntry) => {
   st.log = Array.isArray(st.log) ? st.log : [];
   st.log.push(entry);
   if (st.log.length > 50) st.log = st.log.slice(-50);
 };
 
-export function createStore(ctx) {
+export function createStore(ctx: any) {
   const S = ctx.storage;
 
-  const load = async (sessionID) => {
+  const load = async (sessionID: string): Promise<any> => {
     try { return (await S.get(KEY(sessionID))) ?? null; } catch { return null; }
   };
-  const save = async (st) => {
+  const save = async (st: any) => {
     st.updatedAt = new Date().toISOString();
     await S.set(KEY(st.sessionID), st);
     try {
       if (st.projectID) await S.set(IDX(st.projectID), { sessionID: st.sessionID, updatedAt: st.updatedAt });
     } catch { }
   };
-  const resolveState = async (sessionID, agent) => {
+  const resolveState = async (sessionID: string, agent?: string): Promise<any> => {
     const own = await load(sessionID);
     if (own) return own;
     if (!/^wf\//.test(String(agent ?? ""))) return null; // 仅 wf/* agent 受项目索引管辖；普通 build/plan 会话不受影响
@@ -48,7 +50,7 @@ export function createStore(ctx) {
   };
   // 落盘目录三级回退同源提取（原 wf_write_artifact 与 wf:diagnose 两处内联重复）：
   // 优先管辖状态的 directory，回退本会话 session.get，再回退 cwd
-  const resolveProjectDir = async (st, sessionID) => {
+  const resolveProjectDir = async (st: any, sessionID: string) => {
     let dir = st?.directory ?? null;
     if (!dir) {
       const sess = await ctx.session.get({ sessionID }).catch(() => null);
@@ -59,7 +61,7 @@ export function createStore(ctx) {
 
   // ── M8-b：状态枚举（面板看板）；M10-d A6 项目过滤 + A7 done 状态 GC ────
   const STALE_MS = 14 * 24 * 3600 * 1000;
-  const scanStates = async (projectID, directory) => {
+  const scanStates = async (projectID?: string | null, directory?: string | null) => {
     const out = [];
     try {
       const res = await S.scan({ prefix: STATE_PREFIX });

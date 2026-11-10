@@ -9,17 +9,17 @@
 import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
-export function registerGuardHook(ctx, deps) {
+export function registerGuardHook(ctx: any, deps: any) {
   const { resolveState, isAllowed, allowHint, probeOnce, save } = deps;
 
   // P1：阶段越权阻断记账（gate:block 进审计轨迹，供 /wf:diagnose 取证；落盘失败不影响阻断）
-  const logBlock = async (st, tool, detail) => {
+  const logBlock = async (st: any, tool: string, detail: string) => {
     logAdd(st, { at: new Date().toISOString(), cmd: "gate:block", tool, detail, from: st.phase, to: st.phase, ok: false, note: "blocked" });
     try { await save(st); } catch { }
   };
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
-  return ctx.tool.hook("execute.before", async (input, output) => {
+  return ctx.tool.hook("execute.before", async (input: any, output: any) => {
     try {
       await probeOnce(input?.sessionID, "hook-probe", {
         inputKeys: Object.keys(input ?? {}),
@@ -59,7 +59,7 @@ export function registerGuardHook(ctx, deps) {
         }
       }
     } catch (e) {
-      const msg = String(e?.message ?? e);
+      const msg = String((e as Error)?.message ?? e);
       if (msg.includes(GATE_ERR)) throw e; // 关卡异常向上抛 = 拦截工具调用
       // 其它内部异常不阻断（fail-open），已在 §11 声明
     }

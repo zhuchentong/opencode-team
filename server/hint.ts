@@ -5,12 +5,13 @@
 import { isHintWorthy, HINT_ENTRY, promptText } from "./lib.ts";
 import { HINT_KEY } from "./state.ts";
 
-export function registerHint(ctx, opt, deps) {
+// ctx 为宿主注入 API（形状防御式探测，无官方类型）；opt 为插件 options；deps 由 index.js 注入。
+export function registerHint(ctx: any, opt: any, deps: any) {
   const { resolveState, probeOnce } = deps;
   const E = ctx?.session?.instructions?.entry;
 
   const hinted = new Set(); // 进程内幂等（entry.get 形状未验证，不去重读回）
-  const onChatMessage = async (input, output) => {
+  const onChatMessage = async (input: any, output: any) => {
     try {
       const sid = input?.sessionID ?? output?.message?.sessionID ?? output?.sessionID;
       if (!sid || hinted.has(sid)) return;

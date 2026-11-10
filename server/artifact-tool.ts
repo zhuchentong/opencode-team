@@ -6,12 +6,12 @@
 // {sessionID, agent, messageID, id, progress, signal}——**无 directory**！项目目录须经
 // ctx.session.get(sessionID).location.directory 取（封装于 state.resolveProjectDir）。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine } from "./lib.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, type FlowLogEntry } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
-export function registerArtifactTool(ctx, deps) {
+export function registerArtifactTool(ctx: any, deps: any) {
   const { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce } = deps;
-  return ctx.tool.transform((draft) => {
+  return ctx.tool.transform((draft: any) => {
     const namesPromise = Promise.resolve(draft.list?.()).catch(() => null);
     draft.add({
       name: "wf_write_artifact",
@@ -28,7 +28,7 @@ export function registerArtifactTool(ctx, deps) {
         required: ["kind", "content"],
       },
       options: { codemode: false },
-      execute: async (args, context) => {
+      execute: async (args: any, context: any) => {
         try {
           await probeOnce(context?.sessionID, "tool-probe", {
             argsKeys: Object.keys(args ?? {}),
@@ -64,7 +64,7 @@ export function registerArtifactTool(ctx, deps) {
           }
           return { content: note };
         } catch (e) {
-          return { content: `❌ wf_write_artifact 失败：${e?.message ?? e}` };
+          return { content: `❌ wf_write_artifact 失败：${(e as Error)?.message ?? e}` };
         }
       },
     });
