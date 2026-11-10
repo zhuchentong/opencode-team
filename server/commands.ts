@@ -71,6 +71,16 @@ export function registerCommands(ctx: any, deps: any) {
     return guidance(flow.to, st, LIMS);
   };
 
+  // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
+  // 记录：命令名/文本长度/RPC 通道形状/emit 结果——与 TUI 侧 tui-refresh.log reportEv 联看定死点
+  const reportProbe = async (sessionID: unknown, data: Record<string, unknown>) => {
+    try {
+      const dir = `${await debugDirFor(String(sessionID ?? ""))}/.workflow/_debug`;
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(`${dir}/cmd-report.jsonl`, JSON.stringify({ at: new Date().toISOString(), ...data }) + "\n");
+    } catch { /* 探针失败不影响主流程 */ }
+  };
+
   return ctx.command.transform((editor: any) => {
     // 统一输出通道：execute 返回值宿主不显示（2.2.6 契约 Promise<void>），广播 report 事件
     // 由 TUI toast 呈现；原样 return 保持 tests 行为锚与宿主兼容（未来若显示返回值亦无害）。
@@ -79,7 +89,12 @@ export function registerCommands(ctx: any, deps: any) {
       execute: async (a: any) => {
         const out = await def.execute(a);
         const text = typeof out === "string" ? out : "";
-        if (text && emitReport) await emitReport(String(a?.sessionID ?? ""), text);
+        if (text && emitReport) {
+          const chanInfo = await emitReport(String(a?.sessionID ?? ""), text);
+          await reportProbe(a?.sessionID, { ev: "emit", cmd: def.name, chars: text.length, chanInfo });
+        } else {
+          await reportProbe(a?.sessionID, { ev: "no-emit", cmd: def.name, type: typeof out, chars: text.length, hasChan: !!emitReport });
+        }
         return out;
       },
     });
