@@ -15,7 +15,7 @@ import { Wf } from "../shared/rpc.ts";
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M16-r29d-dualchan";
+const TUI_BUILD = "M16-r29e-poll";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
@@ -57,14 +57,23 @@ function WfBoard(props: any) {
     return `${str(x?.slug || "(未定)")} · ${str(x?.phase ?? "?")} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
   };
 
+  // 轮询防抖：数据快照未变 → 不 setSt（避免每 2.5s 无谓重渲染 + 探针刷屏）
+  let lastSnap = "";
+  let lastOthJoined = "";
+
   const refresh = async () => {
     try {
       const rpc = props.context.client.rpc(Wf);
       const s = await rpc.state({ sessionID: props.sessionID });
-      probeOnce({ sessionID: props.sessionID, state: s });
-      setSt(s ?? { active: false });
-      setErr(null);
-      if (s?.active) { setOth([]); setOthScope(""); return; }
+      if (s?.lastReport) toastReport(s.lastReport, "poll");
+      const snap = JSON.stringify(s ?? null);
+      if (snap !== lastSnap) {
+        lastSnap = snap;
+        probeOnce({ sessionID: props.sessionID, state: s });
+        setSt(s ?? { active: false });
+        setErr(null);
+      }
+      if (s?.active) { if (lastOthJoined !== "") { lastOthJoined = ""; setOth([]); setOthScope(""); } return; }
       let pid = null;
       let dir = null;
       try {
@@ -75,12 +84,16 @@ function WfBoard(props: any) {
       try {
         const mine = await rpc.list(pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {});
         const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x: any) => x?.phase && x.phase !== "done").slice(0, 3);
-        if (act.length) { setOth(act.map(listLine)); setOthScope("本项目"); return; }
+        if (act.length) {
+          const j = act.map(listLine).join("|");
+          if (j !== lastOthJoined) { lastOthJoined = j; setOth(act.map(listLine)); setOthScope("本项目"); }
+          return;
+        }
         const allR = await rpc.list({});
         const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x: any) => x?.phase && x.phase !== "done").slice(0, 3);
-        setOth(cross.map(listLine));
-        setOthScope(cross.length ? "全局·其它项目" : "");
-      } catch { setOth([]); setOthScope(""); }
+        const j = cross.map(listLine).join("|");
+        if (j !== lastOthJoined) { lastOthJoined = j; setOth(cross.map(listLine)); setOthScope(cross.length ? "全局·其它项目" : ""); }
+      } catch { if (lastOthJoined !== "") { lastOthJoined = ""; setOth([]); setOthScope(""); } }
     } catch (e) {
       const m = str((e as Error)?.message ?? e);
       probeOnce({ sessionID: props.sessionID, rpcErr: m });
@@ -88,6 +101,9 @@ function WfBoard(props: any) {
     }
   };
   refresh();
+  // r29e 主通道：真机实证 RPC 事件投递不通（server emit 成功但 TUI 双通道零接收，
+  // 见 ERR-20261110-008）→ 轮询 state（含 lastReport）。methods 通道真机实证可用。
+  const timer = setInterval(() => { refresh(); }, 2500);
 
   // 诊断 r29c：宿主二进制证实 events.on 回调收信封 {type,location,data}（type 前缀 rpc.wf.<name>）；
   // 兼容信封/裸数据两种形状。subscribed/updated-recv/recv 三条探针定位事件是否到达 TUI。
@@ -97,25 +113,32 @@ function WfBoard(props: any) {
     probeOnce({ evt: "updated-recv", got: str(unwrap(e)?.sessionID), cur: String(props.sessionID ?? "") });
     refresh();
   });
-  // 命令输出 → toast（2.2.6 宿主 execute 返回值对用户不显示；server/commands.ts 经 report 事件广播，
-  // 见 .learnings/ERRORS.md ERR-20261110-007）。只呈现本会话的报告，避免跨会话噪音。
-  // r29d 双通道：①RPC subclient events.on；②context.data 全事件流兜底（官方 TUI 文档——RPC 事件
-  // 同时以 `rpc.<id>.<name>` 类型出现在事件流）。两通道都到则 800ms 内同内容去重只弹一次。
-  let lastToast = { key: "", at: 0 };
-  const handleReport = (d: any, chan: string) => {
-    probeOnce({ reportEv: "recv", chan, got: str(d?.sessionID), cur: String(props.sessionID ?? ""), chars: String(d?.text ?? "").length });
+  // ── r29e 命令输出呈现：三通道（poll/rpc/data）统一去重 + 新鲜度门 ──────────
+  // 主通道 = 轮询 state.lastReport（storage 槽）；report 事件 + data.listen 为机会性补充
+  // （真机实证事件投递不通，ERR-20261110-008；只呈现本会话，60s 内新鲜，sessionID|at 去重——
+  // server 对槽与事件用同一 at）。
+  const shown = new Set<string>();
+  const toastReport = (d: any, chan: string) => {
+    const sid = String(d?.sessionID ?? "");
+    const text = str(d?.text);
+    const at = str(d?.at);
+    probeOnce({ reportEv: "recv", chan, got: sid, cur: String(props.sessionID ?? ""), chars: text.length });
     try {
-      if (String(d?.sessionID ?? "") !== String(props.sessionID ?? "")) return;
-      const key = str(d?.sessionID) + "|" + str(d?.text);
-      const now = Date.now();
-      if (key === lastToast.key && now - lastToast.at < 800) { probeOnce({ reportEv: "dup-skipped", chan }); return; }
-      lastToast = { key, at: now };
-      props.context.ui.toast.show({ message: str(d?.text), variant: "info" });
+      if (sid !== String(props.sessionID ?? "") || !text) return;
+      if (at) {
+        const age = Date.now() - Date.parse(at);
+        if (Number.isFinite(age) && age > 60000) { probeOnce({ reportEv: "stale-skipped", chan }); return; }
+        const key = sid + "|" + at;
+        if (shown.has(key)) { probeOnce({ reportEv: "dup-skipped", chan }); return; }
+        shown.add(key);
+        if (shown.size > 50) { const first = shown.values().next().value; if (first !== undefined) shown.delete(first); }
+      }
+      props.context.ui.toast.show({ message: text, variant: "info" });
       probeOnce({ reportEv: "toast-shown", chan });
     } catch (er) { probeOnce({ reportEv: "toast-err", err: str((er as Error)?.message ?? er) }); }
   };
-  const offReport = props.context.client.rpc(Wf).events.on("report", (e: any) => { handleReport(unwrap(e), "rpc"); });
-  // 兜底通道 ②：data.listen 全事件流——rpc subclient 投递失效时仍能收到（shape 未定，data-raw 探针记录）
+  const offReport = props.context.client.rpc(Wf).events.on("report", (e: any) => { toastReport(unwrap(e), "rpc"); });
+  // 补充通道 ②：data.listen 全事件流——rpc subclient 投递失效时仍能收到（shape 未定，data-raw 探针记录）
   let offData: any = null;
   try {
     offData = props.context.data?.listen?.((ev: any) => {
@@ -124,12 +147,12 @@ function WfBoard(props: any) {
       if (!type.startsWith("rpc.wf.")) return;
       const payload = details?.data ?? details;
       probeOnce({ evt: "data-raw", type, keys: Object.keys(details ?? {}).join(","), pkeys: Object.keys(payload ?? {}).join(",") });
-      if (type === "rpc.wf.report") handleReport(payload, "data");
+      if (type === "rpc.wf.report") toastReport(payload, "data");
       else if (type === "rpc.wf.updated") refresh();
     });
-  } catch { /* data.listen 不可用则仅走 RPC 通道 */ }
+  } catch { /* data.listen 不可用则仅走其余通道 */ }
   probeOnce({ evt: "subscribed", sid: String(props.sessionID ?? ""), hasDataListen: !!offData });
-  onCleanup(() => { try { off?.(); } catch { } try { offReport?.(); } catch { } try { offData?.(); } catch { } });
+  onCleanup(() => { try { clearInterval(timer); } catch { } try { off?.(); } catch { } try { offReport?.(); } catch { } try { offData?.(); } catch { } });
 
   const T = props.context.theme;
   const compact = props.context.options?.compact === true;

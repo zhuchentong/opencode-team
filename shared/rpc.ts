@@ -76,14 +76,17 @@ export const Wf = Rpc.define({
         additionalProperties: true,
       },
     },
-    // 命令输出广播（2.2.6 宿主 execute 契约 Promise<void>，返回值不显示给用户；
-    // TUI 订阅此事件以 toast 呈现命令报告——纯展示通道，不唤醒模型）
+    // 命令输出广播（2.2.6 宿主 execute 契约 Promise<void>，返回值不显示给用户）。
+    // r29e：真机实证事件投递不通（server emit 成功但 TUI 双通道零接收）——事件降为机会性
+    // 补充通道；主通道 = storage 槽 + TUI 轮询 state.lastReport（methods 通道实证可用）。
+    // at 与存储槽同一时间戳，TUI 用 sessionID|at 统一去重。
     report: {
       schema: {
         type: "object",
         properties: {
           sessionID: { type: "string" },
           text: { type: "string" },
+          at: { type: "string" },
         },
         required: ["sessionID", "text"],
         additionalProperties: true,

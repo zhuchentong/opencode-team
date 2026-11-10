@@ -51,6 +51,7 @@ function makeCtx() {
   const listeners: Array<{ name: string; cb: (data?: any) => void }> = [];
   const toasts: any[] = [];
   const dataCbs: any[] = [];
+  let stateReply: any = { active: false, slug: "", phase: null };
   const ctx = {
     theme,
     options: {},
@@ -63,7 +64,7 @@ function makeCtx() {
     client: {
       rpc(_def: any) {
         return {
-          state: async (_input: any) => ({ active: false, slug: "", phase: null }),
+          state: async (_input: any) => stateReply,
           list: async (_input: any) => ({ sessions: listSessions }),
           events: { on: (name: string, cb: () => void) => { listeners.push({ name, cb }); return () => {}; } },
         };
@@ -71,7 +72,7 @@ function makeCtx() {
     },
     data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) }, listen: (cb: any) => { dataCbs.push(cb); return () => { } } },
   };
-  return { ctx, slots, keymaps, listeners, toasts, dataCbs, setSessions: (s: any[]) => { listSessions = s; } };
+  return { ctx, slots, keymaps, listeners, toasts, dataCbs, setSessions: (s: any[]) => { listSessions = s; }, setState: (s: any) => { stateReply = s; } };
 }
 
 const t = mod as { id: string; setup: (ctx: any) => void };
@@ -150,15 +151,42 @@ console.log(`插件 id: ${t.id}`);
     // 非 wf 事件被忽略（不产生 toast）
     dataCbs.forEach((cb) => cb({ details: { type: "session.idle", data: {} } }));
     ok("P7 非 rpc.wf 事件忽略", toasts.length === 1, `toasts=${toasts.length}`);
-    // 去重：同一文本 800ms 内两通道都到 → 只弹一次
+    // 去重：同一 (sessionID,at) 两通道都到 → 只弹一次（r29e 统一 key=sessionID|at）
     const n0 = toasts.length;
-    dataCbs.forEach((cb) => cb({ details: { type: "rpc.wf.report", data: { sessionID: "ses_d", text: "dup 文本" } } }));
+    const atNow = new Date().toISOString();
+    dataCbs.forEach((cb) => cb({ details: { type: "rpc.wf.report", data: { sessionID: "ses_d", text: "dup 文本", at: atNow } } }));
     const rpCbs = listeners.filter((l) => l.name === "report");
-    rpCbs.forEach((l) => l.cb({ sessionID: "ses_d", text: "dup 文本" }));
-    ok("P7 跨通道同内容 800ms 去重", toasts.length - n0 === 1, `新增 ${toasts.length - n0} 条（应为 1）`);
+    rpCbs.forEach((l) => l.cb({ sessionID: "ses_d", text: "dup 文本", at: atNow }));
+    ok("P7 跨通道同 at 去重", toasts.length - n0 === 1, `新增 ${toasts.length - n0} 条（应为 1）`);
+    // 新鲜度门：>60s 的旧报告不弹（防新挂载重放）
+    const oldAt = new Date(Date.now() - 120000).toISOString();
+    dataCbs.forEach((cb) => cb({ details: { type: "rpc.wf.report", data: { sessionID: "ses_d", text: "过期报告", at: oldAt } } }));
+    ok("P7 60s 外旧报告不弹（新鲜度门）", !toasts.some((x) => x.message === "过期报告"));
     await setup.dispose();
   } catch (e: any) {
     ok("P7 双通道不崩", false, e?.message);
+  }
+}
+
+// ── P8：轮询主通道——state.lastReport → toast（r29e 主通道：事件投递真机不通，methods 实证可用）──
+{
+  const { ctx, slots, toasts, setState } = makeCtx();
+  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "轮询报告", at: new Date().toISOString() } });
+  t.setup(ctx as any);
+  const sidebarRender = slots["sidebar.content"];
+  try {
+    const setup = await testRender(() => sidebarRender({ sessionID: "ses_p8" }), { width: 50, height: 14 });
+    await setup.flush();
+    await setup.flush();
+    await new Promise((r) => setTimeout(r, 100));
+    ok("P8 轮询读到 lastReport → toast 呈现", toasts.some((x) => x.message === "轮询报告"), `toasts=${JSON.stringify(toasts)}`);
+    // 同一 at 再轮询不重复弹（去重）
+    await new Promise((r) => setTimeout(r, 2600));
+    const n = toasts.filter((x) => x.message === "轮询报告").length;
+    ok("P8 同 at 跨轮询周期去重", n === 1, `弹了 ${n} 次（应为 1）`);
+    await setup.dispose();
+  } catch (e: any) {
+    ok("P8 轮询通道不崩", false, e?.message);
   }
 }
 

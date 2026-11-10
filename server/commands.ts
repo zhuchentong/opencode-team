@@ -84,16 +84,24 @@ export function registerCommands(ctx: any, deps: any) {
   return ctx.command.transform((editor: any) => {
     // 统一输出通道：execute 返回值宿主不显示（2.2.6 契约 Promise<void>），广播 report 事件
     // 由 TUI toast 呈现；原样 return 保持 tests 行为锚与宿主兼容（未来若显示返回值亦无害）。
+    // 统一输出通道（r29e 定案）：2.2.6 宿主 execute 返回值对用户不显示（契约 Promise<void>）。
+    // 主通道 = storage 槽 wf-workflow/report/<sessionID>，TUI 轮询 state.lastReport 呈现 toast
+    // （methods 通道真机实证可用）；report 事件仅作机会性补充（真机实证事件投递不通，
+    // 见 ERR-20261110-007 与 r29d 探针数据）。返回值保留（tests 行为锚）。
     const add = (def: any) => editor.add({
       ...def,
       execute: async (a: any) => {
         const out = await def.execute(a);
         const text = typeof out === "string" ? out : "";
-        if (text && emitReport) {
-          const chanInfo = await emitReport(String(a?.sessionID ?? ""), text);
-          await reportProbe(a?.sessionID, { ev: "emit", cmd: def.name, chars: text.length, chanInfo });
+        const sid = String(a?.sessionID ?? "");
+        const at = new Date().toISOString();
+        if (text) {
+          let slotOk = false;
+          try { await S.set(`wf-workflow/report/${sid}`, { text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
+          if (emitReport) await emitReport(sid, text, at);
+          await reportProbe(a?.sessionID, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: def.name, chars: text.length, hasChan: !!emitReport });
         } else {
-          await reportProbe(a?.sessionID, { ev: "no-emit", cmd: def.name, type: typeof out, chars: text.length, hasChan: !!emitReport });
+          await reportProbe(a?.sessionID, { ev: "no-text", cmd: def.name, type: typeof out });
         }
         return out;
       },
@@ -205,6 +213,7 @@ export function registerCommands(ctx: any, deps: any) {
         const old = await load(a.sessionID); // M10-b：项目索引若指向自己则一并清除
         if (old?.projectID) { try { await S.remove(IDX(old.projectID)); } catch { } }
         await S.remove(KEY(a.sessionID));
+        try { await S.remove(`wf-workflow/report/${a.sessionID}`); } catch { } // r29e：清报告槽，防新挂载重放旧 toast
         try { await E.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch { }
         try { await E.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch { }
         await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} }); // M10-a：A3，TUI 实时反映清除

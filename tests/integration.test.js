@@ -229,9 +229,19 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   const dispose = await plugin.setup(m.ctx);
   const out = await cmd(m, "wf:ping").execute({ sessionID: "ses_rep" });
   assert.equal(typeof out, "string"); // 返回值保留（tests 行为锚）
+  // r29e 主通道：storage 槽（TUI 轮询 state.lastReport 消费）
+  const slot = m.store.get("wf-workflow/report/ses_rep");
+  assert.ok(slot, "应写 report 存储槽");
+  assert.equal(slot.text, out);
+  assert.ok(typeof slot.at === "string" && slot.at.length >= 20, "槽含 ISO 时间戳");
+  // 补充通道：report 事件（payload 与槽同 at，TUI 跨通道去重键）
   const rep = emitted.find((e) => e.name === "report");
   assert.ok(rep, "应广播 report 事件");
   assert.equal(rep.data.sessionID, "ses_rep");
-  assert.equal(rep.data.text, out); // 广播文本与返回值一致
+  assert.equal(rep.data.text, out);
+  assert.equal(rep.data.at, slot.at); // 事件与槽同 at → TUI 去重成立
+  // wf:reset 清报告槽（防新挂载重放旧 toast）
+  await cmd(m, "wf:reset").execute({ sessionID: "ses_rep" });
+  assert.equal(m.store.get("wf-workflow/report/ses_rep").text, "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。");
   dispose?.();
 });

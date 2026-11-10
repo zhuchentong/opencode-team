@@ -16,7 +16,13 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
       rpcReg = await ctx.rpc.register(WfDef, {
         state: async (input: any) => {
           const st = await load(input?.sessionID);
-          if (!st) return { sessionID: input?.sessionID ?? null, active: false };
+          // r29e 主通道：命令输出写 storage 槽，state 输出附带 lastReport 供 TUI 轮询
+          // （事件通道真机实证投递不通，降级为机会性补充）
+          let lastReport = null;
+          try {
+            lastReport = (await ctx.storage?.get?.(`wf-workflow/report/${input?.sessionID ?? ""}`)) ?? null;
+          } catch { /* 读槽失败按无报告处理 */ }
+          if (!st) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
           return {
             sessionID: st.sessionID,
             active: true,
@@ -27,6 +33,7 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
             testReportVerdict: st.testReportVerdict ?? null,
             artifacts: st.artifacts ?? {},
             updatedAt: st.updatedAt ?? null,
+            lastReport,
           };
         },
         list: async (input: any) => ({ sessions: await scanStates(input?.projectID ?? null, input?.directory ?? null) }),
@@ -47,13 +54,15 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
     } catch { /* 事件失败不影响主流程 */ }
   };
 
-  // 命令输出广播：宿主 execute 返回值不显示给用户（2.2.6 契约 Promise<void>），
-  // 经 report 事件由 TUI toast 呈现。fail-soft，同 emitUpdated。
-  // 诊断期返回通道形状（供 commands.ts 探针记录，定位 emit 静默失败点）。
-  const emitReport = async (sessionID: string, text: string) => {
+  // 命令输出广播：宿主 execute 返回值不显示给用户（2.2.6 契约 Promise<void>）。
+  // r29e：事件真机实证投递不通（server emit 成功但 TUI 双通道零接收）——事件降为机会性
+  // 补充通道，主通道 = commands.ts 写 storage 槽 + TUI 轮询 state.lastReport。
+  // at 与存储槽同一时间戳，TUI 用 sessionID|at 跨通道统一去重。fail-soft，同 emitUpdated。
+  // 诊断期返回通道形状（供 commands.ts 探针记录）。
+  const emitReport = async (sessionID: string, text: string, at: string) => {
     const chan = { hasReg: !!rpcReg, hasEvents: !!rpcReg?.events, hasEmit: !!rpcReg?.events?.emit };
     try {
-      await rpcReg?.events?.emit("report", { sessionID: String(sessionID ?? ""), text: String(text ?? "") });
+      await rpcReg?.events?.emit("report", { sessionID: String(sessionID ?? ""), text: String(text ?? ""), at });
       return { ...chan, emitted: true };
     } catch (e) {
       return { ...chan, emitted: false, err: String((e as Error)?.message ?? e) };
