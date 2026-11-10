@@ -13,12 +13,12 @@ import {
   VERSION, FLOWS, NEXT, BLOCKING_PHASES,
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
 } from "./lib.ts";
-import { ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX, logAdd } from "./state.ts";
+import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
 
 export function registerCommands(ctx: any, deps: any) {
-  const S = ctx.storage;
   const E = ctx?.session?.instructions?.entry;
-  const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr } = deps;
+  const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
+    putReport, removeState, dumpStates } = deps;
 
   // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
   const listOverrides = (dir: string) => {
@@ -84,10 +84,10 @@ export function registerCommands(ctx: any, deps: any) {
   return ctx.command.transform((editor: any) => {
     // 统一输出通道：execute 返回值宿主不显示（2.2.6 契约 Promise<void>），广播 report 事件
     // 由 TUI toast 呈现；原样 return 保持 tests 行为锚与宿主兼容（未来若显示返回值亦无害）。
-    // 统一输出通道（r29e 定案）：2.2.6 宿主 execute 返回值对用户不显示（契约 Promise<void>）。
-    // 主通道 = storage 槽 wf-workflow/report/<sessionID>，TUI 轮询 state.lastReport 呈现 toast
-    // （methods 通道真机实证可用）；report 事件仅作机会性补充（真机实证事件投递不通，
-    // 见 ERR-20261110-007 与 r29d 探针数据）。返回值保留（tests 行为锚）。
+    // 统一输出通道（P1 定案）：2.2.6 宿主 execute 返回值对用户不显示（契约 Promise<void>）。
+    // 主通道 = reports 表（TUI 轮询 state.lastReport 呈现 toast；methods 通道真机实证可用）；
+    // report 事件为补充通道（P0④ 五条件版首次真机打通，TUI 双通道 + sessionID|at 去重）。
+    // 返回值保留（tests 行为锚；TUI 本地轨经 RPC transition 直接拿返回值渲染）。
     const add = (def: any) => editor.add({
       ...def,
       execute: async (a: any) => {
@@ -97,7 +97,7 @@ export function registerCommands(ctx: any, deps: any) {
         const at = new Date().toISOString();
         if (text) {
           let slotOk = false;
-          try { await S.set(`wf-workflow/report/${sid}`, { sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
+          try { await putReport({ sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
           if (emitReport) await emitReport(sid, text, at);
           await reportProbe(a?.sessionID, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: def.name, chars: text.length, hasChan: !!emitReport });
         } else {
@@ -210,10 +210,7 @@ export function registerCommands(ctx: any, deps: any) {
       name: "wf:reset",
       description: "开发/中止用：清除本会话的工作流状态与阶段注入",
       execute: async (a: any) => {
-        const old = await load(a.sessionID); // M10-b：项目索引若指向自己则一并清除
-        if (old?.projectID) { try { await S.remove(IDX(old.projectID)); } catch { } }
-        await S.remove(KEY(a.sessionID));
-        try { await S.remove(`wf-workflow/report/${a.sessionID}`); } catch { } // r29e：清报告槽，防新挂载重放旧 toast
+        await removeState(a.sessionID); // P1：清任务行与报告槽（防新挂载重放旧 toast；events 流水保留审计）
         try { await E.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch { }
         try { await E.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch { }
         await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} }); // M10-a：A3，TUI 实时反映清除
@@ -264,7 +261,7 @@ export function registerCommands(ctx: any, deps: any) {
         try { rpcListMine = WfDef ? await ctx.rpc(WfDef).list(st?.projectID ? { projectID: String(st.projectID), ...(st.directory ? { directory: String(st.directory) } : {}) } : {}) : "no-rpc-def"; }
         catch (e) { rpcListMine = `ERR:${String((e as Error)?.message ?? e)}`; }
         let scanRaw = null;
-        try { scanRaw = await S.scan({ prefix: STATE_PREFIX }); }
+        try { scanRaw = await dumpStates(); } // P1：DB 转储（近似旧 storage scan 的 [{key,value}] 形状）
         catch (e) { scanRaw = `ERR:${String((e as Error)?.message ?? e)}`; }
         const out = { dumpedAt: new Date().toISOString(), version: VERSION, state: st, entries, entryKey: ENTRY_KEY, limits: LIMS, blockingPhases: [...BLOCKING_PHASES], sessProbe, rpcErr, rpcSelf, rpcList, rpcListMine, scanRaw };
         const dbg = await debugDirFor(a.sessionID); // P0-a：按会话解析

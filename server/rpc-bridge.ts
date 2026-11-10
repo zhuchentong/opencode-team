@@ -1,10 +1,12 @@
 // wf-workflow — RPC 桥（M8-a，自 index.ts 原样搬移）：ctx.rpc.register(Wf)（shared/rpc.ts）
 // 暴露 state/list 方法供 TUI 侧边栏订阅；流转/产物落盘时 emit("updated") 驱动刷新。
 // 注册失败 fail-soft（rpcErr 记录，供 /wf:diagnose 显示；此时尚不含 tui/ 部件，server 侧可独立验证）。
+// P1：命令输出槽迁移至 SQLite reports 表（getReport 由 state.ts 注入，ctx.storage 不再参与）。
 
-export async function createRpcBridge(ctx: any, { load, scanStates }: {
+export async function createRpcBridge(ctx: any, { load, scanStates, getReport }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
+  getReport: (sessionID: string) => Promise<any>;
 }) {
   let rpcReg = null;
   let rpcErr = null;
@@ -16,11 +18,10 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
       rpcReg = await ctx.rpc.register(WfDef, {
         state: async (input: any) => {
           const st = await load(input?.sessionID);
-          // r29e 主通道：命令输出写 storage 槽，state 输出附带 lastReport 供 TUI 轮询
-          // （事件通道真机实证投递不通，降级为机会性补充）
+          // P1 主通道：命令输出写 reports 表，state 输出附带 lastReport 供 TUI 轮询
           let lastReport = null;
           try {
-            lastReport = (await ctx.storage?.get?.(`wf-workflow/report/${input?.sessionID ?? ""}`)) ?? null;
+            lastReport = (await getReport(String(input?.sessionID ?? ""))) ?? null;
           } catch { /* 读槽失败按无报告处理 */ }
           if (!st) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
           return {
@@ -55,9 +56,9 @@ export async function createRpcBridge(ctx: any, { load, scanStates }: {
   };
 
   // 命令输出广播：宿主 execute 返回值不显示给用户（2.2.6 契约 Promise<void>）。
-  // r29e：事件真机实证投递不通（server emit 成功但 TUI 双通道零接收）——事件降为机会性
-  // 补充通道，主通道 = commands.ts 写 storage 槽 + TUI 轮询 state.lastReport。
-  // at 与存储槽同一时间戳，TUI 用 sessionID|at 跨通道统一去重。fail-soft，同 emitUpdated。
+  // P1：主通道 = commands.ts 写 reports 表 + TUI 轮询 state.lastReport；report 事件为补充通道
+  // （P0④ 五条件版真机打通投递，TUI 双通道 + sessionID|at 去重）。
+  // at 与 reports 表同一时间戳，TUI 跨通道统一去重。fail-soft，同 emitUpdated。
   // 诊断期返回通道形状（供 commands.ts 探针记录）。
   const emitReport = async (sessionID: string, text: string, at: string) => {
     const chan = { hasReg: !!rpcReg, hasEvents: !!rpcReg?.events, hasEmit: !!rpcReg?.events?.emit };

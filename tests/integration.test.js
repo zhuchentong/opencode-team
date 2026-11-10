@@ -1,9 +1,12 @@
 // P1 集成：mock 插件上下文跑通 状态机→注入→阻断→诊断 全链路
 // 覆盖单元测不到的胶水层：inject(entryValue 写 entry)、hook(logBlock 记账)、
 // wf:diagnose（磁盘对账）、wf_write_artifact（目录回退与 verdict 记账）
+// P1 重设计：状态持久化 = SQLite（.workflow/wf.db）——断言经只读连接读 tasks/reports 表
+// （stOf/repOf），行为锚语义不变；ctx.storage mock 仅作一次性迁移源（scan 返回空 → no-op）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
 
 // 虚拟模块占位包自举（node_modules 在 .gitignore，克隆后首次运行需生成；语义与 harness 一致）
@@ -19,8 +22,11 @@ if (!fs.existsSync(mockDir)) {
 }
 
 const DIR = "/tmp/opencode/wf-integ";
+const DB = `${DIR}/.workflow/wf.db`;
 
 const mkCtx = (opts = {}) => {
+  // 每个实例全新库：测试间零串扰（等价旧版 per-mkCtx 干净 Map）
+  for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const store = new Map();
   const tools = [];
   const cmds = [];
@@ -29,6 +35,7 @@ const mkCtx = (opts = {}) => {
   let hookFn = null;
   const ctx = {
     options: { probe: false, ...opts }, // 关探针避免写盘噪音
+    location: { directory: DIR }, // P1：状态库路径按 location 解析
     storage: {
       get: async (k) => store.get(k) ?? null,
       set: async (k, v) => { store.set(k, v); },
@@ -56,7 +63,20 @@ const mkCtx = (opts = {}) => {
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
-const stOf = (m, sid = "ses_i") => m.store.get(`wf-workflow/state/${sid}`);
+// P1：断言从 SQLite 读（stOf 保留旧语义：无行 → undefined）
+const dbGet = (sql, arg) => {
+  const d = new Database(DB);
+  try { return d.query(sql).get(arg ?? null); } catch { return null; } finally { try { d.close(); } catch { } }
+};
+const stOf = (m, sid = "ses_i") => {
+  const row = dbGet("SELECT state_json FROM tasks WHERE session_id = ?", sid);
+  if (!row) return undefined;
+  try { return JSON.parse(row.state_json); } catch { return undefined; }
+};
+const repOf = (sid) => {
+  const row = dbGet("SELECT session_id, text, at FROM reports WHERE session_id = ?", sid);
+  return row ? { sessionID: row.session_id, text: row.text, at: row.at } : undefined;
+};
 
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(`${DIR}/src`, { recursive: true });
@@ -229,8 +249,8 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   const dispose = await plugin.setup(m.ctx);
   const out = await cmd(m, "wf:ping").execute({ sessionID: "ses_rep" });
   assert.equal(typeof out, "string"); // 返回值保留（tests 行为锚）
-  // r29e 主通道：storage 槽（TUI 轮询 state.lastReport 消费）
-  const slot = m.store.get("wf-workflow/report/ses_rep");
+  // P1 主通道：reports 表（TUI 轮询 state.lastReport 消费）
+  const slot = repOf("ses_rep");
   assert.ok(slot, "应写 report 存储槽");
   assert.equal(slot.sessionID, "ses_rep"); // bug A 行为锚：槽必须含 sessionID（真机 toastReport 过滤器依赖，缺它 toast 全被拦）
   assert.equal(slot.text, out);
@@ -241,8 +261,9 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   assert.equal(rep.data.sessionID, "ses_rep");
   assert.equal(rep.data.text, out);
   assert.equal(rep.data.at, slot.at); // 事件与槽同 at → TUI 去重成立
-  // wf:reset 清报告槽（防新挂载重放旧 toast）
+  // wf:reset 清报告槽（防新挂载重放旧 toast）；reset 自身输出随后经 add 包装重新落 reports——
+  // 与旧 storage 版语义等价（该行内容是「已清除」提示文本）
   await cmd(m, "wf:reset").execute({ sessionID: "ses_rep" });
-  assert.equal(m.store.get("wf-workflow/report/ses_rep").text, "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。");
+  assert.equal(repOf("ses_rep").text, "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。");
   dispose?.();
 });

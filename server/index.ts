@@ -17,8 +17,11 @@ export default {
   async setup(ctx: any) {
     const opt = ctx?.options ?? {};
 
-    // 状态存取与观测通道
-    const { load, save, resolveState, resolveProjectDir, scanStates } = createStore(ctx);
+    // 状态存取（P1：SQLite 单库 .workflow/wf.db，含一次性旧 storage 迁移）与观测通道
+    const store = createStore(ctx);
+    await store.ready; // 迁移完成前不接命令（防半迁移窗口读到空库）
+    const { load, save, resolveState, resolveProjectDir, scanStates,
+      putReport, getReport, dumpStates, removeState, close: closeStore } = store;
     const { debugDirFor, probeOnce, logToolsOnce } = createObserver(ctx, opt);
 
     const allowMarkers = [...DEFAULT_ALLOW_MARKERS, ...(Array.isArray(opt.allowMarkers) ? opt.allowMarkers : [])];
@@ -34,7 +37,7 @@ export default {
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
     // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新，见 rpc-bridge.ts）──
-    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates });
+    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates, getReport });
 
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
@@ -46,10 +49,12 @@ export default {
     const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
 
     // ── /wf:* 命令与 transition/inject 编排（见 commands.ts）────────
-    const commands = registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr });
+    const commands = registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
+      putReport, removeState, dumpStates });
 
     return () => {
       for (const r of [commands, tools, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }
+      closeStore();
     };
   },
 };
