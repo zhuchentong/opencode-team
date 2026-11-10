@@ -1,7 +1,7 @@
 // P0-b：路径提取 / slug / prompt 形态测试
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractPaths, slugify, promptText } from "../server/lib.js";
+import { extractPaths, slugify, promptText } from "../server/lib.ts";
 
 test("edit/write/patch 工具的 path/filePath/file 三键", () => {
   assert.deepEqual(extractPaths("edit", { path: "/a/b.js" }), ["/a/b.js"]);

@@ -1,21 +1,54 @@
-// wf-workflow — 可测纯逻辑单一来源（P0-b：自 server/index.js 提取，行为与 M14-r24 一致）
+// wf-workflow — 可测纯逻辑单一来源（P0-b：自 server/index.js 提取，行为与 M16-r25 一致）
 // 原则：本文件只放无 ctx/storage 依赖的模块级常量与纯函数，供 bun test 直接覆盖；
 //       index.js 负责注册（工具/命令/hook/RPC）与持久化。改动本文件前先跑 bun test。
 
-import { BLOCKING } from "../shared/phases.js"; // M10-d A1：阶段闸门单一来源
+import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
 export const VERSION = "M16-r25";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
+export type LimitKey = keyof typeof LIMITS;
+// P2：limits 可按实例覆盖（partial 覆盖默认 LIMITS）
+export type Limits = Partial<Record<LimitKey, number>>;
 
 export const GATE_ERR = "[wf-workflow]";
-export const EDIT_TOOLS = new Set(["edit", "write", "patch"]);
-export const BLOCKING_PHASES = new Set(BLOCKING); // M10-d A1：见 shared/phases.js
+export const EDIT_TOOLS: Set<string> = new Set(["edit", "write", "patch"]);
+export const BLOCKING_PHASES: Set<string> = new Set<string>(BLOCKING); // M10-d A1：见 shared/phases.ts
 export const DEFAULT_ALLOW_MARKERS = ["/.workflow/", "/.learnings/", "/tests/", "/test/", "/__tests__/"];
 export const DEFAULT_ALLOW_RES = [/\.(test|spec)\.[cm]?[jt]sx?$/i, /(^|\/)test_[^/]*\.(py|go)$/i];
 
+// 状态对象（storage 持久化形状；历史版本含动态字段，索引签名容错）
+export interface FlowLogEntry {
+  ok?: boolean;
+  note?: string;
+  cmd?: string;
+  tool?: string;
+  detail?: string;
+  at?: string;
+  [key: string]: unknown;
+}
+export interface WfState {
+  slug?: string;
+  phase?: string | null;
+  rounds: Record<LimitKey, number> & Record<string, number>;
+  updatedAt?: string;
+  prev?: { slug?: string; phase?: string | null; at?: string };
+  lanes?: Record<string, { sessionID?: string; worktree?: string | null; at?: string }>;
+  artifacts?: Record<string, { at?: string; bytes?: number }>;
+  log?: FlowLogEntry[];
+  testPlanWritten?: boolean;
+  testReportVerdict?: string;
+  entryErr?: string;
+  [key: string]: unknown;
+}
+
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
-export const FLOWS = {
+export interface FlowDef {
+  to: string;
+  from: string[];
+  counter: LimitKey | null;
+}
+export const FLOWS: Record<string, FlowDef> = {
   "wf:intake":       { to: "intake",       from: ["*"],                                        counter: null },
   // M10-a：补返工边——review 不过回 planning；执行审核遗漏回 building；返工/修复后回 reconcile 重合并
   "wf:plan":         { to: "planning",     from: ["intake", "planning", "review", "test_design"], counter: null },
@@ -31,7 +64,7 @@ export const FLOWS = {
   "wf:done":         { to: "done",         from: ["testing"],                                  counter: null },
 };
 
-export const NEXT = {
+export const NEXT: Record<string, string> = {
   intake: "/wf:plan", planning: "/wf:review", review: "/wf:assign", assign: "/wf:test-design",
   test_design: "/wf:build", building: "/wf:reconcile", reconcile: "/wf:review-build", build_review: "/wf:test",
   testing: "PASS→/wf:done，FAIL→/wf:fix", fixing: "/wf:test", done: "（终态，含并行复盘）",
@@ -40,7 +73,7 @@ export const NEXT = {
 // ── M5：命令级进阶关卡（返回 null=放行，字符串=拒绝理由）──────────
 // wf:assign 双通道：计划审核（流转合法性）之外，还须 tester 已产出 test-plan.md（M3 记账 testPlanWritten）
 // wf:done 验收：test-report.md 的「**结论**」必须为 PASS（wf_write_artifact 解析记账 testReportVerdict）
-export const GATES = {
+export const GATES: Record<string, (st: WfState) => string | null> = {
   "wf:assign": (st) =>
     st.testPlanWritten ? null :
       "❌ 双通道关卡未过：tester(feasibility) 尚未产出 test-plan.md。请回到 review 阶段委派 wf/tester(mode=feasibility)，用 wf_write_artifact(kind=test-plan) 写入后，再执行 /wf:assign。",
@@ -51,11 +84,11 @@ export const GATES = {
 };
 
 // ── M4：越权路径提取 ────────────────────────────────────────────────
-export function extractPaths(tool, args) {
+export function extractPaths(tool: string, args: Record<string, unknown> | null | undefined): string[] {
   if (!args || typeof args !== "object") return [];
   if (tool === "patch") {
     const txt = String(args.patchText ?? "");
-    const out = [];
+    const out: string[] = [];
     for (const m of txt.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) out.push(m[1].trim());
     return out;
   }
@@ -64,7 +97,7 @@ export function extractPaths(tool, args) {
 }
 
 // 放行判定工厂（M10-a：闸门拒绝文案与 allowlist 同源生成，I2 防漂移）
-export function makeAllowChecker(allowMarkers, allowRes) {
+export function makeAllowChecker(allowMarkers: string[], allowRes: RegExp[]): (p: unknown) => boolean {
   return (p) => {
     // 兼容绝对/相对路径：marker 形如 "/.workflow/"，相对路径没有前导斜杠，两种都比对
     const norm = String(p ?? "").replace(/\\/g, "/");
@@ -78,13 +111,13 @@ export function makeAllowChecker(allowMarkers, allowRes) {
 // ── M10-c：shell 写目标解析（重定向 + 写/删类命令尾参）──────────────
 // 已知边界（P0 锁定现状）：`tee out.txt < input` 会把 "input" 误判为目标（< 不在分段符内）；
 // 误伤仅在 BLOCKING 阶段（planning/review）发生，属 fail-closed 方向，暂不修。
-const SHELL_DEST_CMDS = new Set(["touch", "mkdir", "rm", "mv", "cp", "tee", "rsync", "ln", "install"]);
-export function shellWriteTargets(cmd) {
-  const found = new Set();
+const SHELL_DEST_CMDS: Set<string> = new Set(["touch", "mkdir", "rm", "mv", "cp", "tee", "rsync", "ln", "install"]);
+export function shellWriteTargets(cmd: unknown): string[] {
+  const found = new Set<string>();
   if (!cmd || typeof cmd !== "string") return [];
   // 重定向目标：> f / >> f / 2> f（引号或裸 token，含 * 的跳过）
   const re = /(?:\d*>>?|<>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>]+))/g;
-  let m;
+  let m: RegExpExecArray | null;
   while ((m = re.exec(cmd))) {
     const t = m[1] ?? m[2] ?? m[3];
     if (t && !t.includes("*")) found.add(t);
@@ -102,7 +135,7 @@ export function shellWriteTargets(cmd) {
 }
 
 // ── M3：产物 kind → 文件名（循环类产物按轮次编号）──────────────────
-export const KIND_FILES = {
+export const KIND_FILES: Record<string, (st: WfState) => string> = {
   "plan":         () => "plan.md",
   "plan-review":  (st) => `plan-review-r${Math.max(1, st.rounds?.plan_review ?? 1)}.md`, // M14：进入即计数语义下轮次即编号（旧 +1 会致首轮成 r2）
   "test-plan":    () => "test-plan.md",
@@ -112,15 +145,15 @@ export const KIND_FILES = {
 };
 
 // test-report 首行「**结论**: PASS|FAIL」解析（宽松值匹配 + 严格行首格式探测）
-export function parseVerdict(content) {
+export function parseVerdict(content: unknown): "PASS" | "FAIL" | "UNKNOWN" {
   const m = String(content ?? "").match(/^\s*\*\*结论\*\*\s*[:：]\s*(PASS|FAIL)\b/im);
-  return m ? m[1].toUpperCase() : "UNKNOWN";
+  return m ? (m[1].toUpperCase() as "PASS" | "FAIL") : "UNKNOWN";
 }
-export function hasStrictVerdictLine(content) {
+export function hasStrictVerdictLine(content: unknown): boolean {
   return /^\*\*结论\*\*[:：]/m.test(String(content ?? ""));
 }
 
-export const slugify = (t) =>
+export const slugify = (t: unknown): string =>
   String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
@@ -128,7 +161,7 @@ export const slugify = (t) =>
 // <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
-export function entryValue(st, limits = LIMITS, overrides = []) {
+export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
   if (st.phase === "done") return `${head}\n${DONE_ENTRY}`;
   return `${head}\n${guidance(st.phase, st, limits, overrides)}`;
@@ -141,7 +174,7 @@ export const HINT_TRIGGERS = [
   "工作流", "流程开发", "按流程", "完整流程", "走流程", "planned development",
   "superpowers", "wf workflow", "formal workflow",
 ];
-export function isHintWorthy(text) {
+export function isHintWorthy(text: unknown): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t) return false;
   return HINT_TRIGGERS.some((k) => t.includes(k.toLowerCase()));
@@ -153,26 +186,28 @@ export const HINT_ENTRY = [
 ].join("\n");
 
 // 实测（M2-a）：命令 args.prompt 是对象（含 text 等字段），不是字符串
-export const promptText = (p) => {
+interface PromptLike { text?: unknown; content?: unknown }
+export const promptText = (p: unknown): string => {
   if (typeof p === "string") return p;
-  if (p && typeof p === "object") return String(p.text ?? p.content ?? "");
+  if (p && typeof p === "object") { const q = p as PromptLike; return String(q.text ?? q.content ?? ""); }
   return "";
 };
 
-// ── 流转校验+应用（P0-b 提取自 transition 闭包，行为与 M14 一致）────
+// ── 流转校验+应用（P0-b 提取自 transition 闭包，行为与 M16 一致）────
 // 通过 → 原地完成 counter 递增（进入即计数）与 intake 重置/slug 设置，返回 { ok: true }；
 //       调用方随后设 st.phase=FLOWS[cmd].to、st.updatedAt，并负责 log/save/inject/emit。
 // 拒绝 → 返回 { ok: false, note, msg }（拒绝发生在计数之前，不消耗循环额度）。
 // st 须带 rounds: { plan_review, build_review, test_fix }。
 // P2：limits 可按实例覆盖（options.limits），默认取模块 LIMITS。
-export function evaluateTransition(cmd, st, text, at = new Date().toISOString(), limits = LIMITS) {
+export type TransitionResult = { ok: true } | { ok: false; note: string; msg: string };
+export function evaluateTransition(cmd: string, st: WfState, text: unknown, at = new Date().toISOString(), limits: Limits = LIMITS): TransitionResult {
   const flow = FLOWS[cmd];
   const from = st.phase ?? null;
 
-  if (!(flow.from.includes("*") || flow.from.includes(from))) {
+  if (!(flow.from.includes("*") || flow.from.includes(from ?? ""))) {
     return {
       ok: false, note: "illegal-transition",
-      msg: `❌ 拒绝：/wf:${cmd.slice(3)} 不能从阶段「${from ?? "无"}」进入「${flow.to}」（合法来源：${flow.from.join("/") || "无"}）。当前下一步：${NEXT[from] ?? "/wf:intake"}`,
+      msg: `❌ 拒绝：/wf:${cmd.slice(3)} 不能从阶段「${from ?? "无"}」进入「${flow.to}」（合法来源：${flow.from.join("/") || "无"}）。当前下一步：${NEXT[from ?? ""] ?? "/wf:intake"}`,
     };
   }
 
@@ -222,7 +257,7 @@ export function evaluateTransition(cmd, st, text, at = new Date().toISOString(),
   return { ok: true };
 }
 
-export function guidance(phase, st, limits = LIMITS, overrides = []) {
+export function guidance(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   const base = guidanceBase(phase, st, limits);
   if (Array.isArray(overrides) && overrides.length) {
     const list = overrides.map((f) => String(f).replace(/\.md$/, "")).join(", ");
@@ -231,10 +266,10 @@ export function guidance(phase, st, limits = LIMITS, overrides = []) {
   return base;
 }
 
-function guidanceBase(phase, st, limits = LIMITS) {
+function guidanceBase(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...(limits ?? {}) };
   const s = st.slug || "(未定)";
-  const r = st.rounds ?? {};
+  const r: Record<string, number> = st.rounds ?? {};
   switch (phase) {
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
@@ -302,7 +337,12 @@ function guidanceBase(phase, st, limits = LIMITS) {
 // agents 形状容错：数组或 {agents}，项取 name/id 与 model.providerID/model.id。
 export const WF_ROLES = ["wf/planner", "wf/planner-reviewer", "wf/tester", "wf/builder",
   "wf/builder-reviewer", "wf/fixer", "wf/learner"];
-export function pingReport(agents) {
+export interface AgentLike {
+  name?: string;
+  id?: string;
+  model?: { providerID?: string; id?: string };
+}
+export function pingReport(agents: AgentLike[] | { agents?: AgentLike[] } | null | undefined): string {
   const arr = Array.isArray(agents) ? agents : (agents?.agents ?? []);
   const norm = arr.map((a) => ({
     name: String(a?.name ?? a?.id ?? ""),
@@ -322,9 +362,16 @@ export function pingReport(agents) {
 // ── P1：wf:diagnose 报告生成（纯函数，可测）────────────────────────
 // facts = { version, artifactFiles: 磁盘上实际存在的产物名[], entryErr?, rpcErr?, limits? }
 // 证据来源：st.log（每次流转/拒绝/阻断都记账）+ 关卡记账 + 磁盘对账。
-export function diagnoseReport(st, facts = {}) {
-  const out = [];
-  const r = st.rounds ?? {};
+export interface DiagnoseFacts {
+  version?: string;
+  artifactFiles?: string[];
+  entryErr?: string;
+  rpcErr?: string;
+  limits?: Limits;
+}
+export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
+  const out: string[] = [];
+  const r: Record<string, number> = st.rounds ?? {};
   out.push(`wf 诊断(${facts.version ?? "?"})｜slug=${st.slug || "(未定)"} phase=${st.phase ?? "无"}｜${st.updatedAt ?? "无更新时间"}`);
 
   // 1) 审计轨迹中的拒绝/阻断
@@ -333,15 +380,15 @@ export function diagnoseReport(st, facts = {}) {
   const blocks = rejects.filter((e) => e.note === "blocked");
   const refusals = rejects.filter((e) => e.note !== "blocked");
   out.push(`流转尝试=${log.length} 拒绝=${refusals.length} 越权阻断=${blocks.length}`);
-  const byNote = {};
-  for (const e of refusals) byNote[e.note] = (byNote[e.note] ?? 0) + 1;
+  const byNote: Record<string, number> = {};
+  for (const e of refusals) byNote[String(e.note)] = (byNote[String(e.note)] ?? 0) + 1;
   for (const [note, n] of Object.entries(byNote)) {
-    const hint = {
+    const hint = ({
       "illegal-transition": "命令顺序错误（请核对流转表/下一步提示）",
       "gate-rejected": "关卡前置产物未产出（test-plan / test-report）",
       "limit-exceeded": "循环已达上限——按流程应停下上报用户",
       "intake-guard": "已有活动任务被守卫拦截（用 /wf:reset 或 /wf:intake ! <slug>）",
-    }[note] || "见日志详情";
+    } as Record<string, string>)[note] || "见日志详情";
     out.push(`  ✗ ${note} ×${n}：${hint}`);
   }
   for (const e of blocks.slice(-5)) out.push(`  ⛔ 越权阻断：${e.tool ?? e.cmd ?? "?"} ${e.detail ?? ""}`);
@@ -371,6 +418,6 @@ export function diagnoseReport(st, facts = {}) {
   if (facts.rpcErr) out.push(`  ⚠️ RPC 注册失败（TUI 面板不可用）：${facts.rpcErr}`);
 
   // 6) 下一步
-  out.push(`  下一步：${NEXT[st.phase] ?? "/wf:intake"}`);
+  out.push(`  下一步：${NEXT[st.phase ?? ""] ?? "/wf:intake"}`);
   return out.join("\n");
 }

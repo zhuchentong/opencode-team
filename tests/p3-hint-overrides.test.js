@@ -1,7 +1,7 @@
 // P3：自动激活提示 + 项目级角色定制覆盖——纯函数测试
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isHintWorthy, HINT_ENTRY, HINT_TRIGGERS, guidance, entryValue } from "../server/lib.js";
+import { isHintWorthy, HINT_ENTRY, HINT_TRIGGERS, guidance, entryValue } from "../server/lib.ts";
 
 test("isHintWorthy：中文/英文关键词命中", () => {
   assert.equal(isHintWorthy("我们走工作流开发这个功能"), true);

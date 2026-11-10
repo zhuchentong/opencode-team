@@ -3,7 +3,7 @@
 // 各模块职责与实测 API 结论见各文件头；流转/关卡纯逻辑单一来源见 server/lib.js；历史变更详见 git。
 import {
   LIMITS, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES, makeAllowChecker,
-} from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
+} from "./lib.ts"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
 import { createStore } from "./state.js";
 import { createObserver } from "./observe.js";
 import { createRpcBridge } from "./rpc-bridge.js";

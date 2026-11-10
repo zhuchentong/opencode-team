@@ -2,7 +2,7 @@
 // 已知边界（锁定现状，见 lib.js 注释）：`tee out.txt < input` 会把 "input" 误判为目标。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shellWriteTargets } from "../server/lib.js";
+import { shellWriteTargets } from "../server/lib.ts";
 
 test("重定向 > 与 >> 与 2>", () => {
   assert.deepEqual(shellWriteTargets("echo x > out.txt"), ["out.txt"]);

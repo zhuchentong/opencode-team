@@ -1,7 +1,7 @@
 // P0-b：流转状态机测试——来源合法性 / GATES / 计数器「进入即计数」/ intake 守卫与重置
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FLOWS, LIMITS, evaluateTransition } from "../server/lib.js";
+import { FLOWS, LIMITS, evaluateTransition } from "../server/lib.ts";
 
 const mkSt = (phase = null, extra = {}) => ({
   sessionID: "ses_test",

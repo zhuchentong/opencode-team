@@ -1,8 +1,8 @@
 // P0-b：shared/phases.js 单一来源一致性守卫（防 server/tui/lib 三处漂移）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING } from "../shared/phases.js";
-import { FLOWS, KIND_FILES, LIMITS } from "../server/lib.js";
+import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING } from "../shared/phases.ts";
+import { FLOWS, KIND_FILES, LIMITS } from "../server/lib.ts";
 
 test("PHASE_ORDER 无重复", () => {
   assert.equal(new Set(PHASE_ORDER).size, PHASE_ORDER.length);

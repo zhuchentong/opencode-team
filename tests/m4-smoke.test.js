@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import plugin from "../server/index.js";
-import * as lib from "../server/lib.js";
+import * as lib from "../server/lib.ts";
 
 test("插件默认导出形状", () => {
   assert.equal(plugin.id, "wf-workflow");

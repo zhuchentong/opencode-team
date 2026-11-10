@@ -1,7 +1,7 @@
 // P0-b：test-report「**结论**」解析测试（宽松值匹配 + 严格行首格式探测）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseVerdict, hasStrictVerdictLine } from "../server/lib.js";
+import { parseVerdict, hasStrictVerdictLine } from "../server/lib.ts";
 
 test("PASS / FAIL 正常解析", () => {
   assert.equal(parseVerdict("**结论**: PASS\n\n其余内容"), "PASS");

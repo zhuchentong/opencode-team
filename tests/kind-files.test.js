@@ -1,7 +1,7 @@
 // P0-b：产物 kind → 文件名测试（M14 off-by-one 回归锚点：进入即计数语义下轮次即编号）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { KIND_FILES } from "../server/lib.js";
+import { KIND_FILES } from "../server/lib.ts";
 
 test("非循环产物固定文件名", () => {
   assert.equal(KIND_FILES.plan({}), "plan.md");

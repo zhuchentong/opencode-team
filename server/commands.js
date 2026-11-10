@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import {
   VERSION, FLOWS, NEXT, BLOCKING_PHASES,
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
-} from "./lib.js";
+} from "./lib.ts";
 import { ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX, logAdd } from "./state.js";
 
 export function registerCommands(ctx, deps) {

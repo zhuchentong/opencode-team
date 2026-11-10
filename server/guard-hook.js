@@ -6,7 +6,7 @@
 // M10-c 实测结论（shell-probe.json）：ctx.shell.hook("create.before") 的 input 仅
 // {command,cwd,timeout,shell,env}，**无 sessionID/agent** → 无法按会话/agent 管辖；
 // shell 门并入下方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets } from "./lib.js";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets } from "./lib.ts";
 import { logAdd } from "./state.js";
 
 export function registerGuardHook(ctx, deps) {

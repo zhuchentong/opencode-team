@@ -1,7 +1,7 @@
 // P0-b：越权放行判定测试（marker 双形态 + 测试文件正则 + 反斜杠路径）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES, makeAllowChecker } from "../server/lib.js";
+import { DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES, makeAllowChecker } from "../server/lib.ts";
 
 const isAllowed = makeAllowChecker(DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES);
 
