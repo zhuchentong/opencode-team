@@ -7,7 +7,7 @@
 // ctx.session.get(sessionID).location.directory 取（封装于 state.resolveProjectDir）。
 import * as fs from "node:fs";
 import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine } from "./lib.ts";
-import { logAdd } from "./state.js";
+import { logAdd } from "./state.ts";
 
 export function registerArtifactTool(ctx, deps) {
   const { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce } = deps;

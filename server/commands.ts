@@ -10,7 +10,7 @@ import {
   VERSION, FLOWS, NEXT, BLOCKING_PHASES,
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
 } from "./lib.ts";
-import { ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX, logAdd } from "./state.js";
+import { ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX, logAdd } from "./state.ts";
 
 export function registerCommands(ctx, deps) {
   const S = ctx.storage;

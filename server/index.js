@@ -4,13 +4,13 @@
 import {
   LIMITS, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES, makeAllowChecker,
 } from "./lib.ts"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
-import { createStore } from "./state.js";
-import { createObserver } from "./observe.js";
-import { createRpcBridge } from "./rpc-bridge.js";
-import { registerArtifactTool } from "./artifact-tool.js";
-import { registerGuardHook } from "./guard-hook.js";
-import { registerHint } from "./hint.js";
-import { registerCommands } from "./commands.js";
+import { createStore } from "./state.ts";
+import { createObserver } from "./observe.ts";
+import { createRpcBridge } from "./rpc-bridge.ts";
+import { registerArtifactTool } from "./artifact-tool.ts";
+import { registerGuardHook } from "./guard-hook.ts";
+import { registerHint } from "./hint.ts";
+import { registerCommands } from "./commands.ts";
 
 export default {
   id: "wf-workflow",

@@ -3,7 +3,7 @@
 // 尝试注册，首次回调落 _debug/chat-probe.json 供真机确认。注册失败/从未触发
 // = 没有自动激活，不影响任何其他功能。opt.hint === false 整体禁用。
 import { isHintWorthy, HINT_ENTRY, promptText } from "./lib.ts";
-import { HINT_KEY } from "./state.js";
+import { HINT_KEY } from "./state.ts";
 
 export function registerHint(ctx, opt, deps) {
   const { resolveState, probeOnce } = deps;
