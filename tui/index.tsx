@@ -1,4 +1,4 @@
-// wf-workflow TUI 部件（M8-a 侧边栏挂件 + M8-b 面板看板）
+// wf-workflow TUI 部件（M8-a 侧边栏挂件 + M8-b 面板看板 + M15 回退列表/范围切换）
 // - 数据源：server 侧 RPC（shared/rpc.ts 的 Wf.state / Wf.list）+ "updated" 事件驱动刷新
 // - 面板：/wf-board（slash）或命令面板 → context.ui.panel.open("wf.board")
 // - 渲染纪律（M9 血泪）：slot 子树里只用 <text> + 字符串子节点。
@@ -11,17 +11,16 @@ import { Wf } from "../shared/rpc.ts";
 
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
-// 探针：首次成功调用 RPC 后落盘一次（TUI 无法 headless 验证）
-let probed = false;
+// M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
+const TUI_BUILD = "M15.1";
+const LOADED_AT = new Date().toISOString();
 const probeOnce = (data) => {
-  if (probed) return;
-  probed = true;
   (async () => {
     try {
       const fs = await import("node:fs");
       const dir = `${REPO}/.workflow/_debug`;
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(`${dir}/tui-probe.json`, JSON.stringify({ at: new Date().toISOString(), ...data }, null, 2));
+      fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({ at: new Date().toISOString(), build: TUI_BUILD, loadedAt: LOADED_AT, ...data }) + "\n");
     } catch { /* 探针失败不影响 UI */ }
   })();
 };
@@ -43,13 +42,39 @@ const str = (v) => (v === null || v === undefined ? "" : String(v));
 function WfBoard(props) {
   const [st, setSt] = createSignal(null);
   const [err, setErr] = createSignal(null);
+  // M15①③：当前会话无活动任务时，回退显示本项目→全局的活跃任务（≤3 行，全部字符串）
+  const [oth, setOth] = createSignal([]);
+  const [othScope, setOthScope] = createSignal("");
+
+  const listLine = (x) => {
+    const r = x?.rounds ?? {};
+    return `${str(x?.slug || "(未定)")} · ${str(x?.phase ?? "?")} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
+  };
 
   const refresh = async () => {
     try {
-      const s = await props.context.client.rpc(Wf).state({ sessionID: props.sessionID });
+      const rpc = props.context.client.rpc(Wf);
+      const s = await rpc.state({ sessionID: props.sessionID });
       probeOnce({ sessionID: props.sessionID, state: s });
       setSt(s ?? { active: false });
       setErr(null);
+      if (s?.active) { setOth([]); setOthScope(""); return; }
+      let pid = null;
+      let dir = null;
+      try {
+        const cs = props.context.data?.session?.get(String(props.sessionID ?? ""));
+        pid = cs?.projectID ?? null;
+        dir = cs?.location?.directory ?? null;
+      } catch { }
+      try {
+        const mine = await rpc.list(pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {});
+        const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+        if (act.length) { setOth(act.map(listLine)); setOthScope("本项目"); return; }
+        const allR = await rpc.list({});
+        const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+        setOth(cross.map(listLine));
+        setOthScope(cross.length ? "全局·其它项目" : "");
+      } catch { setOth([]); setOthScope(""); }
     } catch (e) {
       const m = str(e?.message ?? e);
       probeOnce({ sessionID: props.sessionID, rpcErr: m });
@@ -58,9 +83,8 @@ function WfBoard(props) {
   };
   refresh();
 
-  const off = props.context.client.rpc(Wf).events.on("updated", (ev) => {
-    if (!ev?.data?.sessionID || ev.data.sessionID === props.sessionID) refresh();
-  });
+  // M15：回退列表是全项目视角——任何会话的 updated 事件都触发刷新
+  const off = props.context.client.rpc(Wf).events.on("updated", () => { refresh(); });
   onCleanup(() => { try { off?.(); } catch { } });
 
   const T = props.context.theme;
@@ -73,8 +97,24 @@ function WfBoard(props) {
           if (err()) return <text fg={T.text.feedback.error}>{`wf 错误: ${str(err())}`}</text>;
           if (!props.sessionID) return <text fg={T.text.muted}>{"  wf: 无会话"}</text>;
           const s = st();
+          probeOnce({ render: true, sid: String(props.sessionID ?? ""), active: !!(s && s.active), phase: s?.phase ?? null, othN: oth().length });
           if (!s) return <text fg={T.text.muted}>{"  wf: …"}</text>;
-          if (!s.active)
+          if (!s.active) {
+            const o = oth();
+            if (o.length > 0) {
+              const line = (n) => (o[n] ? `  ${o[n]}` : "");
+              return (
+                <box flexDirection="column">
+                  <text fg={T.text.muted}>{"── wf ──────────────"}</text>
+                  <text fg={T.text.base}>{`  活动任务·${othScope()}`}</text>
+                  <text fg={T.text.action.primary}>{line(0)}</text>
+                  <text fg={T.text.action.primary}>{line(1)}</text>
+                  <text fg={T.text.action.primary}>{line(2)}</text>
+                  <text fg={T.text.muted}>{"  /wf-board 看板"}</text>
+                  <text fg={T.text.muted}>{"──────────────────────"}</text>
+                </box>
+              );
+            }
             return (
               <box flexDirection="column">
                 <text fg={T.text.muted}>{"── wf ──────────────"}</text>
@@ -82,6 +122,7 @@ function WfBoard(props) {
                 <text fg={T.text.muted}>{"──────────────────────"}</text>
               </box>
             );
+          }
 
           const r = s.rounds ?? {};
           const i = stageOf(s.phase);
@@ -137,14 +178,16 @@ function WfBoard(props) {
   );
 }
 
-// ── M8-b：面板看板（全部工作流任务）────────────────────────────────
-// 同样遵守渲染纪律：固定行数（最多 10 行），全部是字符串子节点。
-const PANEL_MAX = 10;
+// ── M8-b/M15：面板看板（全部工作流任务）───────────────────────────
+// 同样遵守渲染纪律：固定行数（每任务 2 行 × 最多 6 任务），全部是字符串子节点。
+const PANEL_MAX = 6;
+const hhmm = (iso) => { const s = str(iso); return s.length >= 16 ? s.slice(11, 16) : ""; };
 
 function WfBoardPanel(props) {
   const ctx = props.context;
   const [rows, setRows] = createSignal([]);
   const [err, setErr] = createSignal(null);
+  const [all, setAll] = createSignal(false); // M15②：a 键切换 当前项目/全部项目
 
   const refresh = async () => {
     try {
@@ -156,7 +199,7 @@ function WfBoardPanel(props) {
         pid = cs?.projectID ?? null;
         dir = cs?.location?.directory ?? null;
       } catch { }
-      const r = await ctx.client.rpc(Wf).list(pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {});
+      const r = await ctx.client.rpc(Wf).list(all() ? {} : (pid ? { projectID: String(pid), ...(dir ? { directory: String(dir) } : {}) } : {}));
       setRows(Array.isArray(r?.sessions) ? r.sessions : []);
       setErr(null);
     } catch (e) {
@@ -172,47 +215,79 @@ function WfBoardPanel(props) {
   ctx.keymap.layer(() => ({
     commands: [
       { id: "wf.board.refresh", title: "刷新看板", group: "wf 看板", bind: "r", run: () => refresh() },
+      { id: "wf.board.scope", title: "切换范围 项目↔全局", group: "wf 看板", bind: "a", run: () => { setAll(!all()); refresh(); } },
       { id: "wf.board.fullscreen", title: "切换全屏", group: "wf 看板", bind: "f", run: () => props.panel?.toggleFullscreen?.() },
       { id: "wf.board.close", title: "关闭看板", group: "wf 看板", bind: "q", run: () => props.panel?.close?.() },
     ],
   }));
 
-  const rowText = (n) => {
+  // M15：每任务两行——主行（slug+阶段+进度条）/ 副行（轮次/关卡/时间/会话尾6位）
+  const nth = (n) => {
     const list = rows();
-    const s = Array.isArray(list) ? list[n] : null;
+    return Array.isArray(list) ? list[n] : null;
+  };
+  const rowMain = (n) => {
+    const s = nth(n);
+    if (!s) return "";
+    const i = stageOf(s.phase);
+    const total = STAGE_ORDER.length;
+    const isDone = s.phase === "done" || s.phase === "retrospect";
+    const doneN = isDone ? total : i;
+    const bar = "●".repeat(doneN) + "○".repeat(Math.max(0, total - doneN));
+    const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
+    return `▸ ${str(s.slug || "(未定)")} · F${i} ${label} ${bar} ${doneN}/${total}`;
+  };
+  const rowSub = (n) => {
+    const s = nth(n);
     if (!s) return "";
     const r = s.rounds ?? {};
-    const gate = `${s.testPlanWritten ? "✓" : "✗"}${s.testReportVerdict ? "/" + str(s.testReportVerdict) : ""}`;
-    return `${str(s.sessionID).slice(0, 14)}  ${str(s.phase ?? "?")} · ${str(s.slug || "(未定)")}  ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}  ${gate}`;
+    return `    轮次 plan ${r.plan_review ?? 0}/3 build ${r.build_review ?? 0}/3 fix ${r.test_fix ?? 0}/3`;
+  };
+  const rowSub2 = (n) => {
+    const s = nth(n);
+    if (!s) return "";
+    const verdict = s.testReportVerdict ? str(s.testReportVerdict) : "—";
+    return `    关卡 test-plan ${s.testPlanWritten ? "✓" : "✗"} report ${verdict} · 更新 ${hhmm(s.updatedAt)} · 会话…${str(s.sessionID).slice(-6)}`;
   };
 
+  // M15 修复：外层 box 恢复"静态文本 + 单动态回调子节点"结构（双回调并排疑为本次崩溃根因，见 LRN-005）
   return (
     <box flexDirection="column">
       <text fg={ctx.theme.text.base}>{"WF 看板"}</text>
-      <text fg={ctx.theme.text.muted}>{"r=刷新  f=全屏  q=关闭"}</text>
+      <text fg={ctx.theme.text.muted}>{"r=刷新 a=范围 f=全屏 q=关闭"}</text>
       {() => {
+        const scopeLine = <text fg={ctx.theme.text.muted}>{`范围: ${all() ? "全部项目" : "当前项目"}`}</text>;
         try {
-          if (err()) return <text fg={ctx.theme.text.feedback.error}>{`加载错误: ${str(err())}`}</text>;
+          if (err()) return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.feedback.error}>{`加载错误: ${str(err())}`}</text></box>;
           const list = rows();
           const count = Array.isArray(list) ? list.length : 0;
-          if (count === 0) return <text fg={ctx.theme.text.muted}>{"（暂无工作流任务）"}</text>;
+          if (count === 0) return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.muted}>{"（暂无工作流任务）"}</text></box>;
           return (
             <box flexDirection="column">
-              <text fg={ctx.theme.text.muted}>{`共 ${count} 条，最多显示 ${PANEL_MAX}`}</text>
-              <text>{rowText(0)}</text>
-              <text>{rowText(1)}</text>
-              <text>{rowText(2)}</text>
-              <text>{rowText(3)}</text>
-              <text>{rowText(4)}</text>
-              <text>{rowText(5)}</text>
-              <text>{rowText(6)}</text>
-              <text>{rowText(7)}</text>
-              <text>{rowText(8)}</text>
-              <text>{rowText(9)}</text>
+              {scopeLine}
+              <text fg={ctx.theme.text.muted}>{`共 ${count} 个任务（每任务 3 行），最多显示 ${PANEL_MAX}`}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(0)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(0)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(0)}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(1)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(1)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(1)}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(2)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(2)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(2)}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(3)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(3)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(3)}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(4)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(4)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(4)}</text>
+              <text fg={ctx.theme.text.action.primary}>{rowMain(5)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub(5)}</text>
+              <text fg={ctx.theme.text.muted}>{rowSub2(5)}</text>
             </box>
           );
         } catch (e) {
-          return <text fg={ctx.theme.text.feedback.error}>{`渲染异常: ${str(e?.message ?? e)}`}</text>;
+          return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.feedback.error}>{`渲染异常: ${str(e?.message ?? e)}`}</text></box>;
         }
       }}
     </box>
