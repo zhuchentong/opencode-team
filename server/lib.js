@@ -123,6 +123,17 @@ export function hasStrictVerdictLine(content) {
 export const slugify = (t) =>
   String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
+// P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
+// 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
+// <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
+// post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
+export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
+export function entryValue(st) {
+  const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
+  if (st.phase === "done") return `${head}\n${DONE_ENTRY}`;
+  return `${head}\n${guidance(st.phase, st)}`;
+}
+
 // 实测（M2-a）：命令 args.prompt 是对象（含 text 等字段），不是字符串
 export const promptText = (p) => {
   if (typeof p === "string") return p;
@@ -254,4 +265,60 @@ export function guidance(phase, st) {
     ].join("\n");
     default: return `【wf 工作流】阶段 ${phase}`;
   }
+}
+
+// ── P1：wf:diagnose 报告生成（纯函数，可测）────────────────────────
+// facts = { version, artifactFiles: 磁盘上实际存在的产物名[], entryErr?, rpcErr? }
+// 证据来源：st.log（每次流转/拒绝/阻断都记账）+ 关卡记账 + 磁盘对账。
+export function diagnoseReport(st, facts = {}) {
+  const out = [];
+  const r = st.rounds ?? {};
+  out.push(`wf 诊断(${facts.version ?? "?"})｜slug=${st.slug || "(未定)"} phase=${st.phase ?? "无"}｜${st.updatedAt ?? "无更新时间"}`);
+
+  // 1) 审计轨迹中的拒绝/阻断
+  const log = Array.isArray(st.log) ? st.log : [];
+  const rejects = log.filter((e) => e && e.ok === false);
+  const blocks = rejects.filter((e) => e.note === "blocked");
+  const refusals = rejects.filter((e) => e.note !== "blocked");
+  out.push(`流转尝试=${log.length} 拒绝=${refusals.length} 越权阻断=${blocks.length}`);
+  const byNote = {};
+  for (const e of refusals) byNote[e.note] = (byNote[e.note] ?? 0) + 1;
+  for (const [note, n] of Object.entries(byNote)) {
+    const hint = {
+      "illegal-transition": "命令顺序错误（请核对流转表/下一步提示）",
+      "gate-rejected": "关卡前置产物未产出（test-plan / test-report）",
+      "limit-exceeded": "循环已达上限——按流程应停下上报用户",
+      "intake-guard": "已有活动任务被守卫拦截（用 /wf:reset 或 /wf:intake ! <slug>）",
+    }[note] || "见日志详情";
+    out.push(`  ✗ ${note} ×${n}：${hint}`);
+  }
+  for (const e of blocks.slice(-5)) out.push(`  ⛔ 越权阻断：${e.tool ?? e.cmd ?? "?"} ${e.detail ?? ""}`);
+
+  // 2) 轮次余量
+  for (const [k, limit] of Object.entries(LIMITS)) {
+    const used = r[k] ?? 0;
+    if (used >= limit) out.push(`  🛑 ${k} 已 ${used}/${limit} 轮：禁止继续循环，需用户裁决`);
+  }
+
+  // 3) 关卡记账
+  out.push(`  关卡：testPlan=${st.testPlanWritten ? "✅ 已产出" : "❌ 未产出"}  testReport=${st.testReportVerdict ?? "未产出"}`);
+
+  // 4) 产物对账（state 记账 vs 磁盘实际）
+  const known = new Set(Object.values(KIND_FILES).map((fn) => fn(st)));
+  const recorded = Object.keys(st.artifacts ?? {});
+  const onDisk = (facts.artifactFiles ?? []).filter((f) => /\.(md)$/.test(f));
+  const missing = recorded.filter((f) => !onDisk.includes(f));
+  const untracked = onDisk.filter((f) => !recorded.includes(f) && known.has(f));
+  if (missing.length) out.push(`  ⚠️ 记账但磁盘缺失：${missing.join(", ")}`);
+  if (untracked.length) out.push(`  ⚠️ 磁盘有但未记账：${untracked.join(", ")}`);
+  if (!missing.length && !untracked.length) out.push(`  ✅ 产物对账一致（${recorded.length} 项）`);
+
+  // 5) 注入/观测通道异常
+  if (st.entryErr) out.push(`  ⚠️ 阶段注入失败（guidance 可能未进系统提示）：${st.entryErr}`);
+  else if (facts.entryErr) out.push(`  ⚠️ entry API 异常：${facts.entryErr}`);
+  if (facts.rpcErr) out.push(`  ⚠️ RPC 注册失败（TUI 面板不可用）：${facts.rpcErr}`);
+
+  // 6) 下一步
+  out.push(`  下一步：${NEXT[st.phase] ?? "/wf:intake"}`);
+  return out.join("\n");
 }

@@ -1,4 +1,7 @@
-// wf-workflow — P0-a/b：去除 REPO 硬编码（debug 目录按会话解析：options.debugDir → session 项目目录 → cwd）；
+// wf-workflow — P1：guidance 写入 instructions entry（entry 每次组装系统提示从存储重渲染，
+// 天然抗 compaction，superpowers post-compaction 重注入目标由此实现）；/wf:diagnose 诊断命令
+// （审计拒绝分类/越权阻断取证/产物磁盘对账）；hook 阻断记账 gate:block 进 st.log。
+// P0-a/b：去除 REPO 硬编码（debug 目录按会话解析：options.debugDir → session 项目目录 → cwd）；
 // 可测纯逻辑（FLOWS/GATES/KIND_FILES/放行判定/shell 目标/verdict/流转校验）提取至 server/lib.js，行为与 M14-r24 一致。
 // 历史变更（M10-d / M14 等）详见 lib.js 注释与 git。
 // M8-a: RPC 桥 —— ctx.rpc.register(Wf)（shared/rpc.ts）暴露 state 方法；流转/产物落盘时 emit("updated")，
@@ -23,6 +26,7 @@ import {
   EDIT_TOOLS, BLOCKING_PHASES, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES,
   KIND_FILES, extractPaths, makeAllowChecker, shellWriteTargets,
   parseVerdict, hasStrictVerdictLine, evaluateTransition, guidance, promptText,
+  entryValue, diagnoseReport,
 } from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
 
 const ENTRY_KEY = "wf.phase";
@@ -102,11 +106,9 @@ export default {
     };
     const inject = async (st) => {
       try {
-        await E.put({
-          sessionID: st.sessionID,
-          key: ENTRY_KEY,
-          value: `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds)}`,
-        });
+        // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
+        // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
+        await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st) });
         delete st.entryErr;
       } catch (e) {
         st.entryErr = String(e?.message ?? e);
@@ -318,6 +320,12 @@ export default {
       });
     });
 
+    // P1：阶段越权阻断记账（gate:block 进审计轨迹，供 /wf:diagnose 取证；落盘失败不影响阻断）
+    const logBlock = async (st, tool, detail) => {
+      logAdd(st, { at: new Date().toISOString(), cmd: "gate:block", tool, detail, from: st.phase, to: st.phase, ok: false, note: "blocked" });
+      try { await save(st); } catch { }
+    };
+
     // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
     const hookReg = ctx.tool.hook("execute.before", async (input, output) => {
       try {
@@ -339,6 +347,7 @@ export default {
             if (tRaw.startsWith("~")) continue; // 家目录视为项目外
             const abs = (tRaw.startsWith("/") ? tRaw : `${base}/${tRaw}`).replace(/\/{2,}/g, "/");
             if (base && abs.startsWith(`${base}/`) && !isAllowed(abs)) {
+              await logBlock(st, toolName, tRaw); // P1：阻断记账，供 /wf:diagnose 取证
               throw new Error(
                 `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。`
               );
@@ -350,6 +359,7 @@ export default {
         const paths = extractPaths(String(input?.tool), input?.input ?? output?.args);
         for (const p of paths) {
           if (!isAllowed(p)) {
+            await logBlock(st, String(input?.tool), p); // P1：阻断记账
             throw new Error(
               `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
               `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。`
@@ -443,6 +453,24 @@ export default {
             ...(st.log ?? []).slice(-8).map((e) =>
               `  ${e.at.slice(11, 19)} ${e.cmd} ${e.from ?? "∅"}→${e.to}${e.ok ? "" : `（${e.note}）`}`),
           ].join("\n");
+        },
+      });
+      add({
+        name: "wf:diagnose",
+        description: "诊断本会话工作流：审计轨迹拒绝/阻断取证、关卡与轮次、产物磁盘对账、注入/RPC 异常与下一步",
+        execute: async (a) => {
+          const st = await load(a.sessionID);
+          if (!st) return `wf 诊断(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`;
+          // 产物对账：落盘目录三级回退（与 wf_write_artifact 同源）
+          let dir = st.directory ?? null;
+          if (!dir) {
+            const sess = await ctx.session.get({ sessionID: a.sessionID }).catch(() => null);
+            dir = sess?.location?.directory ?? null;
+          }
+          dir = dir ?? process.cwd();
+          let artifactFiles = [];
+          try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch { /* 目录不存在按空处理 */ }
+          return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr });
         },
       });
       add({
