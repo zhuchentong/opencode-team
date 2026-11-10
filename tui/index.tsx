@@ -303,11 +303,13 @@ export default Plugin.define({
       render: (props) => <WfBoard context={context} sessionID={props?.sessionID} />,
     });
 
-    // ② 会话面板（名字由 panel.name 判定）
+    // ② 会话面板（名字由 panel.name 判定）。fallback 必须提供：Show 为 false 且无 fallback
+    //    时返回 undefined → 宿主 slot 子节点规范化产生 orphan 节点 → 渲染器取 length 崩溃
+    //    （wf-board 打开即崩 e.length 的根因，见 .learnings/ERRORS.md ERR-20261110-005）
     context.ui.slot({
       append: "session.panel",
       render: (panel) => (
-        <Show when={panel?.name === "wf.board"}>
+        <Show when={panel?.name === "wf.board"} fallback={<box flexDirection="column" />}>
           <WfBoardPanel panel={panel} context={context} />
         </Show>
       ),
