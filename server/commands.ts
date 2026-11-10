@@ -15,10 +15,13 @@ import {
 } from "./lib.ts";
 import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
 
-export function registerCommands(ctx: any, deps: any) {
+// 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
+export const REPORT_META = "wf.report";
+
+export async function registerCommands(ctx: any, deps: any) {
   const E = ctx?.session?.instructions?.entry;
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
-    putReport, removeState, dumpStates } = deps;
+    putReport, removeState, dumpStates, runner } = deps;
 
   // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
   const listOverrides = (dir: string) => {
@@ -81,31 +84,65 @@ export function registerCommands(ctx: any, deps: any) {
     } catch { /* 探针失败不影响主流程 */ }
   };
 
-  return ctx.command.transform((editor: any) => {
-    // 统一输出通道：execute 返回值宿主不显示（2.2.6 契约 Promise<void>），广播 report 事件
-    // 由 TUI toast 呈现；原样 return 保持 tests 行为锚与宿主兼容（未来若显示返回值亦无害）。
-    // 统一输出通道（P1 定案）：2.2.6 宿主 execute 返回值对用户不显示（契约 Promise<void>）。
-    // 主通道 = reports 表（TUI 轮询 state.lastReport 呈现 toast；methods 通道真机实证可用）；
-    // report 事件为补充通道（P0④ 五条件版首次真机打通，TUI 双通道 + sessionID|at 去重）。
-    // 返回值保留（tests 行为锚；TUI 本地轨经 RPC transition 直接拿返回值渲染）。
-    const add = (def: any) => editor.add({
-      ...def,
-      execute: async (a: any) => {
-        const out = await def.execute(a);
-        const text = typeof out === "string" ? out : "";
-        const sid = String(a?.sessionID ?? "");
-        const at = new Date().toISOString();
-        if (text) {
-          let slotOk = false;
-          try { await putReport({ sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
-          if (emitReport) await emitReport(sid, text, at);
-          await reportProbe(a?.sessionID, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: def.name, chars: text.length, hasChan: !!emitReport });
-        } else {
-          await reportProbe(a?.sessionID, { ev: "no-text", cmd: def.name, type: typeof out });
-        }
-        return out;
-      },
-    });
+  // ── P2 双轨输出编排 ────────────────────────────────────────────────
+  // publishOutput：写 reports 表 + report 事件（机会性补充）+ 探针。两条入口共用。
+  const publishOutput = async (sid: string, text: string, at: string, cmdName: string) => {
+    let slotOk = false;
+    try { await putReport({ sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
+    if (emitReport) await emitReport(sid, text, at);
+    await reportProbe(sid, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: cmdName, chars: text.length, hasChan: !!emitReport });
+  };
+  // 降级轨（Web/Desktop/无 TUI）：execute 返回值宿主不消费（契约 Promise<void>）——
+  // 报告经 wait 排空后以 prompt(resume:false, steer, metadata 标记) 注入会话（2.2.6 源码
+  // session.ts:187 保证不 wake），配合 context/compaction/generate hook 按标记剥离，
+  // 报告不进模型上下文（quota 全套范式）。
+  const sanitizeText = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  const injectReport = async (sid: string, text: string, cmdName: string, at: string) => {
+    try {
+      await ctx.session.wait?.({ sessionID: sid });
+      await ctx.session.prompt({ sessionID: sid, text: sanitizeText(text), delivery: "steer", resume: false,
+        metadata: { [REPORT_META]: { cmd: cmdName, at } } });
+      await reportProbe(sid, { ev: "inject-ok", cmd: cmdName });
+    } catch (e) {
+      await reportProbe(sid, { ev: "inject-fail", cmd: cmdName, err: String((e as Error)?.message ?? e).slice(0, 140) });
+    }
+  };
+  // exec 通道（TUI 主轨经 RPC）：按名调度原编排 + publish，不注入聊天（本地渲染返回值）。
+  const byName: Record<string, (a: any) => Promise<unknown>> = {};
+  if (runner) {
+    runner.run = async (name: string, a: any) => {
+      const base = byName[name];
+      if (!base) return `❌ 未知命令：${name}`;
+      const out = await base(a);
+      const text = typeof out === "string" ? out : "";
+      if (text) await publishOutput(String(a?.sessionID ?? ""), text, new Date().toISOString(), name);
+      return text;
+    };
+  }
+
+  const reg = ctx.command.transform((editor: any) => {
+    // server 命令通道 = 降级轨：publish（reports 表，TUI 轮询兜底可见）+ inject（Web/Desktop 聊天可见）。
+    // 返回值保留（tests 行为锚；宿主不消费）。
+    const add = (def: any) => {
+      const base = def.execute;
+      byName[def.name] = base;
+      editor.add({
+        ...def,
+        execute: async (a: any) => {
+          const out = await base(a);
+          const text = typeof out === "string" ? out : "";
+          const sid = String(a?.sessionID ?? "");
+          const at = new Date().toISOString();
+          if (text) {
+            await publishOutput(sid, text, at, def.name);
+            await injectReport(sid, text, def.name, at);
+          } else {
+            await reportProbe(a?.sessionID, { ev: "no-text", cmd: def.name, type: typeof out });
+          }
+          return out;
+        },
+      });
+    };
 
     // ── 11 个流转命令（表驱动：description 与原逐一注册逐字一致）────────
     const FLOW_COMMANDS = [
@@ -274,4 +311,36 @@ export function registerCommands(ctx: any, deps: any) {
       },
     });
   });
+
+  // 报告剥离（降级轨上下文保护）：带 wf.report 标记的消息不进模型请求/压缩/标题
+  // （quota 全套；fail-soft——宿主无 session.hook 时报告入上下文，功能不阻塞）
+  const stripReports = (event: any) => {
+    if (Array.isArray(event?.messages)) {
+      event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
+    }
+  };
+  const hookRegs: any[] = [];
+  try {
+    for (const h of ["context", "compaction", "generate"]) {
+      const r = await ctx.session?.hook?.(h, stripReports);
+      if (r) hookRegs.push(r);
+    }
+    const rt = await ctx.session?.hook?.("title", (event: any) => {
+      stripReports(event);
+      const hasText = (event?.messages ?? []).some((m: any) => {
+        const c = m?.content;
+        if (typeof c === "string") return c.trim() !== "";
+        return Array.isArray(c) ? c.some((p: any) => p?.type === "text" && String(p?.text ?? "").trim() !== "") : false;
+      });
+      if (!hasText) event.result = ""; // 首条消息仅报告：跳过标题生成（quota 先例）
+    });
+    if (rt) hookRegs.push(rt);
+  } catch { /* 宿主缺 hook API：降级为报告入上下文 */ }
+
+  return {
+    dispose: () => {
+      try { reg?.dispose?.(); } catch { }
+      for (const r of hookRegs) { try { r?.dispose?.(); } catch { } }
+    },
+  };
 }

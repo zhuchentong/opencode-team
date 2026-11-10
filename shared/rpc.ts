@@ -60,6 +60,22 @@ export const Wf = Rpc.define({
         additionalProperties: true,
       },
     },
+    // P2 主轨通道：TUI 本地命令经此执行任意 /wf:*（返回值不丢——methods 通道契约可用）。
+    // 服务端跑与 command execute 相同的编排（状态推进 + guidance + reports 发布），仅不注入聊天。
+    exec: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, name: { type: "string" }, prompt: { type: "string" } },
+        required: ["sessionID", "name"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+        additionalProperties: true,
+      },
+    },
   },
   events: {
     // 流转成功 / 产物落盘时广播（事件数据必须是对象）
@@ -88,7 +104,7 @@ export const Wf = Rpc.define({
           text: { type: "string" },
           at: { type: "string" },
         },
-        required: ["sessionID", "text"],
+        required: ["sessionID", "text", "at"],
         additionalProperties: true,
       },
     },

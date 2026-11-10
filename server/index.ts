@@ -36,8 +36,10 @@ export default {
     // M10-a：闸门拒绝文案与 allowlist 同源生成（I2：旧硬写文案漏 .learnings/，与实际放行清单漂移）
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
-    // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新，见 rpc-bridge.ts）──
-    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates, getReport });
+    // ── M8-a/M16：RPC 桥（TUI 侧边栏读状态 + exec 通道，见 rpc-bridge.ts）──
+    // runner：解 bridge↔commands 循环依赖的可变引用——commands 注册时填充 run，bridge exec 调用
+    const runner: { run: ((name: string, a: any) => Promise<unknown>) | null } = { run: null };
+    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates, getReport, runner });
 
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
@@ -48,9 +50,9 @@ export default {
     // ── P3：superpowers 式自动激活提示（fail-soft，见 hint.ts）────────
     const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
 
-    // ── /wf:* 命令与 transition/inject 编排（见 commands.ts）────────
-    const commands = registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
-      putReport, removeState, dumpStates });
+    // ── /wf:* 命令与 transition/inject 编排、P2 双轨输出（见 commands.ts）──
+    const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
+      putReport, removeState, dumpStates, runner });
 
     return () => {
       for (const r of [commands, tools, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }

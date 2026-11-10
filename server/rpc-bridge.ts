@@ -3,10 +3,11 @@
 // 注册失败 fail-soft（rpcErr 记录，供 /wf:diagnose 显示；此时尚不含 tui/ 部件，server 侧可独立验证）。
 // P1：命令输出槽迁移至 SQLite reports 表（getReport 由 state.ts 注入，ctx.storage 不再参与）。
 
-export async function createRpcBridge(ctx: any, { load, scanStates, getReport }: {
+export async function createRpcBridge(ctx: any, { load, scanStates, getReport, runner }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
   getReport: (sessionID: string) => Promise<any>;
+  runner: { run: ((name: string, a: any) => Promise<unknown>) | null };
 }) {
   let rpcReg = null;
   let rpcErr = null;
@@ -38,6 +39,19 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport }:
           };
         },
         list: async (input: any) => ({ sessions: await scanStates(input?.projectID ?? null, input?.directory ?? null) }),
+        // P2 主轨：TUI 本地命令经 exec 拿完整输出文本（methods 返回值通道，2.2.6 实证可用）。
+        // 未知命令不抛错（抛错 client 只见 rpc.internal，原因被吞——quota 教训）；返回错误文案。
+        exec: async (input: any) => {
+          try {
+            const out = await runner?.run?.(String(input?.name ?? ""), {
+              sessionID: String(input?.sessionID ?? ""),
+              prompt: { text: String(input?.prompt ?? "") },
+            });
+            return { text: typeof out === "string" ? out : `❌ 未知命令：${String(input?.name ?? "")}` };
+          } catch (e) {
+            return { text: `❌ 命令执行失败：${String((e as Error)?.message ?? e)}` };
+          }
+        },
       });
     } else rpcErr = "ctx.rpc 不可用";
   } catch (e) {

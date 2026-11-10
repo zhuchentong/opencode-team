@@ -32,6 +32,8 @@ const mkCtx = (opts = {}) => {
   const cmds = [];
   const entries = [];
   const removed = [];
+  const prompts = []; // P2 降级轨：prompt(resume:false) 注入捕获
+  const hooks = []; // P2 报告剥离 hook 注册捕获
   let hookFn = null;
   const ctx = {
     options: { probe: false, ...opts }, // 关探针避免写盘噪音
@@ -44,6 +46,9 @@ const mkCtx = (opts = {}) => {
     },
     session: {
       get: async () => ({ projectID: "pi1", location: { directory: DIR } }),
+      wait: async () => {}, // P2：降级轨排空等待（测试会话恒空闲）
+      prompt: async (i) => { prompts.push(i); },
+      hook: async (name, fn) => { hooks.push({ name, fn }); return { dispose() {} }; },
       instructions: {
         entry: {
           put: async (i) => { entries.push(i); },
@@ -58,7 +63,7 @@ const mkCtx = (opts = {}) => {
     },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
   };
-  return { ctx, store, tools, cmds, entries, removed, hook: () => hookFn, setChat: (api) => { ctx.chat = api; } };
+  return { ctx, store, tools, cmds, entries, removed, prompts, hooks, hook: () => hookFn, setChat: (api) => { ctx.chat = api; } };
   };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
@@ -245,7 +250,8 @@ test("项目级 overrides：.workflow/overrides/*.md 存在 → entry guidance �
 test("report 广播：命令输出经 RPC report 事件广播且返回值保留", async () => {
   const m = mkCtx();
   const emitted = [];
-  m.ctx.rpc = { register: async () => ({ events: { emit: async (name, data) => { emitted.push({ name, data }); } } }) };
+  let rpcImpl = null;
+  m.ctx.rpc = { register: async (_def, impl) => { rpcImpl = impl; return { events: { emit: async (name, data) => { emitted.push({ name, data }); } } }; } };
   const dispose = await plugin.setup(m.ctx);
   const out = await cmd(m, "wf:ping").execute({ sessionID: "ses_rep" });
   assert.equal(typeof out, "string"); // 返回值保留（tests 行为锚）
@@ -261,6 +267,28 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   assert.equal(rep.data.sessionID, "ses_rep");
   assert.equal(rep.data.text, out);
   assert.equal(rep.data.at, slot.at); // 事件与槽同 at → TUI 去重成立
+  // ── P2 降级轨：server 命令通道同输出经 prompt(resume:false) 注入会话（Web/Desktop 可见）──
+  const inj = m.prompts.find((p) => p.sessionID === "ses_rep" && p.metadata?.["wf.report"]?.cmd === "wf:ping");
+  assert.ok(inj, "降级轨应注入会话报告");
+  assert.equal(inj.resume, false, "resume:false 不唤醒模型（2.2.6 源码 session.ts:187）");
+  assert.equal(inj.delivery, "steer");
+  assert.equal(inj.text, out);
+  assert.equal(inj.metadata["wf.report"].at, slot.at, "注入与 reports 表同 at");
+  // 剥离 hook 全套注册（quota 范式）：context/compaction/generate/title（hint 的 chat.message 混存其中，取子集断言）
+  for (const need of ["context", "compaction", "generate", "title"]) {
+    assert.ok(m.hooks.some((h) => h.name === need), `应注册剥离 hook：${need}`);
+  }
+  const ev = { messages: [{ metadata: { "wf.report": { cmd: "x" } }, content: "r" }, { content: "u" }] };
+  m.hooks.find((h) => h.name === "context").fn(ev);
+  assert.equal(ev.messages.length, 1, "带 wf.report 标记的消息被剥离出上下文");
+  // ── P2 主轨通道：RPC exec 跑同一编排拿返回值；publish 但不 inject（TUI 本地渲染）──
+  const promptsBefore = m.prompts.length;
+  const st = await rpcImpl.exec({ sessionID: "ses_rep", name: "wf:status", prompt: "" });
+  assert.equal(typeof st.text, "string");
+  assert.ok(st.text.length > 0, "exec 返回非空输出");
+  assert.equal(m.prompts.length, promptsBefore, "exec 通道不得注入聊天（本地渲染）");
+  assert.equal(repOf("ses_rep").text, st.text, "exec 同样发布 reports（审计+轮询兜底）");
+  assert.match((await rpcImpl.exec({ sessionID: "ses_rep", name: "wf:nope", prompt: "" })).text, /未知命令/);
   // wf:reset 清报告槽（防新挂载重放旧 toast）；reset 自身输出随后经 add 包装重新落 reports——
   // 与旧 storage 版语义等价（该行内容是「已清除」提示文本）
   await cmd(m, "wf:reset").execute({ sessionID: "ses_rep" });
