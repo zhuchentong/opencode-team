@@ -1,4 +1,4 @@
-// wf-workflow — RPC 桥（M8-a，自 index.js 原样搬移）：ctx.rpc.register(Wf)（shared/rpc.ts）
+// wf-workflow — RPC 桥（M8-a，自 index.ts 原样搬移）：ctx.rpc.register(Wf)（shared/rpc.ts）
 // 暴露 state/list 方法供 TUI 侧边栏订阅；流转/产物落盘时 emit("updated") 驱动刷新。
 // 注册失败 fail-soft（rpcErr 记录，供 /wf:diagnose 显示；此时尚不含 tui/ 部件，server 侧可独立验证）。
 

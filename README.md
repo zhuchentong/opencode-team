@@ -49,7 +49,7 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 ## 架构
 
 ```
-server/index.js         组装层：按依赖序接线各模块（唯一保持 .js 的入口，exports 切换见 T5 计划）
+server/index.ts         组装层：按依赖序接线各模块（exports 入口；全仓除 tests/*.js 行为锚与 phases.js 兼容 shim 外均为 .ts/.tsx）
 server/state.ts         状态存取：load/save/resolveState/scanStates(GC)/resolveProjectDir
 server/observe.ts       观测通道：debugDirFor/probeOnce/logToolsOnce（.workflow/_debug/ 落盘）
 server/rpc-bridge.ts    RPC 桥：Wf.state/list + updated 事件（TUI 数据源）

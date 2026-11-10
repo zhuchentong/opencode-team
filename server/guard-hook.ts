@@ -1,4 +1,4 @@
-// wf-workflow — 阶段越权硬阻断（M4/M10-c，自 index.js 原样搬移）：planning/review 拒业务代码写
+// wf-workflow — 阶段越权硬阻断（M4/M10-c，自 index.ts 原样搬移）：planning/review 拒业务代码写
 // （edit/write/patch + shell 重定向/写删命令）；阻断记账 gate:block 进审计轨迹（P1，供 /wf:diagnose 取证）。
 // 已验证 API（实测 2026-11-09）：hook ctx.tool.hook("execute.before", async (input, output) => …)，
 // 实测 input={tool, sessionID, agent, messageID, id, input}——工具入参在 input.input（output 为空，

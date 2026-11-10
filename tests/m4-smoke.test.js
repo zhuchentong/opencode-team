@@ -1,7 +1,7 @@
 // P0 冒烟：插件模块可加载、导出形状正确（原 m4 空壳替换）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import plugin from "../server/index.js";
+import plugin from "../server/index.ts";
 import * as lib from "../server/lib.ts";
 
 test("插件默认导出形状", () => {

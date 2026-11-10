@@ -1,4 +1,4 @@
-// wf-workflow — 命令层（自 index.js 原样搬移）：11 个流转命令表驱动（/wf:intake…/wf:done，全部经
+// wf-workflow — 命令层（自 index.ts 原样搬移）：11 个流转命令表驱动（/wf:intake…/wf:done，全部经
 // transition 走状态机）+ 6 个辅助命令（status/diagnose/ping/lane/reset/debug）；transition 与
 // inject/listOverrides 编排亦在此（原 setup 闭包，行为不变）。
 // 已验证 API（实测 2026-11-09）：命令 editor.add({name, description,

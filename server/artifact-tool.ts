@@ -1,4 +1,4 @@
-// wf-workflow — wf_write_artifact 工具（M3，自 index.js 原样搬移）：kind → .workflow/<slug>/ 文件名，
+// wf-workflow — wf_write_artifact 工具（M3，自 index.ts 原样搬移）：kind → .workflow/<slug>/ 文件名，
 // 落盘并记入 state.artifacts；test-plan/test-report 同步关卡记账（testPlanWritten/testReportVerdict）；
 // 子会话经 resolveState 反查管辖状态（M10-b）。
 // 已验证 API（实测 2026-11-09）：工具注册 draft.add({name, description, input:<JSONSchema>,

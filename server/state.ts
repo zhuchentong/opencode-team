@@ -1,7 +1,7 @@
-// wf-workflow — 状态存取层（自 index.js 原样搬移）：会话状态键 / 项目索引 / load / save /
+// wf-workflow — 状态存取层（自 index.ts 原样搬移）：会话状态键 / 项目索引 / load / save /
 // resolveState（wf/* 子会话经项目索引反查管辖状态）/ scanStates（看板枚举 + done 状态 GC）/
 // resolveProjectDir（三级回退：st.directory → session.get → cwd）。
-// 原则：只放与 storage/session 相关的存取逻辑；纯流转校验见 lib.js，组装接线见 index.js。
+// 原则：只放与 storage/session 相关的存取逻辑；纯流转校验见 lib.ts，组装接线见 index.ts。
 // 已验证 API（实测 2026-11-09）：storage 为 string key get/set/remove；entry.put key 正则 ^[a-z0-9][a-z0-9._-]*$
 
 import { type FlowLogEntry } from "./lib.ts";

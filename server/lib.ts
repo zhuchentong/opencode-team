@@ -1,6 +1,6 @@
-// wf-workflow — 可测纯逻辑单一来源（P0-b：自 server/index.js 提取，行为与 M16-r25 一致）
+// wf-workflow — 可测纯逻辑单一来源（P0-b：自 server/index.ts 提取，行为与 M16-r25 一致）
 // 原则：本文件只放无 ctx/storage 依赖的模块级常量与纯函数，供 bun test 直接覆盖；
-//       index.js 负责注册（工具/命令/hook/RPC）与持久化。改动本文件前先跑 bun test。
+//       index.ts 负责注册（工具/命令/hook/RPC）与持久化。改动本文件前先跑 bun test。
 
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
