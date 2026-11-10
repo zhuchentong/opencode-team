@@ -49,13 +49,21 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 ## 架构
 
 ```
-server/index.js   注册层：命令 /wf:*、工具 wf_write_artifact、
-                  execute.before hook（越权阻断+记账）、RPC 桥、TUI 数据源
-server/lib.js     纯逻辑层：FLOWS/GATES/KIND_FILES/evaluateTransition/
-                  makeAllowChecker/shellWriteTargets/diagnoseReport（bun test 覆盖）
-shared/phases.js  阶段定义单一来源（server/tui 共用，防漂移）
-shared/rpc.ts     RPC 契约（TUI 侧边栏订阅 state/list + updated 事件）
-tui/index.tsx     TUI 侧边栏（阶段进度、轮次、关卡、产物）
+server/index.js        组装层：按依赖序接线各模块（55 行）
+server/state.js        状态存取：load/save/resolveState/scanStates(GC)/resolveProjectDir
+server/observe.js      观测通道：debugDirFor/probeOnce/logToolsOnce（.workflow/_debug/ 落盘）
+server/rpc-bridge.js   RPC 桥：Wf.state/list + updated 事件（TUI 数据源）
+server/artifact-tool.js wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账
+server/guard-hook.js   execute.before 越权阻断（planning/review 拒业务代码写，含 shell 门控）
+server/hint.js         P3 自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示
+server/commands.js     /wf:* 命令：11 个流转命令表驱动 + 6 个辅助命令 + transition/inject 编排
+server/lib.js          纯逻辑单一来源：FLOWS/GATES/KIND_FILES/evaluateTransition/…（bun test 覆盖）
+shared/phases.js       阶段定义单一来源（server/tui 共用，防漂移）
+shared/rpc.ts          RPC 契约（TUI 侧边栏订阅 state/list + updated 事件）
+tui/index.tsx          TUI 注册壳（slot/panel/keymap）
+tui/widget.tsx         侧边栏挂件（当前会话状态 + M15 回退列表）
+tui/board.tsx          看板面板（全部任务、范围切换）
+tui/format.ts          公共格式化（stageOf/str/hhmm/listLine）
 ```
 
 状态按会话存于 `ctx.storage`（键 `wf-workflow/state/<sessionID>`）；`wf/*` 子会话经项目索引（`wf-workflow/project/<projectID>`）反查管辖状态，同样受闸门约束。
