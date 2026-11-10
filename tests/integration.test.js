@@ -39,7 +39,7 @@ const mkCtx = (opts = {}) => {
     },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
   };
-  return { ctx, store, tools, cmds, entries, removed, hook: () => hookFn };
+  return { ctx, store, tools, cmds, entries, removed, hook: () => hookFn, setChat: (api) => { ctx.chat = api; } };
   };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
@@ -120,7 +120,8 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   // 7) reset：状态清除 + entry 移除
   await cmd(m, "wf:reset").execute({ sessionID: "ses_i", prompt: {} });
   assert.equal(stOf(m), undefined);
-  assert.deepEqual(m.removed.at(-1), { sessionID: "ses_i", key: "wf.phase" });
+  assert.ok(m.removed.some((r) => r.sessionID === "ses_i" && r.key === "wf.phase"), "reset 清 phase");
+  assert.ok(m.removed.some((r) => r.sessionID === "ses_i" && r.key === "wf.hint"), "reset 清 hint（P3 新增）");
 
   dispose?.();
 });
@@ -154,4 +155,54 @@ test("wf:ping：ctx.agent.list 可用 → 注册表；缺失 → fail-soft 文�
   await plugin.setup(m2.ctx); // 无 agent API
   const ping2 = await cmd(m2, "wf:ping").execute({ sessionID: "ses_q", prompt: {} });
   assert.match(ping2, /宿主未提供 ctx\.agent API/);
+});
+
+// ── P3：自动激活 hint + 项目级 overrides 端到端 ────────────────────
+test("chat hook 命中工作流意图 → 注入一次性 wf.hint；有状态会话不打扰；reset 清双 key", async () => {
+  const m = mkCtx();
+  let chatFn = null;
+  m.setChat({ hook: (name, fn) => { chatFn = fn; return { dispose() {} }; } });
+  const dispose = await plugin.setup(m.ctx);
+  assert.ok(chatFn, "ctx.chat.hook(\"message\") 应被注册");
+
+  await chatFn({ sessionID: "ses_h" }, { parts: [{ text: "我们走工作流开发这个功能" }] });
+  const hint = m.entries.filter((e) => e.key === "wf.hint" && e.sessionID === "ses_h");
+  assert.equal(hint.length, 1);
+  assert.match(hint[0].value, /\/wf:intake/);
+
+  await chatFn({ sessionID: "ses_h" }, { parts: [{ text: "再提一次工作流" }] }); // 幂等
+  assert.equal(m.entries.filter((e) => e.key === "wf.hint").length, 1);
+
+  await chatFn({ sessionID: "ses_n" }, { parts: [{ text: "普通问题：这个函数干嘛的" }] }); // 不命中
+  assert.equal(m.entries.filter((e) => e.sessionID === "ses_n").length, 0);
+
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_g", prompt: { text: "g" } });
+  await chatFn({ sessionID: "ses_g" }, { parts: [{ text: "工作流" }] }); // 已有状态 → 不打扰
+  assert.equal(m.entries.filter((e) => e.sessionID === "ses_g" && e.key === "wf.hint").length, 0);
+
+  await cmd(m, "wf:reset").execute({ sessionID: "ses_g", prompt: {} });
+  assert.ok(m.removed.some((r) => r.key === "wf.phase" && r.sessionID === "ses_g"));
+  assert.ok(m.removed.some((r) => r.key === "wf.hint" && r.sessionID === "ses_g"), "reset 一并清 hint");
+  dispose?.();
+});
+
+test("options.hint=false → 不注册 chat hook", async () => {
+  const m = mkCtx({ hint: false });
+  let called = false;
+  m.setChat({ hook: () => { called = true; return { dispose() {} }; } });
+  const dispose = await plugin.setup(m.ctx);
+  assert.equal(called, false);
+  dispose?.();
+});
+
+test("项目级 overrides：.workflow/overrides/*.md 存在 → entry guidance 附定制提示", async () => {
+  fs.mkdirSync(`${DIR}/.workflow/overrides`, { recursive: true });
+  fs.writeFileSync(`${DIR}/.workflow/overrides/planner.md`, "本项目 planner 必须先读 ARCHITECTURE.md");
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_o", prompt: { text: "ovr" } });
+  const e = m.entries.find((x) => x.sessionID === "ses_o" && x.key === "wf.phase");
+  assert.match(e.value, /📌 项目级角色定制（\.workflow\/overrides\/）：planner/);
+  fs.rmSync(`${DIR}/.workflow/overrides`, { recursive: true, force: true });
+  dispose?.();
 });

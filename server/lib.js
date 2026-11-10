@@ -128,11 +128,29 @@ export const slugify = (t) =>
 // <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
-export function entryValue(st, limits = LIMITS) {
+export function entryValue(st, limits = LIMITS, overrides = []) {
   const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
   if (st.phase === "done") return `${head}\n${DONE_ENTRY}`;
-  return `${head}\n${guidance(st.phase, st, limits)}`;
+  return `${head}\n${guidance(st.phase, st, limits, overrides)}`;
 }
+
+// ── P3：superpowers 式自动激活提示（纯函数可测）────────────────────
+// 宿主若提供消息观察 hook：用户消息命中「明确工作流意图」且该会话无 wf 状态时，
+// 注入一次性 hint entry（不自动开任务，仅提示 /wf:intake）。误触率优先于召回率。
+export const HINT_TRIGGERS = [
+  "工作流", "流程开发", "按流程", "完整流程", "走流程", "planned development",
+  "superpowers", "wf workflow", "formal workflow",
+];
+export function isHintWorthy(text) {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return HINT_TRIGGERS.some((k) => t.includes(k.toLowerCase()));
+}
+export const HINT_ENTRY = [
+  "💡 检测到你在表达「流程化开发」意图。本项目装有 wf 工作流插件（规划→审核∥可行性→分配→红测试→TDD 并行→审核→验证→修复→复盘）。",
+  "若想让本任务走工作流：执行 /wf:intake <任务slug>。若不需要，忽略本提示（不影响任何功能）。",
+  "可用命令：/wf:intake /wf:plan /wf:review /wf:assign /wf:test-design /wf:build /wf:reconcile /wf:review-build /wf:test /wf:fix /wf:done；辅助：/wf:status /wf:diagnose /wf:ping /wf:reset。",
+].join("\n");
 
 // 实测（M2-a）：命令 args.prompt 是对象（含 text 等字段），不是字符串
 export const promptText = (p) => {
@@ -204,7 +222,16 @@ export function evaluateTransition(cmd, st, text, at = new Date().toISOString(),
   return { ok: true };
 }
 
-export function guidance(phase, st, limits = LIMITS) {
+export function guidance(phase, st, limits = LIMITS, overrides = []) {
+  const base = guidanceBase(phase, st, limits);
+  if (Array.isArray(overrides) && overrides.length) {
+    const list = overrides.map((f) => String(f).replace(/\.md$/, "")).join(", ");
+    return `${base}\n📌 项目级角色定制（.workflow/overrides/）：${list}。委派同名 wf 角色时，把对应文件全文带入子任务提示词。`;
+  }
+  return base;
+}
+
+function guidanceBase(phase, st, limits = LIMITS) {
   const L = { ...LIMITS, ...(limits ?? {}) };
   const s = st.slug || "(未定)";
   const r = st.rounds ?? {};

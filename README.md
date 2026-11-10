@@ -11,6 +11,8 @@
 - **抗 compaction 注入**：阶段 guidance 写入 session instructions entry（每次组装系统提示从存储重新渲染），消息历史压缩不丢阶段约束
 - **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号
 - **可观测**：RPC + TUI 侧边栏（阶段/轮次/关卡实时刷新）、`/wf:status` 审计轨迹、`/wf:diagnose` 诊断取证、`/wf:debug` 状态落盘
+- **自动激活**（superpowers 式）：用户消息命中工作流意图且会话无状态 → 注入一次性 `/wf:intake` 提示，不自动开任务
+- **项目级角色定制**：`.workflow/overrides/<role>.md` 存在则 guidance 自动要求委派同名角色时全文带上（按项目覆盖角色行为，不动全局 agents）
 
 ## 安装
 
@@ -67,6 +69,24 @@ tui/index.tsx     TUI 侧边栏（阶段进度、轮次、关卡、产物）
 | `allowMarkers` | `[]` | 追加放行路径片段（合并默认 `.workflow/.learnings/tests/...`） |
 | `allowRegexps` | `[]` | 追加放行正则（字符串形式） |
 | `limits` | — | 覆盖循环上限，如 `{ "plan_review": 2 }`（仅正整数生效，guidance/状态/诊断同步显示） |
+| `hint` | `true` | superpowers 式自动激活：用户消息命中工作流意图关键词且会话无 wf 状态时，注入一次性 `/wf:intake` 提示（`wf.hint` entry，reset 一并清除；宿主无消息 hook 则自然失效） |
+
+## 项目级角色定制（overrides）
+
+在工作流活动项目的 `.workflow/overrides/` 下放 `<角色名>.md`（如 `planner.md`、`builder.md`），当前阶段 guidance 会自动附一行提示：委派同名 `wf/*` 角色时必须把该文件全文带入子任务提示词。效果=不改全局 agents、按项目覆盖角色行为。例：
+
+```
+.workflow/overrides/planner.md   ← 「planner 必须先读 ARCHITECTURE.md，任务粒度 ≤2h」
+.workflow/overrides/tester.md    ← 「集成测试一律打真 SQLite，不许 mock」
+```
+
+## 真机验证清单（/reload 后）
+
+插件改动需 `/reload` 生效。首轮真机跑一遍：
+1. `/wf:intake probe-test` → 返回 intake guidance；查 `.workflow/probe-test/` 与系统提示中 `<context key="wf.phase">` 多行块是否渲染
+2. `/wf:ping` → 角色注册表；查 `_debug/agent-probe.json` 确认 `ctx.agent.list` 实际形状
+3. 发一条含「走工作流」的新会话消息（无 wf 状态会话）→ 应出现 `wf.hint` 提示块；查 `_debug/chat-probe.json` 确认消息 hook 是否在本宿主（v2.2.6）触发
+4. `/wf:debug` → `_debug/state.json` 全量快照
 
 ## 角色模型路由（待选型）
 
@@ -105,6 +125,18 @@ bun test          # tests/：流转矩阵、关卡、计数器语义、放行/sh
 - intake 非重置分支下 slug 会被新 text 覆盖（rounds/记账保留）
 - `tee out.txt < input` 会把 `input` 误判为 shell 写目标（fail-closed 方向，仅阻断阶段误伤）
 - hook 内部异常 fail-open（不阻断），关卡异常（含 `GATE_ERR`）才拦截
+
+## 设计借鉴对照
+
+| 来源机制 | 本项目映射 | 取舍 |
+|---|---|---|
+| superpowers post-compaction 重注入 | guidance 写入 entry（存储重渲染天然抗压缩）+ `wf.hint` 自动激活 | ✅ 采纳 |
+| superpowers skills 自动触发 | `isHintWorthy` 关键词门槛（误触优先于召回），不自动开任务 | ✅ 保守采纳 |
+| superpowers 会话诊断（diagnosing-superpowers） | `/wf:diagnose`：拒绝分类计数 + 阻断取证 + 磁盘对账 | ✅ 采纳 |
+| omo-slim 每角色模型路由 | README 候选表 + `/wf:ping` 查看生效模型；`options.agentModels` 未启用 | ⏳ 待选型 |
+| omo-slim 项目级自定义 | `.workflow/overrides/` 约定 | ✅ 采纳 |
+| omo-slim council-inject 按需注入 | 阶段 guidance 本身就是「当前阶段才在线」的按需注入 | ✅ 等价实现 |
+| Council 共识 / marketplace / multiplexer | — | ❌ 不照搬（场景/宿主不符） |
 
 ## 许可
 

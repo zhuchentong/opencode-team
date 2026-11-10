@@ -1,4 +1,7 @@
-// wf-workflow — P2：options.limits 实例覆盖（evaluateTransition/guidance/entryValue/diagnose/status 全链路）；
+// wf-workflow — P3：superpowers 式自动激活（消息 hook 多形态防御注册，命中工作流意图且无状态时
+// 注入一次性 wf.hint 提示；chat-probe 记录宿主形状）；项目级角色定制（.workflow/overrides/<role>.md
+// 存在则 guidance/entry 附提示，委派同名角色时全文带上）。
+// P2：options.limits 实例覆盖（evaluateTransition/guidance/entryValue/diagnose/status 全链路）；
 // /wf:ping 角色健康检查（ctx.agent 存在则列注册与模型，缺失 fail-soft）。
 // P1：guidance 写入 instructions entry（entry 每次组装系统提示从存储重渲染，
 // 天然抗 compaction，superpowers post-compaction 重注入目标由此实现）；/wf:diagnose 诊断命令
@@ -28,10 +31,11 @@ import {
   EDIT_TOOLS, BLOCKING_PHASES, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES,
   KIND_FILES, extractPaths, makeAllowChecker, shellWriteTargets,
   parseVerdict, hasStrictVerdictLine, evaluateTransition, guidance, promptText,
-  entryValue, diagnoseReport, pingReport,
+  entryValue, diagnoseReport, pingReport, isHintWorthy, HINT_ENTRY,
 } from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
 
 const ENTRY_KEY = "wf.phase";
+const HINT_KEY = "wf.hint"; // P3：自动激活一次性提示（不入状态机，reset 一并清除）
 const KEY = (sessionID) => `wf-workflow/state/${sessionID}`;
 
 const logAdd = (st, entry) => {
@@ -112,11 +116,16 @@ export default {
       } catch { }
       return null;
     };
+    // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
+    const listOverrides = (dir) => {
+      try { return fs.readdirSync(`${dir}/.workflow/overrides`).filter((f) => f.endsWith(".md")); } catch { return []; }
+    };
     const inject = async (st) => {
       try {
         // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
         // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
-        await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st, LIMS) });
+        const ov = st.directory ? listOverrides(st.directory) : [];
+        await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st, LIMS, ov) });
         delete st.entryErr;
       } catch (e) {
         st.entryErr = String(e?.message ?? e);
@@ -384,6 +393,35 @@ export default {
     // {command,cwd,timeout,shell,env}，**无 sessionID/agent** → 无法按会话/agent 管辖；
     // shell 门已并入上方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
 
+    // ── P3：superpowers 式自动激活提示（fail-soft）────────────────────
+    // 本宿主实测确认的仅 ctx.tool.hook；消息观察 API 形状未验证 → 多形态防御式
+    // 尝试注册，首次回调落 _debug/chat-probe.json 供真机确认。注册失败/从未触发
+    // = 没有自动激活，不影响任何其他功能。opt.hint === false 整体禁用。
+    const hinted = new Set(); // 进程内幂等（entry.get 形状未验证，不去重读回）
+    const onChatMessage = async (input, output) => {
+      try {
+        const sid = input?.sessionID ?? output?.message?.sessionID ?? output?.sessionID;
+        if (!sid || hinted.has(sid)) return;
+        await probeOnce(sid, "chat-probe", {
+          inputKeys: Object.keys(input ?? {}), outputKeys: Object.keys(output ?? {}),
+        });
+        const parts = output?.parts ?? output?.message?.parts ?? input?.parts;
+        const text = (Array.isArray(parts) ? parts.map((p) => p?.text ?? "").join(" ") : "")
+          || promptText(output?.text ?? input?.text ?? "");
+        if (!isHintWorthy(text)) return;
+        if (await resolveState(sid)) return; // 已有工作流状态 → 不打扰
+        hinted.add(sid);
+        await E.put({ sessionID: sid, key: HINT_KEY, value: HINT_ENTRY });
+      } catch { /* 绝不阻断消息流 */ }
+    };
+    let chatReg = null;
+    if (opt.hint !== false) {
+      for (const [api, name] of [[ctx.chat, "message"], [ctx.chat, "chat.message"], [ctx.session, "chat.message"]]) {
+        if (typeof api?.hook !== "function") continue;
+        try { chatReg = api.hook(name, onChatMessage); if (chatReg) break; } catch { }
+      }
+    }
+
     const commands = ctx.command.transform((editor) => {
       const add = (def) => editor.add(def);
 
@@ -536,6 +574,7 @@ export default {
           if (old?.projectID) { try { await S.remove(IDX(old.projectID)); } catch { } }
           await S.remove(KEY(a.sessionID));
           try { await E.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch { }
+          try { await E.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch { }
           await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} }); // M10-a：A3，TUI 实时反映清除
           return "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。";
         },
@@ -599,7 +638,7 @@ export default {
     });
 
     return () => {
-      for (const r of [commands, tools, hookReg, rpcReg]) { try { r?.dispose?.(); } catch { } }
+      for (const r of [commands, tools, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }
     };
   },
 };
