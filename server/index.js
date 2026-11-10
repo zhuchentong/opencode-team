@@ -33,16 +33,8 @@ import {
   parseVerdict, hasStrictVerdictLine, evaluateTransition, guidance, promptText,
   entryValue, diagnoseReport, pingReport, isHintWorthy, HINT_ENTRY,
 } from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
-
-const ENTRY_KEY = "wf.phase";
-const HINT_KEY = "wf.hint"; // P3：自动激活一次性提示（不入状态机，reset 一并清除）
-const KEY = (sessionID) => `wf-workflow/state/${sessionID}`;
-
-const logAdd = (st, entry) => {
-  st.log = Array.isArray(st.log) ? st.log : [];
-  st.log.push(entry);
-  if (st.log.length > 50) st.log = st.log.slice(-50);
-};
+import { createStore, logAdd, ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX } from "./state.js";
+import { createObserver } from "./observe.js";
 
 export default {
   id: "wf-workflow",
@@ -51,16 +43,8 @@ export default {
     const E = ctx?.session?.instructions?.entry;
     const opt = ctx?.options ?? {};
 
-    // P0-a：debug 目录惰性按会话解析（修 REPO 硬编码）——显式 options.debugDir 优先，
-    // 回退会话项目目录（实测工具回调无 directory，须 session.get），再回退进程 cwd。
-    const debugDirFor = async (sessionID) => {
-      if (opt.debugDir) return String(opt.debugDir);
-      try {
-        const s = await ctx.session.get({ sessionID });
-        if (s?.location?.directory) return String(s.location.directory);
-      } catch { }
-      return process.cwd();
-    };
+    const { load, save, resolveState, resolveProjectDir, scanStates } = createStore(ctx);
+    const { debugDirFor, probeOnce, logToolsOnce } = createObserver(ctx, opt);
 
     const allowMarkers = [...DEFAULT_ALLOW_MARKERS, ...(Array.isArray(opt.allowMarkers) ? opt.allowMarkers : [])];
     const allowRes = [...DEFAULT_ALLOW_RES, ...(Array.isArray(opt.allowRegexps) ? opt.allowRegexps.map((s) => new RegExp(s)) : [])];
@@ -74,48 +58,6 @@ export default {
     // M10-a：闸门拒绝文案与 allowlist 同源生成（I2：旧硬写文案漏 .learnings/，与实际放行清单漂移）
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
-    // 首次触发探针（只写一次，验证插件所见入参形状；ERR-002 教训：先探形状再使用）
-    // P0-a：目录改为按会话解析（原为模块级 DBG 常量，硬编码仓库路径）
-    const PROBE = opt.probe !== false;
-    const probeOnce = async (sessionID, name, data) => {
-      try {
-        if (!PROBE) return;
-        const dir = `${await debugDirFor(sessionID)}/.workflow/_debug`;
-        const p = `${dir}/${name}.json`;
-        if (fs.existsSync(p)) return;
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(p, JSON.stringify({ at: new Date().toISOString(), ...data }, null, 2));
-      } catch { }
-    };
-
-    const load = async (sessionID) => {
-      try { return (await S.get(KEY(sessionID))) ?? null; } catch { return null; }
-    };
-    // M10-b：项目索引——子会话（agent 匹配 wf/*）经 projectID 反查管辖状态（实测 session 记录无 parentID）
-    const IDX = (projectID) => `wf-workflow/project/${projectID}`;
-    const save = async (st) => {
-      st.updatedAt = new Date().toISOString();
-      await S.set(KEY(st.sessionID), st);
-      try {
-        if (st.projectID) await S.set(IDX(st.projectID), { sessionID: st.sessionID, updatedAt: st.updatedAt });
-      } catch { }
-    };
-    const resolveState = async (sessionID, agent) => {
-      const own = await load(sessionID);
-      if (own) return own;
-      if (!/^wf\//.test(String(agent ?? ""))) return null; // 仅 wf/* agent 受项目索引管辖；普通 build/plan 会话不受影响
-      try {
-        const s = await ctx.session.get({ sessionID });
-        const pid = s?.projectID;
-        if (!pid) return null;
-        const idx = await S.get(IDX(pid));
-        if (idx?.sessionID && idx.sessionID !== sessionID) {
-          const owner = await load(idx.sessionID);
-          if (owner) return owner;
-        }
-      } catch { }
-      return null;
-    };
     // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
     const listOverrides = (dir) => {
       try { return fs.readdirSync(`${dir}/.workflow/overrides`).filter((f) => f.endsWith(".md")); } catch { return []; }
@@ -132,54 +74,6 @@ export default {
       }
     };
 
-    // ── M8-b：状态枚举（面板看板）；M10-d A6 项目过滤 + A7 done 状态 GC ────
-    const STALE_MS = 14 * 24 * 3600 * 1000;
-    const scanStates = async (projectID, directory) => {
-      const out = [];
-      try {
-        const res = await S.scan({ prefix: STATE_PREFIX });
-        const entries = Array.isArray(res) ? res : (res?.entries ?? []);
-        for (const e of entries) {
-          const k = e?.key ?? e?.[0];
-          let v = e?.value ?? e?.[1];
-          if (k == null) continue;
-          const ks = Array.isArray(k) ? k.join("/") : String(k);
-          if (!ks.startsWith(STATE_PREFIX)) continue;
-          if (typeof v === "string") { try { v = JSON.parse(v); } catch { } }
-          if (!v || typeof v !== "object") continue;
-          // A7 GC：done 且 >14 天 → 删状态并清指向自己的项目索引
-          try {
-            const age = v.updatedAt ? Date.now() - Date.parse(String(v.updatedAt)) : 0;
-            if (v.phase === "done" && v.updatedAt && age > STALE_MS) {
-              await S.remove(ks);
-              if (v.projectID) {
-                const idx = await S.get(IDX(v.projectID));
-                if (idx && idx.sessionID === v.sessionID) await S.remove(IDX(v.projectID));
-              }
-              continue;
-            }
-          } catch { /* GC 失败按保留处理 */ }
-          // A6：按项目过滤（M14：无 projectID 的旧状态回退 directory 比较，匹配则显示）
-          if (projectID) {
-            if (v.projectID) { if (String(v.projectID) !== String(projectID)) continue; }
-            else if (!(directory && v.directory && String(v.directory) === String(directory))) continue;
-          }
-          out.push({
-            sessionID: v.sessionID ?? ks.slice(STATE_PREFIX.length),
-            slug: v.slug ?? "",
-            phase: v.phase ?? null,
-            rounds: v.rounds ?? {},
-            testPlanWritten: !!v.testPlanWritten,
-            testReportVerdict: v.testReportVerdict ?? null,
-            updatedAt: v.updatedAt ?? null,
-          });
-        }
-      } catch { /* 扫描失败按空处理 */ }
-      out.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
-      return out.slice(0, 20);
-    };
-
-    const STATE_PREFIX = KEY("");
     // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新）──────────────────
     let rpcReg = null;
     let rpcErr = null;
@@ -257,21 +151,6 @@ export default {
       return guidance(flow.to, st, LIMS);
     };
 
-    // P0-a：工具注册证据延迟到首次工具执行时落盘（原在注册回调内写死 DBG 路径；
-    // 注册回调无 sessionID，无法解析项目目录）
-    let toolsLogged = false;
-    const logToolsOnce = async (namesPromise, sessionID) => {
-      if (toolsLogged) return;
-      toolsLogged = true;
-      try {
-        const listed = await namesPromise;
-        const names = Array.isArray(listed) ? listed.map((t) => t?.name ?? String(t)) : listed;
-        const dir = `${await debugDirFor(sessionID)}/.workflow/_debug`;
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(`${dir}/tools.json`, JSON.stringify({ at: new Date().toISOString(), version: VERSION, tools: names }, null, 2));
-      } catch { }
-    };
-
     // ── M3：wf_write_artifact 工具 ────────────────────────────────
     const tools = ctx.tool.transform((draft) => {
       const namesPromise = Promise.resolve(draft.list?.()).catch(() => null);
@@ -305,13 +184,8 @@ export default {
             if (!mk) return { content: `❌ 未知 kind=${kind}（可用：${Object.keys(KIND_FILES).join(" | ")}）` };
             const st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
             if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请先由用户执行 /wf:intake <slug>。" };
-            // 落盘目录：优先管辖状态的 directory，回退本会话 session.get，再回退 cwd
-            let dir = st.directory ?? null;
-            if (!dir) {
-              const sess = await ctx.session.get({ sessionID: context?.sessionID }).catch(() => null);
-              dir = sess?.location?.directory ?? null;
-            }
-            dir = dir ?? process.cwd();
+            // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
+            const dir = await resolveProjectDir(st, context?.sessionID);
             const file = mk(st);
             const target = `${dir}/.workflow/${st.slug}/${file}`;
             fs.mkdirSync(`${dir}/.workflow/${st.slug}`, { recursive: true });
@@ -507,13 +381,8 @@ export default {
         execute: async (a) => {
           const st = await load(a.sessionID);
           if (!st) return `wf 诊断(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`;
-          // 产物对账：落盘目录三级回退（与 wf_write_artifact 同源）
-          let dir = st.directory ?? null;
-          if (!dir) {
-            const sess = await ctx.session.get({ sessionID: a.sessionID }).catch(() => null);
-            dir = sess?.location?.directory ?? null;
-          }
-          dir = dir ?? process.cwd();
+          // 产物对账：落盘目录三级回退（resolveProjectDir，与 wf_write_artifact 同源）
+          const dir = await resolveProjectDir(st, a.sessionID);
           let artifactFiles = [];
           try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch { /* 目录不存在按空处理 */ }
           return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS });
