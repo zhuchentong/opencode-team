@@ -1,21 +1,22 @@
 // wf-workflow TUI 部件（M8-a 侧边栏挂件 + M15 回退列表/范围切换）
-// bundle rev: r28（移除 wf-board 看板：宿主 session.panel slot 管线在信号更新→子树换入路径崩溃
-//   `e.length`（见 .learnings/ERRORS.md ERR-20261110-005）。已尝试 Show fallback、恒定行数、
-//   平铺细粒度 memo 多轮修复，真机探针证实死点在宿主 reconciler 更新路径，本地无法复现。
-//   用户决定放弃面板功能。侧边栏 sidebar.content 长期稳定，保留。）
-// - 数据源：server 侧 RPC（shared/rpc.ts 的 Wf.state / Wf.list）+ "updated" 事件驱动刷新
-// - 渲染纪律（M9 血泪）：slot 子树里只用 <text> + 字符串子节点。
-//   禁止：数组/null 子节点、<box flexDirection="row">、在 JSX 中调用返回 JSX 的函数。
-//   违反会整块 slot 抛错消失：
-//   `wf-workflow-tui crashed in slot sidebar.content: undefined is not an object (evaluating 'e.length')`
+// bundle rev: r29f（真机 r29e 崩溃死点定位：信号更新 → rc(()=>分支box) IIFE 子树换入 commit →
+//   宿主 reconciler `e.length` 崩（与面板 ERR-20261110-005 同款，见 ERR-20261110-009）。
+//   侧边栏此前"稳定"只因事件/轮询从未跑通、初始帧后零 update。本版废除 IIFE 分支渲染：
+//   **恒定 20 行 <text> 节点树 + 单一 createMemo 数据视图**——update 只经 insert(()=>view().t[n])
+//   换文本内容、经 setProp 换 fg，节点树永不重建。禁止 IIFE 函数子节点返回 JSX 的模式（P4 静态守卫锁死）。）
+// - 数据源：server RPC state（含 lastReport 槽）+ 2.5s 轮询主通道 + updated/report 事件机会性补充
+//   （真机实证 RPC 事件投递不通，ERR-20261110-008）
+// - 命令输出呈现：toastReport（poll 主通道；60s 新鲜度门 + sessionID|at 去重；toast 是宿主
+//   overlay，不经过 slot 子树，无换树风险）
+// - 渲染纪律（M9 血泪）：slot 子树里只用 <text> + 字符串子节点；空槽单空格 " "（禁空字符串）。
 import { Plugin } from "@opencode/plugin/tui";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, createMemo, onCleanup } from "solid-js";
 import { Wf } from "../shared/rpc.ts";
 
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M16-r29e-poll";
+const TUI_BUILD = "M16-r29f-flat";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
@@ -41,8 +42,10 @@ const stageOf = (phase: any) => {
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 
-// opentui JSX 类型不覆盖函数子节点（Solid 响应式 getter 合法，运行时实证 M15.1）——仅类型断言，运行时子节点仍是同一函数引用
-const rc = (f: () => any): any => f;
+// r29e 主通道：真机实证 RPC 事件投递不通（server emit 成功但 TUI 双通道零接收，
+// 见 ERR-20261110-008）→ 轮询 state（含 lastReport）。methods 通道真机实证可用。
+// 恒定行数：active 态满配 20 行，其余态行内容折叠/占位，结构永不变
+const ROWS = 20;
 
 // ── M8-a/M9：侧边栏挂件（当前会话状态）──────────────────────────────
 function WfBoard(props: any) {
@@ -101,12 +104,10 @@ function WfBoard(props: any) {
     }
   };
   refresh();
-  // r29e 主通道：真机实证 RPC 事件投递不通（server emit 成功但 TUI 双通道零接收，
-  // 见 ERR-20261110-008）→ 轮询 state（含 lastReport）。methods 通道真机实证可用。
   const timer = setInterval(() => { refresh(); }, 2500);
 
-  // 诊断 r29c：宿主二进制证实 events.on 回调收信封 {type,location,data}（type 前缀 rpc.wf.<name>）；
-  // 兼容信封/裸数据两种形状。subscribed/updated-recv/recv 三条探针定位事件是否到达 TUI。
+  // 诊断：宿主二进制证实 events.on 回调收信封 {type,location,data}（type 前缀 rpc.wf.<name>）；
+  // 兼容信封/裸数据两种形状。subscribed/updated-recv/recv 探针定位事件是否到达 TUI。
   const unwrap = (e: any) => (e && typeof e === "object" && "data" in e ? (e as any).data : e);
   // M15：回退列表是全项目视角——任何会话的 updated 事件都触发刷新
   const off = props.context.client.rpc(Wf).events.on("updated", (e: any) => {
@@ -157,39 +158,33 @@ function WfBoard(props: any) {
   const T = props.context.theme;
   const compact = props.context.options?.compact === true;
 
-  return (
-    <box flexDirection="column">
-      {rc(() => {
-        try {
-          if (err()) return <text fg={T.text.feedback.error}>{`wf 错误: ${str(err())}`}</text>;
-          if (!props.sessionID) return <text fg={T.text.muted}>{"  wf: 无会话"}</text>;
-          const s = st();
-          probeOnce({ render: true, sid: String(props.sessionID ?? ""), active: !!(s && s.active), phase: s?.phase ?? null, othN: oth().length });
-          if (!s) return <text fg={T.text.muted}>{"  wf: …"}</text>;
-          if (!s.active) {
-            const o = oth();
-            if (o.length > 0) {
-              const line = (n: number) => (o[n] ? `  ${o[n]}` : "");
-              return (
-                <box flexDirection="column">
-                  <text fg={T.text.muted}>{"── wf ──────────────"}</text>
-                  <text fg={T.text.base}>{`  活动任务·${othScope()}`}</text>
-                  <text fg={T.text.action.primary}>{line(0)}</text>
-                  <text fg={T.text.action.primary}>{line(1)}</text>
-                  <text fg={T.text.action.primary}>{line(2)}</text>
-                  <text fg={T.text.muted}>{"──────────────────────"}</text>
-                </box>
-              );
-            }
-            return (
-              <box flexDirection="column">
-                <text fg={T.text.muted}>{"── wf ──────────────"}</text>
-                <text fg={T.text.muted}>{"  wf: 本会话无活动任务"}</text>
-                <text fg={T.text.muted}>{"──────────────────────"}</text>
-              </box>
-            );
+  // ── r29f 核心：单一 view memo → 恒定结构细粒度更新 ─────────────────
+  // update 路径 = insert(()=>view().t[n]) 只换文本 + setProp 换 fg；20 个 <text> 节点树永不重建。
+  // 崩溃死点（ERR-20261110-009）在「返回 JSX 的函数子节点换入整棵子树」，本结构不产生任何子树换入。
+  const view = createMemo<{ t: string[]; c: string[] }>(() => {
+    const t: string[] = new Array(ROWS).fill(" ");
+    const c: string[] = new Array(ROWS).fill(T.text.muted);
+    t[0] = "── wf ──────────────";
+    t[ROWS - 1] = "──────────────────────";
+    try {
+      if (err()) {
+        t[1] = `wf 错误: ${str(err())}`; c[1] = T.text.feedback.error;
+      } else if (!props.sessionID) {
+        t[1] = "  wf: 无会话";
+      } else {
+        const s = st();
+        probeOnce({ render: true, sid: String(props.sessionID ?? ""), active: !!(s && s.active), phase: s?.phase ?? null, othN: oth().length });
+        if (!s) {
+          t[1] = "  wf: …";
+        } else if (!s.active) {
+          const o = oth();
+          if (o.length > 0) {
+            t[1] = `  活动任务·${othScope()}`; c[1] = T.text.base;
+            for (let n = 0; n < 3; n++) { if (o[n]) { t[2 + n] = `  ${o[n]}`; c[2 + n] = T.text.action.primary; } }
+          } else {
+            t[1] = "  wf: 本会话无活动任务";
           }
-
+        } else {
           const r = s.rounds ?? {};
           const i = stageOf(s.phase);
           const total = STAGE_ORDER.length;
@@ -198,48 +193,73 @@ function WfBoard(props: any) {
           const planV = r.plan_review ?? 0;
           const buildV = r.build_review ?? 0;
           const fixV = r.test_fix ?? 0;
-
-          // 极简模式：cli.json 给插件设 options:{compact:true}
-          if (compact) {
-            return <text fg={T.text.action.primary}>{`▶ ${label} ${planV}/${buildV}/${fixV}`}</text>;
-          }
-
           const done = isDone ? total : i;
-          // 单条字符串进度条：避免多子节点/null 子节点
           const bar = "●".repeat(done) + "○".repeat(total - done);
-
           const arts = s.artifacts ?? {};
           const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0).length;
           const verdict = s.testReportVerdict;
-
-          return (
-            <box flexDirection="column">
-              <text fg={T.text.muted}>{"── wf ──────────────"}</text>
-              <text fg={T.text.base}>{`  ${str(s.slug || "(未定)")}`}</text>
-              <text fg={T.text.action.primary}>{`  F${i} ${label}`}</text>
-              <text fg={T.text.action.primary}>{`  ${bar} ${done}/${total}`}</text>
-              <text fg={T.text.base}>{" "}</text>
-              <text fg={T.text.muted}>{"── 轮次 ────────────"}</text>
-              <text fg={planV >= 3 ? T.text.feedback.error : T.text.base}>{`      plan  ${planV}/3`}</text>
-              <text fg={buildV >= 3 ? T.text.feedback.error : T.text.base}>{`      build ${buildV}/3`}</text>
-              <text fg={fixV >= 3 ? T.text.feedback.error : T.text.base}>{`      fix   ${fixV}/3`}</text>
-              <text fg={T.text.base}>{" "}</text>
-              <text fg={T.text.muted}>{"── 关卡 ────────────"}</text>
-              <text fg={s.testPlanWritten ? T.text.feedback.success : T.text.muted}>{`      test-plan ${s.testPlanWritten ? "✓" : "✗"}`}</text>
-              <text fg={verdict === "PASS" ? T.text.feedback.success : verdict === "FAIL" ? T.text.feedback.error : T.text.muted}>{`      report    ${verdict ? str(verdict) : "—"}`}</text>
-              <text fg={T.text.base}>{" "}</text>
-              <text fg={T.text.muted}>{"── 产物 ────────────"}</text>
-              <text fg={arts["plan.md"] ? T.text.feedback.success : T.text.muted}>{`      plan.md ${arts["plan.md"] ? "✓" : "✗"}`}</text>
-              <text fg={arts["test-plan.md"] ? T.text.feedback.success : T.text.muted}>{`      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`}</text>
-              <text fg={arts["test-report.md"] ? T.text.feedback.success : T.text.muted}>{`      test-report.md ${arts["test-report.md"] ? "✓" : "✗"}`}</text>
-              <text fg={T.text.muted}>{`      其他产物 ${extraCount} 项`}</text>
-              <text fg={T.text.muted}>{"──────────────────────"}</text>
-            </box>
-          );
-        } catch (e) {
-          return <text fg={T.text.feedback.error}>{`wf 渲染异常: ${str((e as Error)?.message ?? e)}`}</text>;
+          t[1] = `  ${str(s.slug || "(未定)")}`; c[1] = T.text.base;
+          t[2] = `  F${i} ${label}`; c[2] = T.text.action.primary;
+          t[3] = `  ${bar} ${done}/${total}`; c[3] = T.text.action.primary;
+          t[4] = " "; c[4] = T.text.base;
+          t[5] = "── 轮次 ────────────";
+          t[6] = `      plan  ${planV}/3`; c[6] = planV >= 3 ? T.text.feedback.error : T.text.base;
+          t[7] = `      build ${buildV}/3`; c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base;
+          t[8] = `      fix   ${fixV}/3`; c[8] = fixV >= 3 ? T.text.feedback.error : T.text.base;
+          t[9] = " "; c[9] = T.text.base;
+          t[10] = "── 关卡 ────────────";
+          t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`; c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted;
+          t[12] = `      report    ${verdict ? str(verdict) : "—"}`; c[12] = verdict === "PASS" ? T.text.feedback.success : verdict === "FAIL" ? T.text.feedback.error : T.text.muted;
+          t[13] = " "; c[13] = T.text.base;
+          t[14] = "── 产物 ────────────";
+          t[15] = `      plan.md ${arts["plan.md"] ? "✓" : "✗"}`; c[15] = arts["plan.md"] ? T.text.feedback.success : T.text.muted;
+          t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`; c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted;
+          t[17] = `      test-report.md ${arts["test-report.md"] ? "✓" : "✗"}`; c[17] = arts["test-report.md"] ? T.text.feedback.success : T.text.muted;
+          t[18] = `      其他产物 ${extraCount} 项`;
         }
-      })}
+      }
+    } catch (e) {
+      t[1] = `wf 渲染异常: ${str((e as Error)?.message ?? e)}`; c[1] = T.text.feedback.error;
+    }
+    return { t, c };
+  });
+
+  // compact 分支在组件 return 顶层：options.compact 是挂载期常量，return 只执行一次（非 update 路径）
+  // 极简模式：cli.json 给插件设 options:{compact:true}
+  if (compact) {
+    const line = createMemo(() => {
+      const s = st();
+      if (!s?.active) return view().t[1];
+      const r = s.rounds ?? {};
+      const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
+      return `▶ ${label} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
+    });
+    return <text fg={T.text.action.primary}>{line()}</text>;
+  }
+
+  // 恒定 20 行结构——view() 的 insert 只换每行文本内容，节点树从 mount 起永不改变
+  return (
+    <box flexDirection="column">
+      <text fg={view().c[0]}>{view().t[0]}</text>
+      <text fg={view().c[1]}>{view().t[1]}</text>
+      <text fg={view().c[2]}>{view().t[2]}</text>
+      <text fg={view().c[3]}>{view().t[3]}</text>
+      <text fg={view().c[4]}>{view().t[4]}</text>
+      <text fg={view().c[5]}>{view().t[5]}</text>
+      <text fg={view().c[6]}>{view().t[6]}</text>
+      <text fg={view().c[7]}>{view().t[7]}</text>
+      <text fg={view().c[8]}>{view().t[8]}</text>
+      <text fg={view().c[9]}>{view().t[9]}</text>
+      <text fg={view().c[10]}>{view().t[10]}</text>
+      <text fg={view().c[11]}>{view().t[11]}</text>
+      <text fg={view().c[12]}>{view().t[12]}</text>
+      <text fg={view().c[13]}>{view().t[13]}</text>
+      <text fg={view().c[14]}>{view().t[14]}</text>
+      <text fg={view().c[15]}>{view().t[15]}</text>
+      <text fg={view().c[16]}>{view().t[16]}</text>
+      <text fg={view().c[17]}>{view().t[17]}</text>
+      <text fg={view().c[18]}>{view().t[18]}</text>
+      <text fg={view().c[19]}>{view().t[19]}</text>
     </box>
   );
 }

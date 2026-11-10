@@ -92,6 +92,9 @@ console.log(`插件 id: ${t.id}`);
   ok("P4 无 WfBoardPanel 组件定义", !src.includes("function WfBoardPanel"));
   ok("P4 无 session.panel slot 注册代码", !src.includes('append: "session.panel"'));
   ok("P4 无 wf.board 面板打开命令", !src.includes('"wf.board"'));
+  // r29f 防退化：信号更新→IIFE 换树崩是 slot 通用死点（ERR-20261110-009），全文件禁 rc(IIFE) 模式
+  ok("P4 全文件无 rc(IIFE) 子树重建模式", !src.includes("rc(() =>"), "update 路径只能走恒定节点 + memo 内容更新");
+  ok("P4 恒定 20 行结构存在", src.includes("const ROWS = 20") && src.includes("createMemo<{ t: string[]; c: string[] }>"));
 }
 
 // ── P5：侧边栏挂件（活跃态与回退列表态都不崩）───────────────────────

@@ -232,6 +232,7 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   // r29e 主通道：storage 槽（TUI 轮询 state.lastReport 消费）
   const slot = m.store.get("wf-workflow/report/ses_rep");
   assert.ok(slot, "应写 report 存储槽");
+  assert.equal(slot.sessionID, "ses_rep"); // bug A 行为锚：槽必须含 sessionID（真机 toastReport 过滤器依赖，缺它 toast 全被拦）
   assert.equal(slot.text, out);
   assert.ok(typeof slot.at === "string" && slot.at.length >= 20, "槽含 ISO 时间戳");
   // 补充通道：report 事件（payload 与槽同 at，TUI 跨通道去重键）

@@ -97,7 +97,7 @@ export function registerCommands(ctx: any, deps: any) {
         const at = new Date().toISOString();
         if (text) {
           let slotOk = false;
-          try { await S.set(`wf-workflow/report/${sid}`, { text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
+          try { await S.set(`wf-workflow/report/${sid}`, { sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
           if (emitReport) await emitReport(sid, text, at);
           await reportProbe(a?.sessionID, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: def.name, chars: text.length, hasChan: !!emitReport });
         } else {
