@@ -15,7 +15,7 @@ import { Wf } from "../shared/rpc.ts";
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M16-r29b-probe";
+const TUI_BUILD = "M16-r29c-probe2";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
@@ -89,19 +89,27 @@ function WfBoard(props: any) {
   };
   refresh();
 
+  // 诊断 r29c：宿主二进制证实 events.on 回调收信封 {type,location,data}（type 前缀 rpc.wf.<name>）；
+  // 兼容信封/裸数据两种形状。subscribed/updated-recv/recv 三条探针定位事件是否到达 TUI。
+  const unwrap = (e: any) => (e && typeof e === "object" && "data" in e ? (e as any).data : e);
   // M15：回退列表是全项目视角——任何会话的 updated 事件都触发刷新
-  const off = props.context.client.rpc(Wf).events.on("updated", () => { refresh(); });
+  const off = props.context.client.rpc(Wf).events.on("updated", (e: any) => {
+    probeOnce({ evt: "updated-recv", got: str(unwrap(e)?.sessionID), cur: String(props.sessionID ?? "") });
+    refresh();
+  });
   // 命令输出 → toast（2.2.6 宿主 execute 返回值对用户不显示；server/commands.ts 经 report 事件广播，
   // 见 .learnings/ERRORS.md ERR-20261110-007）。只呈现本会话的报告，避免跨会话噪音。
-  const offReport = props.context.client.rpc(Wf).events.on("report", (d: any) => {
+  const offReport = props.context.client.rpc(Wf).events.on("report", (e: any) => {
+    const d = unwrap(e);
     probeOnce({ reportEv: "recv", got: str(d?.sessionID), cur: String(props.sessionID ?? ""), chars: String(d?.text ?? "").length });
     try {
       if (String(d?.sessionID ?? "") === String(props.sessionID ?? "")) {
         props.context.ui.toast.show({ message: str(d?.text), variant: "info" });
         probeOnce({ reportEv: "toast-shown" });
       }
-    } catch (e) { probeOnce({ reportEv: "toast-err", err: str((e as Error)?.message ?? e) }); }
+    } catch (er) { probeOnce({ reportEv: "toast-err", err: str((er as Error)?.message ?? er) }); }
   });
+  probeOnce({ evt: "subscribed", sid: String(props.sessionID ?? "") });
   onCleanup(() => { try { off?.(); } catch { } try { offReport?.(); } catch { } });
 
   const T = props.context.theme;
