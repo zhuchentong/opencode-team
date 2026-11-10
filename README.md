@@ -60,8 +60,8 @@ server/commands.ts      /wf:* 命令：11 个流转命令表驱动 + 6 个辅助
 server/lib.ts           纯逻辑+领域类型单一来源：FLOWS/GATES/KIND_FILES/evaluateTransition/…（bun test 覆盖）
 shared/phases.ts        阶段定义单一来源（server/tui 共用）；phases.js 为宿主旧模块图兼容 shim，tests 逐字段全等守卫防漂移
 shared/rpc.ts           RPC 契约（TUI 侧边栏订阅 state/list + updated 事件）
-tui/index.tsx           TUI 单文件（挂件+面板+注册）——宿主 slot 管线对跨模块组件崩溃，保持单文件（.learnings/ERR-20261110-004）
-tui-tests/              本地渲染 harness（真实 @opentui/solid testRender + 虚拟模块自举，14 断言）：bun tui-tests/tui-render.harness.ts
+tui/index.tsx           TUI 单文件（侧边栏挂件+注册）——wf-board 面板因宿主 slot 管线崩溃无法根治已移除（r28，.learnings/ERR-20261110-005）
+tui-tests/              本地渲染 harness（真实 @opentui/solid testRender + 虚拟模块自举，7 断言含面板移除防退化守卫）：bun tui-tests/tui-render.harness.ts
 types/opencode-plugin.d.ts  宿主虚拟模块声明（@opencode/plugin/rpc|tui，onResolve alias 注入）
 ```
 
@@ -118,7 +118,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 - `.workflow/_debug/{tools,hook-probe,tool-probe,state}.json`：探针与状态快照（`probe:false` 可关）
 - `/wf:diagnose`：审计轨迹拒绝分类计数、越权阻断取证、轮次余量告警、产物「state 记账 vs 磁盘」对账、注入/RPC 异常、下一步建议
-- 状态 GC：done 且 14 天未更新的状态在面板扫描时自动清理
+- 状态 GC：done 且 14 天未更新的状态在任务枚举（RPC list）时自动清理
 
 ## 开发与测试
 
