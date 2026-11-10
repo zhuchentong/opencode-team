@@ -251,45 +251,44 @@ function WfBoardPanel(props) {
     return `    关卡 test-plan ${s.testPlanWritten ? "✓" : "✗"} report ${verdict} · 更新 ${hhmm(s.updatedAt)} · 会话…${str(s.sessionID).slice(-6)}`;
   };
 
-  // M15 修复：外层 box 恢复"静态文本 + 单动态回调子节点"结构（双回调并排疑为本次崩溃根因，见 LRN-005）
+  // r26-t3：恒定行数渲染（M9 纪律落实）——a 键范围切换改变 rows()/all()/err() 状态时，
+  // 旧实现「错误/暂无/有数据」三分支子节点数量不同（2/2/20 个 text），宿主 slot 管线
+  // 对子树形态变化崩溃（e.length）。统一为固定 19 个 <text>：1 状态行 + 6 任务 × 3 行，
+  // 空槽位渲染空字符串；结构恒定、仅文本内容变化。
   return (
     <box flexDirection="column">
       <text fg={ctx.theme.text.base}>{"WF 看板"}</text>
       <text fg={ctx.theme.text.muted}>{"r=刷新 a=范围 f=全屏 q=关闭"}</text>
       {() => {
-        const scopeLine = <text fg={ctx.theme.text.muted}>{`范围: ${all() ? "全部项目" : "当前项目"}`}</text>;
-        try {
-          if (err()) return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.feedback.error}>{`加载错误: ${str(err())}`}</text></box>;
-          const list = rows();
-          const count = Array.isArray(list) ? list.length : 0;
-          if (count === 0) return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.muted}>{"（暂无工作流任务）"}</text></box>;
-          return (
-            <box flexDirection="column">
-              {scopeLine}
-              <text fg={ctx.theme.text.muted}>{`共 ${count} 个任务（每任务 3 行），最多显示 ${PANEL_MAX}`}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(0)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(0)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(0)}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(1)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(1)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(1)}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(2)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(2)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(2)}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(3)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(3)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(3)}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(4)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(4)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(4)}</text>
-              <text fg={ctx.theme.text.action.primary}>{rowMain(5)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub(5)}</text>
-              <text fg={ctx.theme.text.muted}>{rowSub2(5)}</text>
-            </box>
-          );
-        } catch (e) {
-          return <box flexDirection="column">{scopeLine}<text fg={ctx.theme.text.feedback.error}>{`渲染异常: ${str(e?.message ?? e)}`}</text></box>;
-        }
+        const list = rows();
+        const count = Array.isArray(list) ? list.length : 0;
+        const scope = all() ? "全部项目" : "当前项目";
+        const status = err()
+          ? `范围: ${scope} · ⚠️ 加载错误: ${str(err())}`
+          : `范围: ${scope} · ${count === 0 ? "（暂无工作流任务）" : `共 ${count} 个任务（每任务 3 行），最多显示 ${PANEL_MAX}`}`;
+        return (
+          <box flexDirection="column">
+            <text fg={ctx.theme.text.muted}>{status}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(0)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(0)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(0)}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(1)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(1)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(1)}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(2)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(2)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(2)}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(3)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(3)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(3)}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(4)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(4)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(4)}</text>
+            <text fg={ctx.theme.text.action.primary}>{rowMain(5)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub(5)}</text>
+            <text fg={ctx.theme.text.muted}>{rowSub2(5)}</text>
+          </box>
+        );
       }}
     </box>
   );
