@@ -13,7 +13,7 @@ import { Wf } from "../shared/rpc.ts";
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
 // M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
-const TUI_BUILD = "M15.1";
+const TUI_BUILD = "M16-r27-flat";
 const LOADED_AT = new Date().toISOString();
 const probeOnce = (data: Record<string, unknown>) => {
   (async () => {
