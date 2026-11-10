@@ -4,7 +4,7 @@
 
 import { BLOCKING } from "../shared/phases.js"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M14-r24";
+export const VERSION = "M16-r25";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 
@@ -147,7 +147,7 @@ export function isHintWorthy(text) {
   return HINT_TRIGGERS.some((k) => t.includes(k.toLowerCase()));
 }
 export const HINT_ENTRY = [
-  "💡 检测到你在表达「流程化开发」意图。本项目装有 wf 工作流插件（规划→审核∥可行性→分配→红测试→TDD 并行→审核→验证→修复→复盘）。",
+  "💡 检测到你在表达「流程化开发」意图。本项目装有 wf 工作流插件（规划→审核∥可行性→分配→红测试→单树 TDD 执行→审核→验证→修复→复盘）。",
   "若想让本任务走工作流：执行 /wf:intake <任务slug>。若不需要，忽略本提示（不影响任何功能）。",
   "可用命令：/wf:intake /wf:plan /wf:review /wf:assign /wf:test-design /wf:build /wf:reconcile /wf:review-build /wf:test /wf:fix /wf:done；辅助：/wf:status /wf:diagnose /wf:ping /wf:reset。",
 ].join("\n");
@@ -256,21 +256,21 @@ function guidanceBase(phase, st, limits = LIMITS) {
     case "assign": return [
       `【wf 工作流｜assign】slug=${s}`,
       `硬关卡：计划审核已通过 且 test-plan.md（可行性拍）已产出。`,
-      `冻结接口，按 T<nn> 分配 lane（标注并行组与写作用域）。完成 → 执行 /wf:test-design`,
+      `冻结接口，按 T<nn> 排串行执行顺序（默认一个 wf/builder 串行完成整场任务；多 builder 并行拆树=例外，需用户同意）。完成 → 执行 /wf:test-design`,
     ].join("\n");
     case "test_design": return [
       `【wf 工作流｜test_design】slug=${s}`,
-      `委派 wf/tester(mode=design)：按已冻结接口在主树测试目录写会失败的验收/集成测试（红），作为各 worktree 的 TDD 锚点。`,
+      `委派 wf/tester(mode=design)：按已冻结接口在主树测试目录写会失败的验收/集成测试（红），作为执行 worktree 的 TDD 锚点。`,
       `发现接口问题 → 执行 /wf:plan 回规划修订（返工边）；完成 → 执行 /wf:build`,
     ].join("\n");
     case "building": return [
       `【wf 工作流｜building】slug=${s}`,
-      `每组一 worktree + 一 wf/builder（TDD 先红后绿）；建树后把 test_design 产出的验收测试复制进 worktree；prompt 给 worktree 绝对路径。`,
+      `默认：开一个 worktree，一个 wf/builder 在树内按序串行完成全部 T<nn>（逐任务 TDD 先红后绿）；建树后把 test_design 产出的红测试复制进树并 md5 核对；prompt 给 worktree 绝对路径+按序任务清单。多树并行=例外（写集互斥+用户同意）。`,
       `全部回执齐备（含红→绿证据）→ 执行 /wf:reconcile`,
     ].join("\n");
     case "reconcile": return [
       `【wf 工作流｜reconcile】slug=${s}`,
-      `依序合并各 worktree 回主树（lane 写作用域互斥）；出现冲突 → 停下问用户，不自动解决。`,
+      `合并 worktree 产物回主树（单树=一次合并；主树跑全量验证），清理前先 rm 树内已合并的 untracked 副本再非 force 移除；冲突/数字不符 → 停下问用户，不自动解决。`,
       `合并完成 → 执行 /wf:review-build`,
     ].join("\n");
     case "build_review": return [
@@ -285,7 +285,7 @@ function guidanceBase(phase, st, limits = LIMITS) {
     ].join("\n");
     case "fixing": return [
       `【wf 工作流｜fixing（第 ${r.test_fix}/${L.test_fix} 轮）】slug=${s}`,
-      `同 lane 失败优先回原 builder（复用 sessionID，原 worktree 内修，修完再合并）；跨 lane/根因不明 → wf/fixer。`,
+      `失败优先回原 builder（复用 sessionID，在其 worktree 内修，修完重新合并核验）；根因不明/跨模块 → wf/fixer。`,
       `修改过 worktree 则先 /wf:reconcile 回主树合并，再执行 /wf:test；超限 → 停下问用户`,
     ].join("\n");
     case "done": return [
