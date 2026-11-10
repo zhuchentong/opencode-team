@@ -8,20 +8,19 @@ import { Wf } from "../shared/rpc.ts";
 import { STAGE_ORDER, STAGE_LABEL, CANON } from "../shared/phases.js";
 import { stageOf, str, listLine } from "./format.ts";
 
-// 已知硬编码：probe 落盘路径，遗留待修（勿在本次重构中变更）——TUI 无法 headless 验证，
-// 探针在首次成功调用 RPC 后落盘一次供真机确认。
+// 已知硬编码：probe 落盘路径，遗留待修（勿在本次重构中变更）——TUI 无法 headless 验证。
 const REPO = "/home/zhuchentong/Projects/zhuchentong/opencode-team";
 
-let probed = false;
+// M15.1 观测：不再一次性闩锁——每次挂件刷新/渲染都追加记录（崩溃时可回看死前数据形状）
+const TUI_BUILD = "M15.1";
+const LOADED_AT = new Date().toISOString();
 const probeOnce = (data) => {
-  if (probed) return;
-  probed = true;
   (async () => {
     try {
       const fs = await import("node:fs");
       const dir = `${REPO}/.workflow/_debug`;
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(`${dir}/tui-probe.json`, JSON.stringify({ at: new Date().toISOString(), ...data }, null, 2));
+      fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({ at: new Date().toISOString(), build: TUI_BUILD, loadedAt: LOADED_AT, ...data }) + "\n");
     } catch { /* 探针失败不影响 UI */ }
   })();
 };
@@ -80,6 +79,7 @@ export function WfBoard(props) {
           if (err()) return <text fg={T.text.feedback.error}>{`wf 错误: ${str(err())}`}</text>;
           if (!props.sessionID) return <text fg={T.text.muted}>{"  wf: 无会话"}</text>;
           const s = st();
+          probeOnce({ render: true, sid: String(props.sessionID ?? ""), active: !!(s && s.active), phase: s?.phase ?? null, othN: oth().length });
           if (!s) return <text fg={T.text.muted}>{"  wf: …"}</text>;
           if (!s.active) {
             const o = oth();
