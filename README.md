@@ -49,22 +49,23 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 ## 架构
 
 ```
-server/index.js        组装层：按依赖序接线各模块（55 行）
-server/state.js        状态存取：load/save/resolveState/scanStates(GC)/resolveProjectDir
-server/observe.js      观测通道：debugDirFor/probeOnce/logToolsOnce（.workflow/_debug/ 落盘）
-server/rpc-bridge.js   RPC 桥：Wf.state/list + updated 事件（TUI 数据源）
-server/artifact-tool.js wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账
-server/guard-hook.js   execute.before 越权阻断（planning/review 拒业务代码写，含 shell 门控）
-server/hint.js         P3 自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示
-server/commands.js     /wf:* 命令：11 个流转命令表驱动 + 6 个辅助命令 + transition/inject 编排
-server/lib.js          纯逻辑单一来源：FLOWS/GATES/KIND_FILES/evaluateTransition/…（bun test 覆盖）
-shared/phases.js       阶段定义单一来源（server/tui 共用，防漂移）
-shared/rpc.ts          RPC 契约（TUI 侧边栏订阅 state/list + updated 事件）
-tui/index.tsx          TUI 注册壳（slot/panel/keymap）
-tui/widget.tsx         侧边栏挂件（当前会话状态 + M15 回退列表）
-tui/board.tsx          看板面板（全部任务、范围切换）
-tui/format.ts          公共格式化（stageOf/str/hhmm/listLine）
+server/index.js         组装层：按依赖序接线各模块（唯一保持 .js 的入口，exports 切换见 T5 计划）
+server/state.ts         状态存取：load/save/resolveState/scanStates(GC)/resolveProjectDir
+server/observe.ts       观测通道：debugDirFor/probeOnce/logToolsOnce（.workflow/_debug/ 落盘）
+server/rpc-bridge.ts    RPC 桥：Wf.state/list + updated 事件（TUI 数据源）
+server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账
+server/guard-hook.ts    execute.before 越权阻断（planning/review 拒业务代码写，含 shell 门控）
+server/hint.ts          P3 自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示
+server/commands.ts      /wf:* 命令：11 个流转命令表驱动 + 6 个辅助命令 + transition/inject 编排
+server/lib.ts           纯逻辑+领域类型单一来源：FLOWS/GATES/KIND_FILES/evaluateTransition/…（bun test 覆盖）
+shared/phases.ts        阶段定义单一来源（server/tui 共用）；phases.js 为宿主旧模块图兼容 shim，tests 逐字段全等守卫防漂移
+shared/rpc.ts           RPC 契约（TUI 侧边栏订阅 state/list + updated 事件）
+tui/index.tsx           TUI 单文件（挂件+面板+注册）——宿主 slot 管线对跨模块组件崩溃，保持单文件（.learnings/ERR-20261110-004）
+tui-tests/              本地渲染 harness（真实 @opentui/solid testRender + 虚拟模块自举，14 断言）：bun tui-tests/tui-render.harness.ts
+types/opencode-plugin.d.ts  宿主虚拟模块声明（@opencode/plugin/rpc|tui，onResolve alias 注入）
 ```
+
+TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿主注入 API 边界显式 `any`（无官方类型），内部数据流用 lib.ts 领域类型。`bun test`（81 用例）为行为锚。
 
 状态按会话存于 `ctx.storage`（键 `wf-workflow/state/<sessionID>`）；`wf/*` 子会话经项目索引（`wf-workflow/project/<projectID>`）反查管辖状态，同样受闸门约束。
 
