@@ -1,40 +1,18 @@
-// wf-workflow — P3：superpowers 式自动激活（消息 hook 多形态防御注册，命中工作流意图且无状态时
-// 注入一次性 wf.hint 提示；chat-probe 记录宿主形状）；项目级角色定制（.workflow/overrides/<role>.md
-// 存在则 guidance/entry 附提示，委派同名角色时全文带上）。
-// P2：options.limits 实例覆盖（evaluateTransition/guidance/entryValue/diagnose/status 全链路）；
-// /wf:ping 角色健康检查（ctx.agent 存在则列注册与模型，缺失 fail-soft）。
-// P1：guidance 写入 instructions entry（entry 每次组装系统提示从存储重渲染，
-// 天然抗 compaction，superpowers post-compaction 重注入目标由此实现）；/wf:diagnose 诊断命令
-// （审计拒绝分类/越权阻断取证/产物磁盘对账）；hook 阻断记账 gate:block 进 st.log。
-// P0-a/b：去除 REPO 硬编码（debug 目录按会话解析：options.debugDir → session 项目目录 → cwd）；
-// 可测纯逻辑（FLOWS/GATES/KIND_FILES/放行判定/shell 目标/verdict/流转校验）提取至 server/lib.js，行为与 M14-r24 一致。
-// 历史变更（M10-d / M14 等）详见 lib.js 注释与 git。
-// M8-a: RPC 桥 —— ctx.rpc.register(Wf)（shared/rpc.ts）暴露 state 方法；流转/产物落盘时 emit("updated")，
-//        供 TUI 侧边栏订阅（此时尚不含 tui/ 部件，server 侧可独立验证）
-// 在 M2-b（状态机 + /wf:* 命令 + 阶段注入）之上新增：
-//  M3: wf_write_artifact 工具（kind → .workflow/<slug>/ 文件名，落盘并记入 state.artifacts）
-//  M4: ctx.tool.hook("execute.before") —— planning/review 阶段拒绝业务代码 edit/write/patch
-//  M5: GATES —— wf:assign 双通道关卡（需 test-plan）；wf:done 验收关卡（需 test-report 结论 PASS）
-// 已验证 API（实测 2026-11-09，参考 slim V2 适配器 + .workflow/_debug/*.json）：
-//  - 工具注册：draft.add({name, description, input:<JSONSchema>, options:{codemode:false},
-//      execute: async (args, context) => ({ content }) })；实测 context 仅 {sessionID, agent,
-//      messageID, id, progress, signal}——**无 directory**！项目目录须经 ctx.session.get(sessionID).location.directory 取
-//  - hook：ctx.tool.hook("execute.before", async (input, output) => …)
-//      实测 input={tool, sessionID, agent, messageID, id, input}——工具入参在 input.input（output 为空，
-//      slim 参考的 output.args 形状在 v2.2.6 不成立）；抛异常=拦截工具调用
-//  - 命令：editor.add({name, description, execute(args={sessionID,prompt,delivery})})，返回值作为 prompt 送入会话
-//  - storage：string key get/set/remove；entry.put key 正则 ^[a-z0-9][a-z0-9._-]*$
-// 观测通道：.workflow/_debug/{tools,hook-probe,tool-probe,state}.json
+// wf-workflow — 插件组装层：接线 state（状态存取）→ observe（观测探针）→ rpc-bridge（TUI 数据源）
+// → artifact-tool（wf_write_artifact）→ guard-hook（越权阻断）→ hint（自动激活）→ commands（/wf:*）。
+// 各模块职责与实测 API 结论见各文件头；流转/关卡纯逻辑单一来源见 server/lib.js；历史变更详见 git。
 import * as fs from "node:fs";
 import {
-  VERSION, LIMITS, FLOWS, NEXT, GATES, GATE_ERR,
-  EDIT_TOOLS, BLOCKING_PHASES, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES,
-  KIND_FILES, extractPaths, makeAllowChecker, shellWriteTargets,
-  parseVerdict, hasStrictVerdictLine, evaluateTransition, guidance, promptText,
-  entryValue, diagnoseReport, pingReport, isHintWorthy, HINT_ENTRY,
+  VERSION, LIMITS, FLOWS, NEXT, BLOCKING_PHASES, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES,
+  makeAllowChecker, evaluateTransition, guidance, promptText,
+  entryValue, diagnoseReport, pingReport,
 } from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
 import { createStore, logAdd, ENTRY_KEY, HINT_KEY, KEY, IDX, STATE_PREFIX } from "./state.js";
 import { createObserver } from "./observe.js";
+import { createRpcBridge } from "./rpc-bridge.js";
+import { registerArtifactTool } from "./artifact-tool.js";
+import { registerGuardHook } from "./guard-hook.js";
+import { registerHint } from "./hint.js";
 
 export default {
   id: "wf-workflow",
@@ -74,47 +52,8 @@ export default {
       }
     };
 
-    // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新）──────────────────
-    let rpcReg = null;
-    let rpcErr = null;
-    let WfDef = null;
-    try {
-      if (ctx.rpc?.register) {
-        const mod = await import("../shared/rpc.ts");
-        WfDef = mod.Wf;
-        rpcReg = await ctx.rpc.register(WfDef, {
-          state: async (input) => {
-            const st = await load(input?.sessionID);
-            if (!st) return { sessionID: input?.sessionID ?? null, active: false };
-            return {
-              sessionID: st.sessionID,
-              active: true,
-              slug: st.slug ?? "",
-              phase: st.phase ?? null,
-              rounds: st.rounds ?? {},
-              testPlanWritten: !!st.testPlanWritten,
-              testReportVerdict: st.testReportVerdict ?? null,
-              artifacts: st.artifacts ?? {},
-              updatedAt: st.updatedAt ?? null,
-            };
-          },
-          list: async (input) => ({ sessions: await scanStates(input?.projectID ?? null, input?.directory ?? null) }),
-        });
-      } else rpcErr = "ctx.rpc 不可用";
-    } catch (e) {
-      rpcErr = String(e?.message ?? e);
-    }
-
-    const emitUpdated = async (st) => {
-      try {
-        await rpcReg?.events?.emit("updated", {
-          sessionID: st.sessionID,
-          slug: st.slug ?? "",
-          phase: st.phase ?? null,
-          rounds: st.rounds ?? {},
-        });
-      } catch { /* 事件失败不影响主流程 */ }
-    };
+    // ── M8-a：RPC 桥（TUI 侧边栏读状态 + 事件刷新，见 rpc-bridge.js）──
+    const { rpcReg, rpcErr, WfDef, emitUpdated } = await createRpcBridge(ctx, { load, scanStates });
 
     const transition = async (sessionID, cmd, text) => {
       const flow = FLOWS[cmd];
@@ -151,150 +90,14 @@ export default {
       return guidance(flow.to, st, LIMS);
     };
 
-    // ── M3：wf_write_artifact 工具 ────────────────────────────────
-    const tools = ctx.tool.transform((draft) => {
-      const namesPromise = Promise.resolve(draft.list?.()).catch(() => null);
-      draft.add({
-        name: "wf_write_artifact",
-        description:
-          "把 wf 工作流产物写入 <项目>/.workflow/<slug>/。kind 决定文件名：" +
-          Object.keys(KIND_FILES).join(" | ") +
-          "。循环类产物（plan-review/build-review）自动按当前轮次编号。",
-        input: {
-          type: "object",
-          properties: {
-            kind: { type: "string", enum: Object.keys(KIND_FILES), description: "产物类型" },
-            content: { type: "string", description: "完整文件内容" },
-          },
-          required: ["kind", "content"],
-        },
-        options: { codemode: false },
-        execute: async (args, context) => {
-          try {
-            await probeOnce(context?.sessionID, "tool-probe", {
-              argsKeys: Object.keys(args ?? {}),
-              contextKeys: Object.keys(context ?? {}),
-              sessionID: context?.sessionID,
-              directory: context?.directory,
-            });
-            await logToolsOnce(namesPromise, context?.sessionID);
-            const kind = String(args?.kind ?? "");
-            const content = typeof args?.content === "string" ? args.content : String(args?.content ?? "");
-            const mk = KIND_FILES[kind];
-            if (!mk) return { content: `❌ 未知 kind=${kind}（可用：${Object.keys(KIND_FILES).join(" | ")}）` };
-            const st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
-            if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请先由用户执行 /wf:intake <slug>。" };
-            // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
-            const dir = await resolveProjectDir(st, context?.sessionID);
-            const file = mk(st);
-            const target = `${dir}/.workflow/${st.slug}/${file}`;
-            fs.mkdirSync(`${dir}/.workflow/${st.slug}`, { recursive: true });
-            fs.writeFileSync(target, content.endsWith("\n") ? content : `${content}\n`);
-            st.artifacts = st.artifacts ?? {};
-            st.artifacts[file] = { at: new Date().toISOString(), bytes: fs.statSync(target).size };
-            if (kind === "test-plan") st.testPlanWritten = true;
-            if (kind === "test-report") {
-              st.testReportVerdict = parseVerdict(content); // P0-b：解析提取至 lib
-            }
-            logAdd(st, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: st.phase, to: st.phase, ok: true, note: file });
-            await save(st);
-            await emitUpdated(st);
-            let note = `✅ [${VERSION}] 已写入 ${target}（${st.artifacts[file].bytes} bytes）`;
-            if (kind === "test-report" && !hasStrictVerdictLine(content)) {
-              note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
-            }
-            return { content: note };
-          } catch (e) {
-            return { content: `❌ wf_write_artifact 失败：${e?.message ?? e}` };
-          }
-        },
-      });
-    });
+    // ── M3：wf_write_artifact 工具（见 artifact-tool.js）──────────
+    const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
 
-    // P1：阶段越权阻断记账（gate:block 进审计轨迹，供 /wf:diagnose 取证；落盘失败不影响阻断）
-    const logBlock = async (st, tool, detail) => {
-      logAdd(st, { at: new Date().toISOString(), cmd: "gate:block", tool, detail, from: st.phase, to: st.phase, ok: false, note: "blocked" });
-      try { await save(st); } catch { }
-    };
+    // ── M4：阶段越权硬阻断（planning/review 拒业务代码写；shell 门控与实测结论见 guard-hook.js）──
+    const hookReg = registerGuardHook(ctx, { resolveState, isAllowed, allowHint, probeOnce, save });
 
-    // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
-    const hookReg = ctx.tool.hook("execute.before", async (input, output) => {
-      try {
-        await probeOnce(input?.sessionID, "hook-probe", {
-          inputKeys: Object.keys(input ?? {}),
-          outputKeys: Object.keys(output ?? {}),
-          tool: input?.tool, sessionID: input?.sessionID, callID: input?.callID,
-        });
-        // M10-c v2：shell 也经 tool hook 门控（实测 ctx.shell.hook 的 input 仅 {command,cwd,timeout,shell,env}，
-        // 无 sessionID/agent 无法按会话管辖；tool hook 对 tool=="shell" 携带 input.input.command + 会话身份）
-        const toolName = String(input?.tool);
-        if (!EDIT_TOOLS.has(toolName) && toolName !== "shell") return;
-        const st = await resolveState(input?.sessionID, input?.agent); // M10-b：wf/* 子会话同样受阶段闸门管辖
-        if (!st || !BLOCKING_PHASES.has(st.phase)) return;
-        if (toolName === "shell") {
-          const cmd = String(input?.input?.command ?? "");
-          const base = String(input?.input?.cwd ?? st.directory ?? "");
-          for (const tRaw of shellWriteTargets(cmd)) { // P0-b：解析提取至 lib
-            if (tRaw.startsWith("~")) continue; // 家目录视为项目外
-            const abs = (tRaw.startsWith("/") ? tRaw : `${base}/${tRaw}`).replace(/\/{2,}/g, "/");
-            if (base && abs.startsWith(`${base}/`) && !isAllowed(abs)) {
-              await logBlock(st, toolName, tRaw); // P1：阻断记账，供 /wf:diagnose 取证
-              throw new Error(
-                `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。`
-              );
-            }
-          }
-          return;
-        }
-        // 实测（hook-probe.json）：工具入参在 input.input，output.args 形状不存在
-        const paths = extractPaths(String(input?.tool), input?.input ?? output?.args);
-        for (const p of paths) {
-          if (!isAllowed(p)) {
-            await logBlock(st, String(input?.tool), p); // P1：阻断记账
-            throw new Error(
-              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
-              `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。`
-            );
-          }
-        }
-      } catch (e) {
-        const msg = String(e?.message ?? e);
-        if (msg.includes(GATE_ERR)) throw e; // 关卡异常向上抛 = 拦截工具调用
-        // 其它内部异常不阻断（fail-open），已在 §11 声明
-      }
-    });
-    // M10-c 实测结论（shell-probe.json）：ctx.shell.hook("create.before") 的 input 仅
-    // {command,cwd,timeout,shell,env}，**无 sessionID/agent** → 无法按会话/agent 管辖；
-    // shell 门已并入上方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
-
-    // ── P3：superpowers 式自动激活提示（fail-soft）────────────────────
-    // 本宿主实测确认的仅 ctx.tool.hook；消息观察 API 形状未验证 → 多形态防御式
-    // 尝试注册，首次回调落 _debug/chat-probe.json 供真机确认。注册失败/从未触发
-    // = 没有自动激活，不影响任何其他功能。opt.hint === false 整体禁用。
-    const hinted = new Set(); // 进程内幂等（entry.get 形状未验证，不去重读回）
-    const onChatMessage = async (input, output) => {
-      try {
-        const sid = input?.sessionID ?? output?.message?.sessionID ?? output?.sessionID;
-        if (!sid || hinted.has(sid)) return;
-        await probeOnce(sid, "chat-probe", {
-          inputKeys: Object.keys(input ?? {}), outputKeys: Object.keys(output ?? {}),
-        });
-        const parts = output?.parts ?? output?.message?.parts ?? input?.parts;
-        const text = (Array.isArray(parts) ? parts.map((p) => p?.text ?? "").join(" ") : "")
-          || promptText(output?.text ?? input?.text ?? "");
-        if (!isHintWorthy(text)) return;
-        if (await resolveState(sid)) return; // 已有工作流状态 → 不打扰
-        hinted.add(sid);
-        await E.put({ sessionID: sid, key: HINT_KEY, value: HINT_ENTRY });
-      } catch { /* 绝不阻断消息流 */ }
-    };
-    let chatReg = null;
-    if (opt.hint !== false) {
-      for (const [api, name] of [[ctx.chat, "message"], [ctx.chat, "chat.message"], [ctx.session, "chat.message"]]) {
-        if (typeof api?.hook !== "function") continue;
-        try { chatReg = api.hook(name, onChatMessage); if (chatReg) break; } catch { }
-      }
-    }
+    // ── P3：superpowers 式自动激活提示（fail-soft，见 hint.js）────────
+    const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
 
     const commands = ctx.command.transform((editor) => {
       const add = (def) => editor.add(def);
