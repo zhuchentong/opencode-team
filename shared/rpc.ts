@@ -62,6 +62,7 @@ export const Wf = Rpc.define({
     },
     // P2 主轨通道：TUI 本地命令经此执行任意 /wf:*（返回值不丢——methods 通道契约可用）。
     // 服务端跑与 command execute 相同的编排（状态推进 + guidance + reports 发布），仅不注入聊天。
+    // at 与 reports 行/事件同一时间戳：TUI 本地渲染据此登记去重键，防事件/轮询通道二次弹 toast。
     exec: {
       input: {
         type: "object",
@@ -71,7 +72,7 @@ export const Wf = Rpc.define({
       },
       output: {
         type: "object",
-        properties: { text: { type: "string" } },
+        properties: { text: { type: "string" }, at: { type: "string" } },
         required: ["text"],
         additionalProperties: true,
       },

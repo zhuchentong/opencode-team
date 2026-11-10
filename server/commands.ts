@@ -112,11 +112,12 @@ export async function registerCommands(ctx: any, deps: any) {
   if (runner) {
     runner.run = async (name: string, a: any) => {
       const base = byName[name];
-      if (!base) return `❌ 未知命令：${name}`;
+      if (!base) return { text: `❌ 未知命令：${name}`, at: "" };
       const out = await base(a);
       const text = typeof out === "string" ? out : "";
-      if (text) await publishOutput(String(a?.sessionID ?? ""), text, new Date().toISOString(), name);
-      return text;
+      const at = new Date().toISOString();
+      if (text) await publishOutput(String(a?.sessionID ?? ""), text, at, name);
+      return { text, at };
     };
   }
 

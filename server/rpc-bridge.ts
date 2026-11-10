@@ -43,13 +43,16 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
         // 未知命令不抛错（抛错 client 只见 rpc.internal，原因被吞——quota 教训）；返回错误文案。
         exec: async (input: any) => {
           try {
-            const out = await runner?.run?.(String(input?.name ?? ""), {
+            const res = await runner?.run?.(String(input?.name ?? ""), {
               sessionID: String(input?.sessionID ?? ""),
               prompt: { text: String(input?.prompt ?? "") },
             });
-            return { text: typeof out === "string" ? out : `❌ 未知命令：${String(input?.name ?? "")}` };
+            if (res && typeof res === "object" && typeof (res as any).text === "string") {
+              return { text: (res as any).text, at: String((res as any).at ?? "") };
+            }
+            return { text: `❌ 未知命令：${String(input?.name ?? "")}`, at: "" };
           } catch (e) {
-            return { text: `❌ 命令执行失败：${String((e as Error)?.message ?? e)}` };
+            return { text: `❌ 命令执行失败：${String((e as Error)?.message ?? e)}`, at: "" };
           }
         },
       });

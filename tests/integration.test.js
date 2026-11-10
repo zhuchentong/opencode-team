@@ -286,6 +286,7 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   const st = await rpcImpl.exec({ sessionID: "ses_rep", name: "wf:status", prompt: "" });
   assert.equal(typeof st.text, "string");
   assert.ok(st.text.length > 0, "exec 返回非空输出");
+  assert.ok(typeof st.at === "string" && st.at.length >= 20, "exec 返回 at（去重键）");
   assert.equal(m.prompts.length, promptsBefore, "exec 通道不得注入聊天（本地渲染）");
   assert.equal(repOf("ses_rep").text, st.text, "exec 同样发布 reports（审计+轮询兜底）");
   assert.match((await rpcImpl.exec({ sessionID: "ses_rep", name: "wf:nope", prompt: "" })).text, /未知命令/);
