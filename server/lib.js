@@ -128,10 +128,10 @@ export const slugify = (t) =>
 // <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
-export function entryValue(st) {
+export function entryValue(st, limits = LIMITS) {
   const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
   if (st.phase === "done") return `${head}\n${DONE_ENTRY}`;
-  return `${head}\n${guidance(st.phase, st)}`;
+  return `${head}\n${guidance(st.phase, st, limits)}`;
 }
 
 // 实测（M2-a）：命令 args.prompt 是对象（含 text 等字段），不是字符串
@@ -146,7 +146,8 @@ export const promptText = (p) => {
 //       调用方随后设 st.phase=FLOWS[cmd].to、st.updatedAt，并负责 log/save/inject/emit。
 // 拒绝 → 返回 { ok: false, note, msg }（拒绝发生在计数之前，不消耗循环额度）。
 // st 须带 rounds: { plan_review, build_review, test_fix }。
-export function evaluateTransition(cmd, st, text, at = new Date().toISOString()) {
+// P2：limits 可按实例覆盖（options.limits），默认取模块 LIMITS。
+export function evaluateTransition(cmd, st, text, at = new Date().toISOString(), limits = LIMITS) {
   const flow = FLOWS[cmd];
   const from = st.phase ?? null;
 
@@ -168,10 +169,11 @@ export function evaluateTransition(cmd, st, text, at = new Date().toISOString())
   // 而 wf:fix 恒为 testing→fixing 不相等 → test_fix 永远=1，上限形同虚设）。
   // 首次进入=1（首次审核 / 首次执行审核 / 首次修复），重复进入递增，达上限拒绝。
   if (flow.counter) {
-    if ((st.rounds[flow.counter] ?? 0) >= LIMITS[flow.counter]) {
+    const cap = limits[flow.counter] ?? LIMITS[flow.counter];
+    if ((st.rounds[flow.counter] ?? 0) >= cap) {
       return {
         ok: false, note: "limit-exceeded",
-        msg: `🛑 硬关卡：${flow.counter} 已 ${st.rounds[flow.counter]}/${LIMITS[flow.counter]} 轮，禁止继续循环。请停止自动化流程并向用户上报，由用户裁决。`,
+        msg: `🛑 硬关卡：${flow.counter} 已 ${st.rounds[flow.counter]}/${cap} 轮，禁止继续循环。请停止自动化流程并向用户上报，由用户裁决。`,
       };
     }
     st.rounds[flow.counter] += 1;
@@ -202,7 +204,8 @@ export function evaluateTransition(cmd, st, text, at = new Date().toISOString())
   return { ok: true };
 }
 
-export function guidance(phase, st) {
+export function guidance(phase, st, limits = LIMITS) {
+  const L = { ...LIMITS, ...(limits ?? {}) };
   const s = st.slug || "(未定)";
   const r = st.rounds ?? {};
   switch (phase) {
@@ -218,7 +221,7 @@ export function guidance(phase, st) {
       `完成 → 执行 /wf:review`,
     ].join("\n");
     case "review": return [
-      `【wf 工作流｜review（第 ${r.plan_review}/${LIMITS.plan_review} 轮）】slug=${s}`,
+      `【wf 工作流｜review（第 ${r.plan_review}/${L.plan_review} 轮）】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（.workflow/、.learnings/ 与测试目录除外）。`,
       `并行委派：wf/planner-reviewer（五角度，审 plan.md）∥ wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，不写任何代码文件)。`,
       `任一不通过 → 执行 /wf:plan 回规划并带意见委派 wf/planner，再 /wf:review；双通道通过 → 执行 /wf:assign；超限 → 停下问用户`,
@@ -244,7 +247,7 @@ export function guidance(phase, st) {
       `合并完成 → 执行 /wf:review-build`,
     ].join("\n");
     case "build_review": return [
-      `【wf 工作流｜build_review（第 ${r.build_review}/${LIMITS.build_review} 轮）】slug=${s}`,
+      `【wf 工作流｜build_review（第 ${r.build_review}/${L.build_review} 轮）】slug=${s}`,
       `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）。`,
       `有遗漏 → 执行 /wf:build 返工（重派 wf/builder），修完 /wf:reconcile → /wf:review-build；通过 → 执行 /wf:test；超限 → 停下问用户`,
     ].join("\n");
@@ -254,7 +257,7 @@ export function guidance(phase, st) {
       `PASS → 执行 /wf:done；FAIL → 执行 /wf:fix`,
     ].join("\n");
     case "fixing": return [
-      `【wf 工作流｜fixing（第 ${r.test_fix}/${LIMITS.test_fix} 轮）】slug=${s}`,
+      `【wf 工作流｜fixing（第 ${r.test_fix}/${L.test_fix} 轮）】slug=${s}`,
       `同 lane 失败优先回原 builder（复用 sessionID，原 worktree 内修，修完再合并）；跨 lane/根因不明 → wf/fixer。`,
       `修改过 worktree 则先 /wf:reconcile 回主树合并，再执行 /wf:test；超限 → 停下问用户`,
     ].join("\n");
@@ -267,8 +270,30 @@ export function guidance(phase, st) {
   }
 }
 
+// ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────
+// WF_ROLES = 工作流契约的 7 个 subagent 角色（leader 除外，leader 是当前会话）。
+// agents 形状容错：数组或 {agents}，项取 name/id 与 model.providerID/model.id。
+export const WF_ROLES = ["wf/planner", "wf/planner-reviewer", "wf/tester", "wf/builder",
+  "wf/builder-reviewer", "wf/fixer", "wf/learner"];
+export function pingReport(agents) {
+  const arr = Array.isArray(agents) ? agents : (agents?.agents ?? []);
+  const norm = arr.map((a) => ({
+    name: String(a?.name ?? a?.id ?? ""),
+    model: a?.model?.providerID ? `${a.model.providerID}/${a.model.id ?? "?"}` : null,
+  }));
+  const found = norm.filter((n) => n.name.startsWith("wf/"));
+  const missing = WF_ROLES.filter((r) => !found.some((f) => f.name === r));
+  const extra = found.filter((f) => !WF_ROLES.includes(f.name)).map((f) => f.name);
+  return [
+    `wf 角色：${found.length}/${WF_ROLES.length} 已注册`,
+    ...found.map((f) => `  ${f.name} model=${f.model ?? "(继承会话模型)"}`),
+    ...(missing.length ? [`  ⚠️ 缺失：${missing.join(", ")}`] : []),
+    ...(extra.length ? [`  ℹ️ 额外：${extra.join(", ")}`] : []),
+  ].join("\n");
+}
+
 // ── P1：wf:diagnose 报告生成（纯函数，可测）────────────────────────
-// facts = { version, artifactFiles: 磁盘上实际存在的产物名[], entryErr?, rpcErr? }
+// facts = { version, artifactFiles: 磁盘上实际存在的产物名[], entryErr?, rpcErr?, limits? }
 // 证据来源：st.log（每次流转/拒绝/阻断都记账）+ 关卡记账 + 磁盘对账。
 export function diagnoseReport(st, facts = {}) {
   const out = [];
@@ -294,8 +319,8 @@ export function diagnoseReport(st, facts = {}) {
   }
   for (const e of blocks.slice(-5)) out.push(`  ⛔ 越权阻断：${e.tool ?? e.cmd ?? "?"} ${e.detail ?? ""}`);
 
-  // 2) 轮次余量
-  for (const [k, limit] of Object.entries(LIMITS)) {
+  // 2) 轮次余量（facts.limits 支持实例覆盖）
+  for (const [k, limit] of Object.entries({ ...LIMITS, ...(facts.limits ?? {}) })) {
     const used = r[k] ?? 0;
     if (used >= limit) out.push(`  🛑 ${k} 已 ${used}/${limit} 轮：禁止继续循环，需用户裁决`);
   }

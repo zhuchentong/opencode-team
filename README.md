@@ -42,7 +42,7 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 /wf:done                 # done：验收关卡（PASS）+ 并行 learner 复盘
 ```
 
-辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。
+辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:ping`（角色注册与模型健康检查）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。
 
 ## 架构
 
@@ -66,6 +66,24 @@ tui/index.tsx     TUI 侧边栏（阶段进度、轮次、关卡、产物）
 | `probe` | `true` | 首次触发探针（`_debug/*.json` 记录宿主 API 形状） |
 | `allowMarkers` | `[]` | 追加放行路径片段（合并默认 `.workflow/.learnings/tests/...`） |
 | `allowRegexps` | `[]` | 追加放行正则（字符串形式） |
+| `limits` | — | 覆盖循环上限，如 `{ "plan_review": 2 }`（仅正整数生效，guidance/状态/诊断同步显示） |
+
+## 角色模型路由（待选型）
+
+7 个 `wf/*` 角色由 OpenCode agents（`~/.config/opencode/agents/wf/`）定义。按 omo-slim 的「质量/速度/成本」路由思路，结合本机可用模型的**建议对照表**（未启用，选定后可在 agents 前置配 `model`，或后续由插件 `options.agentModels` 落地）：
+
+| 角色 | 职责 | 选型思路 | 本机候选 |
+|---|---|---|---|
+| leader（当前会话） | 编排/调度/裁决 | 最强推理 | `glm-5.3-flash (high/max)` |
+| wf/planner | 需求分析与任务分解 | 强规划 | `glm-5.3-flash (high)` |
+| wf/planner-reviewer | 计划五角度审查 | 强推理 | `glm-5.3-flash (high)` |
+| wf/tester | 可行性/红测试/验收 | 可靠编码+测试素养 | `mimo-v2.6-pro` |
+| wf/builder | worktree 内 TDD 执行 | 快而稳的执行模型 | `qwen3.8-flash` / `mimo-v2.6-flash` |
+| wf/builder-reviewer | 完成度/质量审核 | 强推理 | `glm-5.3-flash (high)` |
+| wf/fixer | 跨 lane 修复 | 强调试 | `glm-5.3-flash (max)` |
+| wf/learner | 复盘沉淀 | 便宜快速 | `mimo-v2.6-flash` / `qwen3.8-flash` |
+
+`/wf:ping` 可随时查看各角色当前注册状态与生效模型。
 
 ## 观测与诊断
 

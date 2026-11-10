@@ -1,4 +1,6 @@
-// wf-workflow — P1：guidance 写入 instructions entry（entry 每次组装系统提示从存储重渲染，
+// wf-workflow — P2：options.limits 实例覆盖（evaluateTransition/guidance/entryValue/diagnose/status 全链路）；
+// /wf:ping 角色健康检查（ctx.agent 存在则列注册与模型，缺失 fail-soft）。
+// P1：guidance 写入 instructions entry（entry 每次组装系统提示从存储重渲染，
 // 天然抗 compaction，superpowers post-compaction 重注入目标由此实现）；/wf:diagnose 诊断命令
 // （审计拒绝分类/越权阻断取证/产物磁盘对账）；hook 阻断记账 gate:block 进 st.log。
 // P0-a/b：去除 REPO 硬编码（debug 目录按会话解析：options.debugDir → session 项目目录 → cwd）；
@@ -26,7 +28,7 @@ import {
   EDIT_TOOLS, BLOCKING_PHASES, DEFAULT_ALLOW_MARKERS, DEFAULT_ALLOW_RES,
   KIND_FILES, extractPaths, makeAllowChecker, shellWriteTargets,
   parseVerdict, hasStrictVerdictLine, evaluateTransition, guidance, promptText,
-  entryValue, diagnoseReport,
+  entryValue, diagnoseReport, pingReport,
 } from "./lib.js"; // P0-b：纯逻辑单一来源（含 shared/phases.js 的 BLOCKING）
 
 const ENTRY_KEY = "wf.phase";
@@ -59,6 +61,12 @@ export default {
     const allowMarkers = [...DEFAULT_ALLOW_MARKERS, ...(Array.isArray(opt.allowMarkers) ? opt.allowMarkers : [])];
     const allowRes = [...DEFAULT_ALLOW_RES, ...(Array.isArray(opt.allowRegexps) ? opt.allowRegexps.map((s) => new RegExp(s)) : [])];
     const isAllowed = makeAllowChecker(allowMarkers, allowRes);
+    // P2：options.limits 实例覆盖循环上限（仅接受正整数，非法值忽略）
+    const LIMS = { ...LIMITS };
+    for (const k of Object.keys(LIMS)) {
+      const v = Number(opt.limits?.[k]);
+      if (Number.isInteger(v) && v >= 1) LIMS[k] = v;
+    }
     // M10-a：闸门拒绝文案与 allowlist 同源生成（I2：旧硬写文案漏 .learnings/，与实际放行清单漂移）
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
@@ -108,7 +116,7 @@ export default {
       try {
         // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
         // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
-        await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st) });
+        await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st, LIMS) });
         delete st.entryErr;
       } catch (e) {
         st.entryErr = String(e?.message ?? e);
@@ -216,7 +224,7 @@ export default {
       const at = new Date().toISOString();
 
       // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
-      const r = evaluateTransition(cmd, st, text, at);
+      const r = evaluateTransition(cmd, st, text, at, LIMS);
       if (!r.ok) {
         logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
         await save(st);
@@ -237,7 +245,7 @@ export default {
       await emitUpdated(st);
       await inject(st);
       await save(st);
-      return guidance(flow.to, st);
+      return guidance(flow.to, st, LIMS);
     };
 
     // P0-a：工具注册证据延迟到首次工具执行时落盘（原在注册回调内写死 DBG 路径；
@@ -444,7 +452,7 @@ export default {
           return [
             `wf 工作流(${VERSION})状态｜session=${st.sessionID}`,
             `slug=${st.slug || "(未定)"}  phase=${st.phase}`,
-            `rounds: plan_review=${r.plan_review ?? 0}/${LIMITS.plan_review}  build_review=${r.build_review ?? 0}/${LIMITS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMITS.test_fix}`,
+            `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
             `gates: testPlan=${st.testPlanWritten ? "✅" : "❌"}  testReport=${st.testReportVerdict ?? "-"}`,
             `lanes: ${JSON.stringify(st.lanes ?? {})}`,
             `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
@@ -470,7 +478,21 @@ export default {
           dir = dir ?? process.cwd();
           let artifactFiles = [];
           try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch { /* 目录不存在按空处理 */ }
-          return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr });
+          return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS });
+        },
+      });
+      add({
+        name: "wf:ping",
+        description: "健康检查：列出 wf/* 角色 agent 注册状态与模型（只读，fail-soft）",
+        execute: async (a) => {
+          try {
+            if (!ctx.agent?.list) return `wf 角色：宿主未提供 ctx.agent API（v2.2.6 实测以 agent-probe 为准）；可用 @<角色> 手动验证`;
+            const res = await ctx.agent.list();
+            await probeOnce(a?.sessionID, "agent-probe", { shape: Array.isArray(res) ? "array" : Object.keys(res ?? {}) });
+            return pingReport(res);
+          } catch (e) {
+            return `wf 角色查询失败：${e?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
+          }
         },
       });
       add({
@@ -564,7 +586,7 @@ export default {
           let scanRaw = null;
           try { scanRaw = await S.scan({ prefix: STATE_PREFIX }); }
           catch (e) { scanRaw = `ERR:${String(e?.message ?? e)}`; }
-          const out = { dumpedAt: new Date().toISOString(), version: VERSION, state: st, entries, entryKey: ENTRY_KEY, limits: LIMITS, blockingPhases: [...BLOCKING_PHASES], sessProbe, rpcErr, rpcSelf, rpcList, rpcListMine, scanRaw };
+          const out = { dumpedAt: new Date().toISOString(), version: VERSION, state: st, entries, entryKey: ENTRY_KEY, limits: LIMS, blockingPhases: [...BLOCKING_PHASES], sessProbe, rpcErr, rpcSelf, rpcList, rpcListMine, scanRaw };
           const dbg = await debugDirFor(a.sessionID); // P0-a：按会话解析
           try {
             const p = `${dbg}/.workflow/_debug`;

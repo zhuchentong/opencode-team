@@ -8,7 +8,7 @@ import plugin from "../server/index.js";
 
 const DIR = "/tmp/opencode/wf-integ";
 
-const mkCtx = () => {
+const mkCtx = (opts = {}) => {
   const store = new Map();
   const tools = [];
   const cmds = [];
@@ -16,7 +16,7 @@ const mkCtx = () => {
   const removed = [];
   let hookFn = null;
   const ctx = {
-    options: { probe: false }, // 关探针避免写盘噪音
+    options: { probe: false, ...opts }, // 关探针避免写盘噪音
     storage: {
       get: async (k) => store.get(k) ?? null,
       set: async (k, v) => { store.set(k, v); },
@@ -44,7 +44,7 @@ const mkCtx = () => {
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
-const stOf = (m) => m.store.get("wf-workflow/state/ses_i");
+const stOf = (m, sid = "ses_i") => m.store.get(`wf-workflow/state/${sid}`);
 
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(`${DIR}/src`, { recursive: true });
@@ -123,4 +123,35 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   assert.deepEqual(m.removed.at(-1), { sessionID: "ses_i", key: "wf.phase" });
 
   dispose?.();
+});
+
+// P2：options.limits 端到端生效 + wf:ping（ctx.agent 存在/缺失两形态）
+test("options.limits 覆盖端到端：plan_review=1 时第二轮 review 被拒", async () => {
+  const m = mkCtx({ limits: { plan_review: 1 } });
+  const dispose = await plugin.setup(m.ctx);
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_l", prompt: { text: "lim" } });
+  await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
+  const r1 = await cmd(m, "wf:review").execute({ sessionID: "ses_l", prompt: {} });
+  assert.match(r1, /review（第 1\/1 轮）/, "guidance 显示覆盖后上限");
+  await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
+  const r2 = await cmd(m, "wf:review").execute({ sessionID: "ses_l", prompt: {} });
+  assert.match(r2, /plan_review 已 1\/1 轮/);
+  assert.equal(stOf(m, "ses_l").phase, "planning", "拒绝不改阶段");
+  const diag = await cmd(m, "wf:diagnose").execute({ sessionID: "ses_l", prompt: {} });
+  assert.match(diag, /limit-exceeded ×1/);
+  dispose?.();
+});
+
+test("wf:ping：ctx.agent.list 可用 → 注册表；缺失 → fail-soft 文案", async () => {
+  const m = mkCtx();
+  m.ctx.agent = { list: async () => [{ name: "wf/planner", model: { providerID: "p", id: "m" } }] };
+  await plugin.setup(m.ctx);
+  const ping = await cmd(m, "wf:ping").execute({ sessionID: "ses_p", prompt: {} });
+  assert.match(ping, /wf 角色：1\/7 已注册/);
+  assert.match(ping, /⚠️ 缺失：.*wf\/tester/);
+
+  const m2 = mkCtx();
+  await plugin.setup(m2.ctx); // 无 agent API
+  const ping2 = await cmd(m2, "wf:ping").execute({ sessionID: "ses_q", prompt: {} });
+  assert.match(ping2, /宿主未提供 ctx\.agent API/);
 });
