@@ -20,6 +20,7 @@ export function registerCommandTool(ctx: any, deps: any) {
       name: "wf_command",
       description:
         "推进 wf 工作流状态机（等价用户手敲 /wf:*，leader 专用；wf/* 子会话调用会被拒绝）。" +
+        "冷启动铁律（仅 leader 主会话）：本会话无活动任务且用户给出开发任务时，第一步立即调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（slug 从需求提炼，kebab-case），勿等用户手敲 /wf:intake；需求不足以提炼 slug 时先澄清再 intake；普通问答/咨询不开任务。" +
         "name 形如 \"wf:plan\"；prompt = 命令参数（wf:intake 传 slug，wf:lane 传 \"set T01 ses_xxx\"，其余留空）。" +
         "返回该阶段 guidance / 命令输出文本。关卡与循环上限由服务端强制。",
       input: {

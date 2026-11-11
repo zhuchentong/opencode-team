@@ -342,6 +342,11 @@ test("T05 wf_command：leader 推进生效；无行非 intake 拒绝；子会话
   const dispose = await plugin.setup(m.ctx);
   const tc = m.tools.find((t) => t.name === "wf_command");
   assert.ok(tc, "应注册 wf_command 工具");
+  // M16-r30：冷启动铁律锚——真机实证「工具可见+描述提及 intake」不足以触发行为，
+  // description 必须显式祈使「无任务+开发任务→第一步立即 intake」（与宿主 leader.md 同源）
+  assert.match(tc.description, /冷启动铁律/, "description 应含冷启动铁律");
+  assert.match(tc.description, /第一步立即调用 wf_command\(name="wf:intake", prompt="<slug>"\)/, "冷启动动作=立即 intake");
+  assert.match(tc.description, /普通问答/, "防误触：普通问答/咨询不开任务");
   // 无行 + 非 intake → 拒绝
   assert.match((await tc.execute({ name: "wf:plan" }, { sessionID: "ses_w5", agent: "build" })).content,
     /本会话无活动任务/);

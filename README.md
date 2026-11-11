@@ -1,6 +1,6 @@
 # wf-workflow — OpenCode 工作流插件
 
-8 角色 9 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核∥可行性 → 测试设计(含分配) → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*` subagent）由 OpenCode agents 配置提供，本插件负责流程管控（M16-r28：assign 阶段并入 test_design，性能审计落地；M16-r29：阶段纪律——产物错位告警 + 强制重置账实不符告警）。
+8 角色 9 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核∥可行性 → 测试设计(含分配) → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*` subagent）由 OpenCode agents 配置提供，本插件负责流程管控（M16-r28：assign 阶段并入 test_design，性能审计落地；M16-r29：阶段纪律——产物错位告警 + 强制重置账实不符告警；M16-r30：冷启动自动 intake——wf_command 描述注入冷启动铁律，宿主 leader.md/SKILL.md 同步）。
 
 > 架构形态：P0-P6 重设计（2026-11）后的版本——状态层 SQLite、命令双轨输出、TUI 流派 A 渲染、vite/oxlint 工具链。设计依据与宿主契约证据见文末「宿主契约备忘」。
 
@@ -166,6 +166,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 - BLOCKING 阶段 containment（M16-r28）：越权判定仅对**项目内**路径生效（write/edit 与 shell 两分支同源）；`st.directory` 解析不到时按项目内处理（fail-closed 兜底）
 - M16-r28 assign 阶段移除：`wf:test-design.from` 保留 `"assign"` 存量兼容边（`LEGACY_PHASES` 守卫）；卡在 assign 的在途任务下一步指引 = `/wf:test-design`，直接推进即可
 - M16-r29 阶段纪律（真机 auth-login r28 实证：leader 提前委派 reviewer/tester 致产物重复写）：planning/intake guidance 增「禁止提前委派」文案；`wf_write_artifact` 对产物错位（`ARTIFACT_PHASE` 映射）**告警不阻断**（落盘/记账照常）；中途 `!intake` 强制重置清空产物记账时输出账实不符告警（done 后正常换任务、无产物记账不告警）。**边界**：告警仅提示，不强制拦截提前委派——leader 行为约束仍靠 guidance；`lessons` 期望 done，若复盘提前写会告警
+- M16-r30 冷启动自动 intake（真机实证：wf/leader 收到开发任务从不调 wf:intake——宿主 leader.md 无 intake 指令、技能仅触发词加载）：`wf_command` description 注入「冷启动铁律」（无任务+开发任务→第一步立即 intake，slug 从需求提炼；不足先澄清；普通问答不开任务），与宿主 `agents/wf/leader.md`/`skills/wf-workflow/SKILL.md` 同源同步（9 阶段、删 assign）。**边界**：提示词级软约束，非硬拦截——工具可见性本身不足以触发行为（失败会话插件已加载仍不 intake），行为裁决以真机 wf.db 首个 event 为准；宿主文件在仓外，漂移需人工同步
 - hook 内部异常 fail-open（不阻断），关卡异常（含 `GATE_ERR`）才拦截
 - 降级轨消息注入会话历史（context/compaction/generate hook 剥离仅护模型面，用户面保留可读）
 - `wf_command` 子会话判定依赖 agent 名前缀 `wf/*`（2.2.6 真机实证 `session.get` 无 `parentID`）：非 wf 命名的自定义 subagent 可经 `wf:intake` 自开任务——新行挂其自身会话，不污染 leader 行，代价仅面板出现其合法任务行；若需收紧，待宿主暴露父子会话关系后改 parentID 判定
