@@ -5,6 +5,8 @@
 // options:{codemode:false}, execute: async (args, context) => ({ content }) })；实测 context 仅
 // {sessionID, agent, messageID, id, progress, signal}——**无 directory**！项目目录须经
 // ctx.session.get(sessionID).location.directory 取（封装于 state.resolveProjectDir）。
+// P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
+// （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, type FlowLogEntry } from "./lib.ts";
 import { logAdd } from "./state.ts";
@@ -61,6 +63,12 @@ export function registerArtifactTool(ctx: any, deps: any) {
           let note = `✅ [${VERSION}] 已写入 ${target}（${st.artifacts[file].bytes} bytes）`;
           if (kind === "test-report" && !hasStrictVerdictLine(content)) {
             note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
+          }
+          // P4 公告：verdict 指路（与 GATES["wf:done"] 拒绝文案同语义，agent 在 tool output 直接看到）
+          if (kind === "test-report") {
+            note += st.testReportVerdict === "PASS"
+              ? `\n→ 验收 PASS：请用户执行 /wf:done（验收关卡放行）`
+              : `\n→ 验收 ${st.testReportVerdict ?? "UNKNOWN"}：FAIL → 请用户执行 /wf:fix 修复后重跑 /wf:test（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
           }
           return { content: note };
         } catch (e) {

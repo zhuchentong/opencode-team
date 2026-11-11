@@ -6,7 +6,9 @@
 // M10-c 实测结论（shell-probe.json）：ctx.shell.hook("create.before") 的 input 仅
 // {command,cwd,timeout,shell,env}，**无 sessionID/agent** → 无法按会话/agent 管辖；
 // shell 门并入下方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets } from "./lib.ts";
+// P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
+// 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, NEXT } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
 export function registerGuardHook(ctx: any, deps: any) {
@@ -17,6 +19,9 @@ export function registerGuardHook(ctx: any, deps: any) {
     logAdd(st, { at: new Date().toISOString(), cmd: "gate:block", tool, detail, from: st.phase, to: st.phase, ok: false, note: "blocked" });
     try { await save(st); } catch { }
   };
+
+  // P4：下一步提示（NEXT 表与流转指引同源，防文案漂移）
+  const nextHint = (phase: string) => `当前阶段「${phase}」下一步：${NEXT[phase] ?? "见工作流指引"}（用户执行）。`;
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
   return ctx.tool.hook("execute.before", async (input: any, output: any) => {
@@ -41,7 +46,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           if (base && abs.startsWith(`${base}/`) && !isAllowed(abs)) {
             await logBlock(st, toolName, tRaw); // P1：阻断记账，供 /wf:diagnose 取证
             throw new Error(
-              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。`
+              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。${nextHint(st.phase)}`
             );
           }
         }
@@ -54,7 +59,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           await logBlock(st, String(input?.tool), p); // P1：阻断记账
           throw new Error(
             `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
-            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。`
+            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。${nextHint(st.phase)}`
           );
         }
       }

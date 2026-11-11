@@ -104,7 +104,7 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   // 3) hook 阻断业务代码编辑并记账 gate:block
   await assert.rejects(
     () => m.hook()({ tool: "edit", sessionID: "ses_i", agent: "build", input: { path: `${DIR}/src/app.tsx` } }, {}),
-    (e) => /硬关卡：阶段「planning」/.test(String(e.message)),
+    (e) => /硬关卡：阶段「planning」/.test(String(e.message)) && /下一步：\/wf:review/.test(String(e.message)),
   );
   const blocks = stOf(m).log.filter((e) => e.note === "blocked");
   assert.equal(blocks.length, 1);
@@ -143,9 +143,11 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
     await cmd(m, c).execute({ sessionID: "ses_i", prompt: {} });
   }
   // 无结论 report → done 被拒；PASS report → 通过
-  await tool(m).execute({ kind: "test-report", content: "没有结论行" }, { sessionID: "ses_i", agent: "wf/tester" });
+  const trU = await tool(m).execute({ kind: "test-report", content: "没有结论行" }, { sessionID: "ses_i", agent: "wf/tester" });
+  assert.match(trU.content, /→ 验收 UNKNOWN/); // P4 公告：tool output 指路下一步
   assert.match(await cmd(m, "wf:done").execute({ sessionID: "ses_i", prompt: {} }), /验收关卡未过/);
-  await tool(m).execute({ kind: "test-report", content: "**结论**: PASS\n全绿" }, { sessionID: "ses_i", agent: "wf/tester" });
+  const trP = await tool(m).execute({ kind: "test-report", content: "**结论**: PASS\n全绿" }, { sessionID: "ses_i", agent: "wf/tester" });
+  assert.match(trP.content, /→ 验收 PASS/); // P4 公告
   await cmd(m, "wf:done").execute({ sessionID: "ses_i", prompt: {} });
   assert.equal(stOf(m).phase, "done");
 

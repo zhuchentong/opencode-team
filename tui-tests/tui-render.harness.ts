@@ -59,8 +59,10 @@ function makeCtx() {
   const slots: Record<string, (props: any) => any> = {};
   const keymaps: any[] = [];
   let listSessions: any[] = [];
-  const listeners: Array<{ name: string; cb: (data?: any) => void }> = [];
+  const listeners: Array<{ name: string; cb: (data?: any) => void; opts?: any }> = [];
   const toasts: any[] = [];
+  const notifies: any[] = [];
+  const connCbs: any[] = [];
   const dataCbs: any[] = [];
   let stateReply: any = { active: false, slug: "", phase: null };
   let lastExec: any = null;
@@ -82,14 +84,15 @@ function makeCtx() {
           state: async (_input: any) => stateReply,
           list: async (_input: any) => ({ sessions: listSessions }),
           exec: async (input: any) => { lastExec = input; return { text: "exec 报告", at: new Date().toISOString() }; },
-          events: { on: (name: string, cb: () => void) => { listeners.push({ name, cb }); return () => { }; } },
+          events: { on: (name: string, cb: () => void, opts?: any) => { listeners.push({ name, cb, opts }); return () => { }; } },
         };
       },
     },
-    data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) }, listen: (cb: any) => { dataCbs.push(cb); return () => { }; } },
+    attention: { notify: (n: any) => { notifies.push(n); } },
+    data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) }, listen: (cb: any) => { dataCbs.push(cb); return () => { }; }, on: (type: string, cb: any) => { if (type === "server.connected") connCbs.push(cb); return () => { }; } },
   };
   return {
-    ctx, slots, keymaps, listeners, toasts, dataCbs, editor,
+    ctx, slots, keymaps, listeners, toasts, dataCbs, editor, notifies, connCbs,
     setSessions: (s: any[]) => { listSessions = s; },
     setState: (s: any) => { stateReply = s; },
     getExec: () => lastExec,
@@ -128,6 +131,9 @@ console.log(`插件 id: ${t.id}`);
   // render 顶层零 effect 创建（纯计算上下文禁区）、零同步外部调用（数据拉取经 microtask/timer/事件）
   ok("P4 无 effect 创建（P3a 偏离①回归禁止）", !src.includes("createEffect("));
   ok("P4 无 untrack 包裹（P3a 偏离①配套禁止）", !src.includes("untrack("));
+  ok("P4 通知层①server.connected 重拉存在", src.includes('"server.connected"'));
+  ok("P4 通知层②attention.notify 接入存在", src.includes("attention"));
+  ok("P4 通知层③AbortSignal 统一订阅存在", src.includes("ac.abort()"));
 }
 
 // ── P5：挂载渲染——render 返回单一元素 + testRender 帧不崩 ───────────
@@ -270,6 +276,40 @@ console.log(`插件 id: ${t.id}`);
     await setup.dispose();
   } catch (e: any) {
     ok("P9 return 拦截不崩", false, e?.message);
+  }
+}
+
+// ── P10：P4 通知层——server.connected 重拉 + attention.notify + AbortSignal ──
+{
+  const { ctx, slots, listeners, toasts, notifies, connCbs, setState } = makeCtx();
+  const at1 = new Date().toISOString();
+  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "连接初拉报告", at: at1 } });
+  cleanups.push(t.setup(ctx as any)!);
+  const sidebarRender = slots["sidebar.content"];
+  try {
+    const setup = await testRender(() => sidebarRender({ sessionID: "ses_p10" }), { width: 50, height: 24 });
+    await setup.flush();
+    await sleep(80);
+    ok("P10 events.on 订阅携带 AbortSignal", listeners.some((l) => l.opts && l.opts.signal && typeof l.opts.signal.aborted === "boolean"),
+      `opts=${JSON.stringify(listeners.map((l) => ({ n: l.name, hasSig: !!l.opts?.signal })))}`);
+    ok("P10 已订阅 server.connected", connCbs.length >= 1);
+    ok("P10 初拉报告 toast 且非重要不 notify", toasts.some((x) => x.message === "连接初拉报告") && notifies.length === 0);
+    // 模拟断线窗口：服务端更新报告（⚠️ 重要信号）但事件回调不到——重连信号触发重拉必达
+    const at2 = new Date(Date.now() + 1000).toISOString();
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "⚠️ 断线窗口报告", at: at2 } });
+    connCbs.forEach((cb) => cb());
+    await sleep(80);
+    ok("P10 server.connected 重拉送达窗口期报告", toasts.some((x) => x.message === "⚠️ 断线窗口报告"));
+    ok("P10 重要信号 → attention.notify", notifies.some((n) => String(n.message).includes("断线窗口报告")), JSON.stringify(notifies));
+    // 普通信号只 toast 不 notify
+    const at3 = new Date(Date.now() + 2000).toISOString();
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "普通报告", at: at3 } });
+    connCbs.forEach((cb) => cb());
+    await sleep(80);
+    ok("P10 普通报告 toast 且不触发 notify", toasts.some((x) => x.message === "普通报告") && notifies.length === 1, `notifies=${notifies.length}`);
+    await setup.dispose();
+  } catch (e: any) {
+    ok("P10 通知层不崩", false, e?.message);
   }
 }
 
