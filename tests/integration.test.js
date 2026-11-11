@@ -422,3 +422,34 @@ test("report 广播：命令输出经 RPC report 事件广播且返回值保留"
   assert.equal(repOf("ses_rep").text, "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。");
   dispose?.();
 });
+
+test("M16-r29 阶段纪律：planning 提前写 plan-review 告警不阻断；review 归位无告警；中途 !intake 重置账实不符告警", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_pd";
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "pd" } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} }); // → planning
+  // 提前委派 reviewer：planning 阶段写 plan-review → 告警，但落盘/记账照常
+  const early = await tool(m).execute({ kind: "plan-review", content: "# 审核" }, { sessionID: sid, agent: "wf/planner-reviewer" });
+  assert.match(early.content, /已写入/);
+  assert.match(early.content, /产物阶段错位/);
+  assert.ok(stOf(m, sid).artifacts["plan-review-r1.md"], "告警不阻断记账");
+  // 归位：review 阶段写 test-plan → 无错位告警
+  await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
+  const ok = await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });
+  assert.match(ok.content, /已写入/);
+  assert.ok(!/产物阶段错位/.test(ok.content), "review 阶段 test-plan 归位不告警");
+  // 中途强制重置（review≠done 且有产物记账）→ 账实不符告警
+  const reset = await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "!new-task" } });
+  assert.match(reset, /强制重置已清空/);
+  assert.match(reset, /账实不符/);
+  assert.deepEqual(stOf(m, sid).artifacts, {}, "重置清空记账");
+  // 对照组：中途重置但无产物记账 → 不告警（preArtifacts 为空）
+  const m2 = mkCtx();
+  const d2 = await plugin.setup(m2.ctx);
+  await cmd(m2, "wf:intake").execute({ sessionID: "ses_pd2", prompt: { text: "a" } });
+  await cmd(m2, "wf:plan").execute({ sessionID: "ses_pd2", prompt: {} }); // planning，未写任何产物
+  const noArt = await cmd(m2, "wf:intake").execute({ sessionID: "ses_pd2", prompt: { text: "!b" } });
+  assert.ok(!/强制重置已清空/.test(noArt), "无产物记账的中途重置不告警");
+  dispose?.(); d2?.();
+});

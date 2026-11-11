@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r28";
+export const VERSION = "M16-r29";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -301,12 +301,14 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
       `1) 与用户澄清需求；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
       `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
     ].join("\n");
     case "planning": return [
       `【wf 工作流｜planning】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
       `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。`,
+      `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       `完成 → wf_command(name="wf:review")`,
     ].join("\n");
@@ -368,6 +370,23 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     ].join("\n");
     default: return `【wf 工作流】阶段 ${phase}`;
   }
+}
+
+// ── M16-r29：阶段纪律——产物期望阶段映射 + 错位告警（纯函数可测）────────────
+// 真机实证（auth-login r28）：leader 把 reviewer/tester 提前塞进 planning，产物重复写
+// 浪费 ~15-20m。此处只做「告警不阻断」：让错位在 tool output 可见，引导 leader 归位。
+export const ARTIFACT_PHASE: Record<string, string> = {
+  plan: "planning",
+  "plan-review": "review",
+  "test-plan": "review",
+  "build-review": "build_review",
+  "test-report": "testing",
+  lessons: "done",
+};
+export function artifactPhaseWarning(kind: string, phase: string | null | undefined): string | null {
+  const expected = ARTIFACT_PHASE[kind];
+  if (!expected || !phase || phase === expected) return null;
+  return `⚠️ 产物阶段错位：${kind} 应在「${expected}」阶段产出，当前「${phase}」——疑似提前委派（会重复写、浪费工时）。请归位：各 wf 角色只在对应阶段委派（planner→planning、reviewer/tester→review）。`;
 }
 
 // ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────

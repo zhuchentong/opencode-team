@@ -70,6 +70,8 @@ export async function registerCommands(ctx: any, deps: any) {
       };
       const from = st.phase ?? null;
       const at = new Date().toISOString();
+      // M16-r29：强制重置前产物记账快照（供中途 !intake 重置后的账实不符告警）
+      const preArtifacts = cmd === "wf:intake" ? Object.keys(st.artifacts ?? {}) : [];
 
       // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
       const r = evaluateTransition(cmd, st, text, at, LIMS);
@@ -100,7 +102,12 @@ export async function registerCommands(ctx: any, deps: any) {
         return `❌ 状态保存失败（${saved.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
       }
       await emitUpdated(st);
-      return guidance(flow.to, st, LIMS);
+      let out = guidance(flow.to, st, LIMS);
+      // M16-r29：中途强制重置（!intake）清空产物记账——账实不符告警（done 后正常换任务不告警）
+      if (cmd === "wf:intake" && from && from !== "done" && preArtifacts.length > 0) {
+        out += `\n⚠️ 强制重置已清空 ${preArtifacts.length} 项产物记账（${preArtifacts.join(", ")}）——磁盘文件仍在 .workflow/${st.prev?.slug ?? "旧slug"}/，新任务账实不符；如需沿用请先对账（/wf:diagnose）。`;
+      }
+      return out;
     }
   };
 
