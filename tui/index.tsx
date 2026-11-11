@@ -59,8 +59,8 @@ const listLine = (x: any) => {
 
 // 文案模板与 r29f 逐字一致：恒定 20 行（分隔线/slug/阶段/进度/轮次/关卡/产物），空槽 " "
 const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any) => {
-  const t: string[] = new Array(ROWS).fill(" ");
-  const c: any[] = new Array(ROWS).fill(T.text.muted);
+  const t: string[] = Array.from({ length: ROWS }, () => " ");
+  const c: any[] = Array.from({ length: ROWS }, () => T.text.muted);
   t[0] = "── wf ──────────────";
   t[ROWS - 1] = "──────────────────────";
   if (err) {

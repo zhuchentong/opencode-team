@@ -8,7 +8,7 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, type FlowLogEntry } from "./lib.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
 export function registerArtifactTool(ctx: any, deps: any) {

@@ -144,7 +144,7 @@ export function createStore(ctx: any) {
   const resolveState = async (sessionID: string, agent?: string): Promise<any> => {
     const own = await load(sessionID);
     if (own) return own;
-    if (!/^wf\//.test(String(agent ?? ""))) return null; // 仅 wf/* agent 受项目管辖；普通会话不受影响
+    if (!String(agent ?? "").startsWith("wf/")) return null; // 仅 wf/* agent 受项目管辖；普通会话不受影响
     try {
       const s = await ctx.session.get({ sessionID });
       const pid = s?.projectID;

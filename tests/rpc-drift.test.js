@@ -3,7 +3,6 @@
 // 前提——任何一端形状漂移都让事件/调用静默失联（ERR-20261110-008 教训）。此文件逐字段锁死契约。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
 import { Wf } from "../shared/rpc.ts";
 
 test("RPC 契约快照：id/methods/events 逐字段锁定", () => {

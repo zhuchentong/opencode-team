@@ -96,6 +96,7 @@ export async function registerCommands(ctx: any, deps: any) {
   // 报告经 wait 排空后以 prompt(resume:false, steer, metadata 标记) 注入会话（2.2.6 源码
   // session.ts:187 保证不 wake），配合 context/compaction/generate hook 按标记剥离，
   // 报告不进模型上下文（quota 全套范式）。
+  // eslint-disable-next-line no-control-regex -- 有意：剥终端控制字符（sanitizeDisplayText 同源，quota 教训）
   const sanitizeText = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
   const injectReport = async (sid: string, text: string, cmdName: string, at: string) => {
     try {

@@ -267,7 +267,7 @@ export function guidance(phase: string | null | undefined, st: WfState, limits: 
 }
 
 function guidanceBase(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
-  const L = { ...LIMITS, ...(limits ?? {}) };
+  const L = { ...LIMITS, ...limits };
   const s = st.slug || "(未定)";
   const r: Record<string, number> = st.rounds ?? {};
   switch (phase) {
@@ -398,7 +398,7 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   for (const e of blocks.slice(-5)) out.push(`  ⛔ 越权阻断：${e.tool ?? e.cmd ?? "?"} ${e.detail ?? ""}`);
 
   // 2) 轮次余量（facts.limits 支持实例覆盖）
-  for (const [k, limit] of Object.entries({ ...LIMITS, ...(facts.limits ?? {}) })) {
+  for (const [k, limit] of Object.entries({ ...LIMITS, ...facts.limits })) {
     const used = r[k] ?? 0;
     if (used >= limit) out.push(`  🛑 ${k} 已 ${used}/${limit} 轮：禁止继续循环，需用户裁决`);
   }
