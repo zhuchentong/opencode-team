@@ -14,6 +14,7 @@ import {
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
 } from "./lib.ts";
 import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
+import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
@@ -30,6 +31,15 @@ const stripReports = (event: any) => {
   if (Array.isArray(event?.messages)) {
     event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
   }
+};
+// M16-r31：角色托管漂移守卫文案（fail-soft，读宿主文件失败不阻塞 ping）
+const roleGuardText = (opt: any) => {
+  try {
+    const st = roleSyncStatus(resolveRolesDir(opt));
+    const bad = st.filter((r) => r.status !== "managed");
+    if (!bad.length) return `\n角色托管：${st.length}/${st.length} 与仓库一致（${VERSION}）`;
+    return `\n角色托管漂移：${bad.map((r) => `${r.name}=${r.status}`).join(" ")}（syncRoles 开启后 setup 自动修复；unmanaged 需手动加标记）`;
+  } catch { return ""; }
 };
 
 export async function registerCommands(ctx: any, deps: any) {
@@ -244,7 +254,7 @@ export async function registerCommands(ctx: any, deps: any) {
           if (!ctx.agent?.list) return `wf 角色：宿主未提供 ctx.agent API（v2.2.6 实测以 agent-probe 为准）；可用 @<角色> 手动验证`;
           const res = await ctx.agent.list();
           await probeOnce(a?.sessionID, "agent-probe", { shape: Array.isArray(res) ? "array" : Object.keys(res ?? {}) });
-          return pingReport(res);
+          return pingReport(res) + roleGuardText(ctx?.options);
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }

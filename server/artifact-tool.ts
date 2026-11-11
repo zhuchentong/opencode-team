@@ -8,7 +8,7 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning } from "./lib.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
 export function registerArtifactTool(ctx: any, deps: any) {
@@ -82,6 +82,9 @@ export function registerArtifactTool(ctx: any, deps: any) {
           // M16-r29：阶段纪律——产物错位告警（不阻断，落盘/记账照常）
           const phaseWarn = artifactPhaseWarning(kind, st.phase);
           if (phaseWarn) note += `\n${phaseWarn}`;
+          // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）
+          const sizeWarn = artifactSizeWarning(kind, bytes);
+          if (sizeWarn) note += `\n${sizeWarn}`;
           if (kind === "test-report" && !hasStrictVerdictLine(content)) {
             note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
           }

@@ -12,6 +12,7 @@ import { registerCommandTool } from "./command-tool.ts"; // T05：模型侧状�
 import { registerGuardHook } from "./guard-hook.ts";
 import { registerHint } from "./hint.ts";
 import { registerCommands } from "./commands.ts";
+import { registerRoleSync } from "./roles.ts"; // M16-r31：角色内容插件托管（B1 文件同步）
 
 export default {
   id: "wf-workflow",
@@ -55,12 +56,15 @@ export default {
     // ── P3：superpowers 式自动激活提示（fail-soft，见 hint.ts）────────
     const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
 
+    // ── M16-r31：角色内容插件托管（opt-in syncRoles，fail-soft，见 roles.ts）──
+    const roleReg = registerRoleSync(ctx, opt);
+
     // ── /wf:* 命令与 transition/inject 编排、P2 双轨输出（见 commands.ts）──
     const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
       putReport, removeState, dumpStates, runner });
 
     return () => {
-      for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }
+      for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg, roleReg]) { try { r?.dispose?.(); } catch { } }
       closeStore();
     };
   },

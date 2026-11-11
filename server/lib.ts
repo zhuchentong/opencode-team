@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r30";
+export const VERSION = "M16-r32";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -387,6 +387,23 @@ export function artifactPhaseWarning(kind: string, phase: string | null | undefi
   const expected = ARTIFACT_PHASE[kind];
   if (!expected || !phase || phase === expected) return null;
   return `⚠️ 产物阶段错位：${kind} 应在「${expected}」阶段产出，当前「${phase}」——疑似提前委派（会重复写、浪费工时）。请归位：各 wf 角色只在对应阶段委派（planner→planning、reviewer/tester→review）。`;
+}
+
+// ── M16-r32：产物瘦身预算——体积/结构约束（纯函数可测）────────────
+// 真机实证（auth-login r28）：plan.md 40KB 生成 ~6.6min，耗时与体积成正比；工具本身毫秒级。
+// 软预算 + 超预算告警（不阻断）：压生成耗时，同时减下游 reviewer 阅读量（双重收益）。
+export const ARTIFACT_BUDGET_KB: Record<string, number> = {
+  plan: 15,
+  "plan-review": 8,
+  "test-plan": 10,
+  "build-review": 8,
+  "test-report": 10,
+  lessons: 6,
+};
+export function artifactSizeWarning(kind: string, bytes: number): string | null {
+  const budget = ARTIFACT_BUDGET_KB[kind];
+  if (!budget || bytes <= budget * 1024) return null;
+  return `⚠️ 产物超瘦身预算：${kind} ${(bytes / 1024).toFixed(1)}KB > ${budget}KB——请精简（表格化/只留要点/删冗长散文），过长产物拖慢生成与下游审核。`;
 }
 
 // ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────

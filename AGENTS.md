@@ -1,8 +1,10 @@
 # AGENTS.md — wf-workflow（OpenCode 工作流插件）
 
 本仓库是 OpenCode **插件**（状态机 + 关卡层），不是可运行应用。宿主经
-`exports["./server"|"./tui"|"./rpc"]` 三入口加载；角色（`wf/*` subagent）由宿主
-agents 配置提供，不在本仓。
+`exports["./server"|"./tui"|"./rpc"]` 三入口加载。角色（`wf/*`）内容自 M16-r31 起由本插件托管：
+仓库 `roles/` 8 模板为单一来源，`options.syncRoles=true` 时 setup 同步到宿主 `agents/wf/*.md`
+的 body（宿主保留 frontmatter/permissions）；改角色内容改 `roles/`，勿手改宿主文件（会被同步覆盖，
+无托管标记的用户自有文件除外）。详见 README「已知边界 M16-r31」。
 
 ## 命令
 

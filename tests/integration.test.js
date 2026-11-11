@@ -458,3 +458,22 @@ test("M16-r29 阶段纪律：planning 提前写 plan-review 告警不阻断；re
   assert.ok(!/强制重置已清空/.test(noArt), "无产物记账的中途重置不告警");
   dispose?.(); d2?.();
 });
+
+test("M16-r32 产物瘦身：超预算告警不阻断落盘/记账；预算内不告警", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_budget";
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "budget" } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} }); // → planning
+  // 超预算 plan（>15KB）→ 告警，但落盘/记账照常
+  const big = "x".repeat(16 * 1024);
+  const over = await tool(m).execute({ kind: "plan", content: big }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(over.content, /已写入/);
+  assert.match(over.content, /超瘦身预算/);
+  assert.ok(stOf(m, sid).artifacts["plan.md"], "超预算告警不阻断记账");
+  // 预算内 plan（覆盖重写，<15KB）→ 无体积告警
+  const small = await tool(m).execute({ kind: "plan", content: "# 精简计划" }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(small.content, /已写入/);
+  assert.ok(!/超瘦身预算/.test(small.content), "预算内不告警");
+  dispose?.();
+});
