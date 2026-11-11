@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 `;
 
+// 行→快照解析（模块级纯函数：只读 row.state_json，不依赖 createStore 闭包；lint function-scoping 上提）
+const parse = (row: any) => {
+  try { return JSON.parse(row.state_json); } catch { return null; }
+};
+
 export function createStore(ctx: any) {
   const dir = ctx?.location?.directory ?? process.cwd();
   const dbFile = join(dir, ".workflow", "wf.db");
@@ -94,10 +99,6 @@ export function createStore(ctx: any) {
   const qAll = db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC");
   const qGc = db.prepare("DELETE FROM tasks WHERE phase = 'done' AND updated_at IS NOT NULL AND updated_at < ?");
   const qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
-
-  const parse = (row: any) => {
-    try { return JSON.parse(row.state_json); } catch { return null; }
-  };
 
   const load = async (sessionID: string): Promise<any> => {
     try { return parse(qGet.get(String(sessionID ?? ""))) ?? null; } catch { return null; }

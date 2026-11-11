@@ -1,17 +1,18 @@
 # wf-workflow — OpenCode 工作流插件
 
-8 角色 10 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核 → 分配 → 测试设计 → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*` subagent）由 OpenCode agents 配置提供，本插件负责流程管控。
+8 角色 9 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核∥可行性 → 测试设计(含分配) → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*` subagent）由 OpenCode agents 配置提供，本插件负责流程管控（M16-r28：assign 阶段并入 test_design，性能审计落地）。
 
 > 架构形态：P0-P6 重设计（2026-11）后的版本——状态层 SQLite、命令双轨输出、TUI 流派 A 渲染、vite/oxlint 工具链。设计依据与宿主契约证据见文末「宿主契约备忘」。
 
 ## 特性
 
-- **状态机流转**：`/wf:*` 命令驱动，非法来源拒绝、返工边内置（review 不过回 planning、修复后回 reconcile）；流转带 `rev` 乐观锁防陈旧快照覆盖
-- **硬关卡**：`/wf:assign` 双通道（须 test-plan 产出）；`/wf:done` 验收（须 test-report 首行 `**结论**: PASS`）；拒绝消息自带下一步命令指引（blocked-append）
+- **状态机流转**：`/wf:*` 命令驱动，非法来源拒绝、返工边内置（review 不过回 planning、修复后回 reconcile）；流转带 `rev` 乐观锁，并发冲突自动重载重放（≤3 次），最终写不进则显式报错不静默丢推进
+- **双入口推进**：模型侧 `wf_command` 工具（leader 用，参数 `name="wf:plan"`、`prompt` 传命令参数）与用户手敲 `/wf:*` 走同一编排（transition+注入+落库+广播）；`wf/*` 子会话调用被硬拒——关卡/上限不存在"模型忘了执行命令"的绕行路径
+- **硬关卡**：`/wf:test-design` 双通道（须 test-plan 产出；M16-r28 起原 `/wf:assign` 阶段并入 test_design）；`/wf:done` 验收（须 test-report 首行 `**结论**: PASS`）；拒绝消息自带下一步命令指引（blocked-append）
 - **循环上限**：plan_review / build_review / test_fix 各 3 轮，「进入即计数」，超限拒绝并要求上报用户
-- **越权阻断**：planning/review 阶段服务端 `execute.before` hook 拒绝 `edit/write/patch` 与 shell 重定向/写删命令改业务文件（`.workflow/`、`.learnings/`、测试文件除外），阻断记账进审计轨迹
+- **越权阻断**：planning/review 阶段服务端 `execute.before` hook 拒绝 `edit/write/patch` 与 shell 重定向/写删命令改**项目内**业务文件（`.workflow/`、`.learnings/`、测试文件除外；M16-r28：项目外路径不构成越权，放行），阻断记账进审计轨迹
 - **抗 compaction 注入**：阶段 guidance 写入 session instructions entry（每次组装系统提示从存储重新渲染），消息历史压缩不丢阶段约束
-- **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；test-report 输出按 verdict 指路下一步
+- **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；test-report 输出按 verdict 指路下一步；slug 支持 Unicode（中文任务名原样保留）
 - **命令输出双轨**（宿主 2.2.6 契约 `execute(): Promise<void>`，返回值对用户不显示）：
   - **主轨（TUI）**：return 键 priority-1 输入拦截 → RPC `exec` 本地执行 → 即时 toast；重要信号（⚠️/❌/FAIL）附加 `attention.notify` 系统级通知（终端后台时用户可感知）
   - **降级轨（Web/Desktop/无 TUI）**：`session.wait` 排空 → `prompt(resume:false, delivery:"steer")` 注入会话（不唤醒模型）；context/compaction/generate hook 按 metadata 剥离报告消息，不污染模型上下文
@@ -40,9 +41,9 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 ```
 /wf:intake <slug>        # 入口：澄清需求、读 .learnings/
 /wf:plan                 # planning：委派 wf/planner 产出 plan.md
-/wf:review               # review：planner-reviewer ∥ tester(feasibility)，≤3 轮
-/wf:assign               # assign：双通道关卡（须 test-plan.md）
-/wf:test-design          # test_design：tester(design) 按冻结接口写红验收测试
+/wf:review               # review：planner-reviewer ∥ tester(feasibility) 并发，≤3 轮（r≥2 增量复审）
+/wf:test-design          # test_design：双通道关卡（须 test-plan.md）；冻结接口排 lane + tester(design) 写红验收测试
+                         #（M16-r28：原 /wf:assign 阶段并入本阶段，命令移除；存量 assign 任务可直接推进本命令）
 /wf:build                # building：每 lane 一 worktree + wf/builder（TDD）
 /wf:reconcile            # reconcile：各 worktree 合并回主树
 /wf:review-build         # build_review：builder-reviewer，≤3 轮
@@ -51,7 +52,7 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 /wf:done                 # done：验收关卡（PASS）+ 并行 learner 复盘
 ```
 
-辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:ping`（角色注册与模型健康检查）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。在 TUI 里直接回车执行走主轨（即时 toast）；从 `/` 下拉菜单选择执行走降级轨（注入会话消息，可见不唤醒）。
+辅助命令：`/wf:status`（只读状态+轨迹）、`/wf:diagnose`（诊断）、`/wf:ping`（角色注册与模型健康检查）、`/wf:lane`（lane 登记）、`/wf:reset`（清除）、`/wf:debug`（观测落盘）。在 TUI 里直接回车执行走主轨（即时 toast）；从 `/` 下拉菜单选择执行走降级轨（注入会话消息，可见不唤醒）。leader 会话中模型会自行调用 `wf_command` 工具推进上述流转，用户无需逐条手敲（手敲入口保留，二者等价）。
 
 ## 架构
 
@@ -60,7 +61,7 @@ server/index.ts         组装层：按依赖序接线各模块（exports 入口
 server/state.ts         状态层：bun:sqlite 单库 .workflow/wf.db（WAL；tasks/events/reports 三表，
                         partial unique index 一会话一活跃；rev 乐观锁；done 14 天 GC；ctx.storage 一次性迁移）
 server/rpc-bridge.ts    RPC 桥：Wf.state/list/exec（state 附 lastReport）+ updated/report 事件
-server/commands.ts      /wf:* 命令：11 流转表驱动 + 6 辅助；publishOutput（reports 表+事件）+
+server/commands.ts      /wf:* 命令：10 流转表驱动 + 6 辅助；publishOutput（reports 表+事件）+
                         injectReport（降级轨 wait→prompt resume:false）+ hook 剥离报告消息
 server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账+verdict 指路公告
 server/guard-hook.ts    execute.before 越权阻断（含 shell 门控；拒绝消息附下一步命令指引）
@@ -161,9 +162,13 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 
 - verdict 解析正则带 `i`：小写 `pass` 也判 PASS；`PASSED` 因 `\b` 边界不判
 - intake 非重置分支下 slug 会被新 text 覆盖（rounds/记账保留）
-- `tee out.txt < input` 会把 `input` 误判为 shell 写目标（fail-closed 方向，仅阻断阶段误伤）
+- shell 写目标解析翻案（M16-r28 B1-1，真机实证误伤后修订）：`=>`/`->`/比较符不再误判为重定向；`tee out.txt < input` 不再把 `input` 当目标；目标含 `$/反引号/通配` 跳过。**残留边界（翻案的另一面，fail-open 方向）**：代码字符串里的 ` > `（两侧带空格的比较）后跟「含点/斜杠 token」仍会误判（如 `'s/a. b/ > c.d/'`）；无扩展名无斜杠的裸重定向（`echo x > build`）不再识别（漏判）
+- BLOCKING 阶段 containment（M16-r28）：越权判定仅对**项目内**路径生效（write/edit 与 shell 两分支同源）；`st.directory` 解析不到时按项目内处理（fail-closed 兜底）
+- M16-r28 assign 阶段移除：`wf:test-design.from` 保留 `"assign"` 存量兼容边（`LEGACY_PHASES` 守卫）；卡在 assign 的在途任务下一步指引 = `/wf:test-design`，直接推进即可
 - hook 内部异常 fail-open（不阻断），关卡异常（含 `GATE_ERR`）才拦截
 - 降级轨消息注入会话历史（context/compaction/generate hook 剥离仅护模型面，用户面保留可读）
+- `wf_command` 子会话判定依赖 agent 名前缀 `wf/*`（2.2.6 真机实证 `session.get` 无 `parentID`）：非 wf 命名的自定义 subagent 可经 `wf:intake` 自开任务——新行挂其自身会话，不污染 leader 行，代价仅面板出现其合法任务行；若需收紧，待宿主暴露父子会话关系后改 parentID 判定
+- `transition` 在 save 连续冲突（3 次）失败时回滚 entry 指引（T09），但 reports 槽/事件通道的时间戳不回滚——用户以 `/wf:status` 为准
 
 ## 设计借鉴对照
 

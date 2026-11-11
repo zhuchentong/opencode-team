@@ -122,24 +122,36 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   await m.hook()({ tool: "write", sessionID: "ses_i", agent: "build", input: { path: `${DIR}/.workflow/demo/plan.md` } }, {});
   assert.equal(stOf(m).log.filter((e) => e.note === "blocked").length, 2, "放行路径不记账");
 
+  // 3d) M16-r28 B1-1：项目外路径不构成越权 → 放行（真机实证 /tmp/opencode/ 验证脚本被误拦）
+  await m.hook()({ tool: "write", sessionID: "ses_i", agent: "build", input: { path: "/tmp/opencode/verify-plan.mjs" } }, {});
+  await m.hook()({ tool: "edit", sessionID: "ses_i", agent: "build", input: { path: "~/scratch.mjs" } }, {});
+  assert.equal(stOf(m).log.filter((e) => e.note === "blocked").length, 2, "项目外写不阻断不记账");
+
+  // 3e) 项目外路径不得成为旁路：项目内相对路径仍按 containment 拦截
+  await assert.rejects(
+    () => m.hook()({ tool: "write", sessionID: "ses_i", agent: "build", input: { path: "src/rel.ts" } }, {}),
+    (e) => /硬关卡/.test(String(e.message)),
+  );
+  assert.equal(stOf(m).log.filter((e) => e.note === "blocked").length, 3);
+
   // 4) wf:diagnose 报告含阻断取证与下一步
   const diag = await cmd(m, "wf:diagnose").execute({ sessionID: "ses_i", prompt: {} });
-  assert.match(diag, /越权阻断=2/);
+  assert.match(diag, /越权阻断=3/);
   assert.match(diag, /⛔ 越权阻断：shell src\/y\.txt|⛔ 越权阻断：shell src\/y\.js/);
   assert.match(diag, /下一步：\/wf:review/);
 
   // 5) 完整链到 done：test-plan → 审核链 → report PASS
   await cmd(m, "wf:review").execute({ sessionID: "ses_i", prompt: {} });
   assert.equal(stOf(m).phase, "review");
-  // 未产出 test-plan 时 assign 被 gate 拒
-  const rej = await cmd(m, "wf:assign").execute({ sessionID: "ses_i", prompt: {} });
+  // 未产出 test-plan 时 wf:test-design 入口被双通道 gate 拒（M16-r28：关卡随 assign 并入迁移）
+  const rej = await cmd(m, "wf:test-design").execute({ sessionID: "ses_i", prompt: {} });
   assert.match(rej, /双通道关卡未过/);
   // 工具写 test-plan 产物（目录三级回退：st.directory 已由 session.get 填充）
   const tr = await tool(m).execute({ kind: "test-plan", content: "# 计划" }, { sessionID: "ses_i", agent: "wf/tester" });
   assert.match(tr.content, /已写入 .*\/\.workflow\/demo\/test-plan\.md/);
   assert.ok(fs.existsSync(`${DIR}/.workflow/demo/test-plan.md`));
-  await cmd(m, "wf:assign").execute({ sessionID: "ses_i", prompt: {} });
-  for (const c of ["wf:test-design", "wf:build", "wf:reconcile", "wf:review-build", "wf:test"]) {
+  await cmd(m, "wf:test-design").execute({ sessionID: "ses_i", prompt: {} });
+  for (const c of ["wf:build", "wf:reconcile", "wf:review-build", "wf:test"]) {
     await cmd(m, c).execute({ sessionID: "ses_i", prompt: {} });
   }
   // 无结论 report → done 被拒；PASS report → 通过
@@ -247,7 +259,118 @@ test("项目级 overrides：.workflow/overrides/*.md 存在 → entry guidance �
   dispose?.();
 });
 
-// ERR-20261110-007：2.2.6 宿主 execute 契约 Promise<void>，返回值不显示给用户。
+// ── T02：幽灵行不落盘 ───────────────────────────────────────────────
+// 旧缺陷：transition 拒绝分支对全新会话（load 为空）也 save → 凭空造出 {slug:"",phase:null}
+// 行占住面板。修复后：无前置行的拒绝只回文案不建行；已有行的拒绝仍落审计。
+test("T02 幽灵行：空会话误敲流转命令不建 DB 行；有行拒绝仍落审计", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const rej = await cmd(m, "wf:review").execute({ sessionID: "ses_ghost", prompt: {} });
+  assert.match(rej, /不能从阶段/);
+  assert.equal(stOf(m, "ses_ghost"), undefined, "无前置行被拒 → 不得建行");
+  // 有行后拒绝：审计照常落盘
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_ghost", prompt: { text: "g" } });
+  const rej2 = await cmd(m, "wf:done").execute({ sessionID: "ses_ghost", prompt: {} });
+  assert.match(rej2, /不能从阶段「intake」进入「done」/);
+  assert.ok(stOf(m, "ses_ghost").log.some((e) => e.ok === false), "已有行：拒绝审计落盘");
+  dispose?.();
+});
+
+// ── T03：active 收紧 ────────────────────────────────────────────────
+// 历史遗留幽灵行（直接写库模拟）：RPC state() 必须报 inactive，status/diagnose 报无任务，
+// 让 TUI 面板走回退列表而非锁死垃圾行。
+test("T03 幽灵行不占面板：state() active:false；status/diagnose 报无任务", async () => {
+  const m = mkCtx();
+  let rpcImpl = null;
+  m.ctx.rpc = { register: async (_def, impl) => { rpcImpl = impl; return { events: { emit: async () => {} } }; } };
+  const dispose = await plugin.setup(m.ctx);
+  {
+    const d = new Database(DB);
+    d.run("INSERT INTO tasks (session_id, slug, phase, rev, state_json) VALUES ('ses_gh', '', NULL, 1, ?)",
+      JSON.stringify({ sessionID: "ses_gh", slug: "", phase: null, rounds: {} }));
+    d.close();
+  }
+  const res = await rpcImpl.state({ sessionID: "ses_gh" });
+  assert.equal(res.active, false, "幽灵行 → inactive");
+  assert.match(await cmd(m, "wf:status").execute({ sessionID: "ses_gh", prompt: {} }), /本会话无活动任务/);
+  assert.match(await cmd(m, "wf:diagnose").execute({ sessionID: "ses_gh", prompt: {} }), /本会话无活动任务/);
+  dispose?.();
+});
+
+// ── T04：save 冲突显式化 ────────────────────────────────────────────
+// 乐观锁 stale-rev 旧版被静默吞掉（用户见成功 guidance 而 DB 未动）。修复：inject（save 前）
+// 与 save 之间制造并发写——单次冲突自动重载重放成功；持续冲突显式报错且阶段不推进。
+test("T04 stale-rev：冲突一次重试成功；持续冲突显式失败不假装推进", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_t4", prompt: { text: "race" } });
+  // inject 的 entry.put 执行后按需把 DB 行 rev 外部推进（state_json 同步，等价并发写者落盘）
+  let bumps = 0;
+  const realPut = m.ctx.session.instructions.entry.put;
+  m.ctx.session.instructions.entry.put = async (i) => {
+    await realPut(i);
+    if (bumps <= 0) return;
+    bumps--;
+    const d = new Database(DB);
+    try {
+      const row = d.query("SELECT state_json, rev FROM tasks WHERE session_id = ?").get(i.sessionID);
+      if (!row) return;
+      const v = JSON.parse(row.state_json);
+      v.rev = row.rev + 10; // 列与快照同步前进：当前写者快照即过期
+      d.run("UPDATE tasks SET rev = ?, state_json = ? WHERE session_id = ?", v.rev, JSON.stringify(v), i.sessionID);
+    } finally { try { d.close(); } catch { } }
+  };
+  // 单次冲突 → 第 2 次尝试重载成功
+  bumps = 1;
+  const okMsg = await cmd(m, "wf:plan").execute({ sessionID: "ses_t4", prompt: {} });
+  assert.match(okMsg, /【wf 工作流｜planning】/, "stale-rev 一次应重试成功");
+  assert.equal(stOf(m, "ses_t4").phase, "planning");
+  // 持续冲突 → 显式失败，阶段保持不动
+  bumps = 5;
+  const failMsg = await cmd(m, "wf:review").execute({ sessionID: "ses_t4", prompt: {} });
+  assert.match(failMsg, /状态保存失败（stale-rev）/);
+  assert.equal(stOf(m, "ses_t4").phase, "planning", "保存失败不得假装推进");
+  // T09：entry 回滚——失败后系统提示指引必须回到 DB 现势（phase=planning），
+  // 而非已改写但未落库的目标阶段（transition 克隆化保证 loaded 未被污染）
+  assert.match(m.entries.at(-1).value, /^phase=planning/, "T09：save 失败后 entry 回滚到 DB 现势");
+  dispose?.();
+});
+
+// ── T05：wf_command 工具（模型侧状态机入口）────────────────────────
+test("T05 wf_command：leader 推进生效；无行非 intake 拒绝；子会话 intake 拒绝", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const tc = m.tools.find((t) => t.name === "wf_command");
+  assert.ok(tc, "应注册 wf_command 工具");
+  // 无行 + 非 intake → 拒绝
+  assert.match((await tc.execute({ name: "wf:plan" }, { sessionID: "ses_w5", agent: "build" })).content,
+    /本会话无活动任务/);
+  // 子会话（wf/* 且非 leader）→ intake 也拒绝
+  assert.match((await tc.execute({ name: "wf:intake", prompt: "子会话开的任务" }, { sessionID: "ses_sub", agent: "wf/planner" })).content,
+    /子会话/);
+  assert.equal(stOf(m, "ses_sub"), undefined, "被拒不得建行（T02 同语义）");
+  // 主会话 intake → 建行并返回 guidance（Unicode slug 全链路，T01）
+  const r = await tc.execute({ name: "wf:intake", prompt: "工具开任务" }, { sessionID: "ses_w5", agent: "build" });
+  assert.match(r.content, /【wf 工作流｜intake】/);
+  assert.equal(stOf(m, "ses_w5").slug, "工具开任务");
+  assert.equal(stOf(m, "ses_w5").phase, "intake");
+  // 有行 → 流转推进
+  const r2 = await tc.execute({ name: "wf:plan" }, { sessionID: "ses_w5", agent: "build" });
+  assert.match(r2.content, /【wf 工作流｜planning】/);
+  assert.equal(stOf(m, "ses_w5").phase, "planning");
+  // 名字形状：前导斜杠剥离后照常执行（planning→planning 合法自环）
+  const r3 = await tc.execute({ name: "/wf:plan" }, { sessionID: "ses_w5", agent: "build" });
+  assert.match(r3.content, /【wf 工作流｜planning】/);
+  // T11：无行时只读 wf:ping 放行（不触碰状态，子会话可自查角色注册）
+  const ping = await tc.execute({ name: "wf:ping" }, { sessionID: "ses_sub2", agent: "wf/tester" });
+  assert.match(ping.content, /宿主未提供 ctx\.agent|wf 角色/);
+  assert.equal(stOf(m, "ses_sub2"), undefined, "ping 放行不建状态行");
+  // 非 intake 拒绝文案含可操作指引（回报 leader / leader 主会话查状态）
+  const rej5 = await tc.execute({ name: "wf:status" }, { sessionID: "ses_sub2", agent: "wf/tester" });
+  assert.match(rej5.content, /leader/);
+  dispose?.();
+});
+
 // 修复行为锚：命令字符串输出必须同时经 RPC "report" 事件广播（TUI toast 通道），
 // 且 execute 返回值保留（本文件其余测试的断言依赖返回值）。
 test("report 广播：命令输出经 RPC report 事件广播且返回值保留", async () => {

@@ -24,6 +24,6 @@ test("rounds 缺失时回退 r1（不产生 r0/rNaN）", () => {
 });
 
 test("kind 键集与产物命名守卫", () => {
-  assert.deepEqual(Object.keys(KIND_FILES).sort(),
+  assert.deepEqual(Object.keys(KIND_FILES).toSorted(),
     ["build-review", "lessons", "plan", "plan-review", "test-plan", "test-report"]);
 });

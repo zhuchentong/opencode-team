@@ -1,4 +1,4 @@
-// wf-workflow — 命令层（自 index.ts 原样搬移）：11 个流转命令表驱动（/wf:intake…/wf:done，全部经
+// wf-workflow — 命令层（自 index.ts 原样搬移）：10 个流转命令表驱动（/wf:intake…/wf:done，全部经
 // transition 走状态机）+ 6 个辅助命令（status/diagnose/ping/lane/reset/debug）；transition 与
 // inject/listOverrides 编排亦在此（原 setup 闭包，行为不变）。
 // 已验证 API（实测 2026-11-10，宿主 2.2.6）：命令 editor.add({name, description,
@@ -18,15 +18,25 @@ import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
 
+// M16-r28 lint 清理：以下三个纯函数不捕获 registerCommands 闭包变量，上提模块级（function-scoping）
+// P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
+const listOverrides = (dir: string) => {
+  try { return fs.readdirSync(`${dir}/.workflow/overrides`).filter((f: string) => f.endsWith(".md")); } catch { return []; }
+};
+// eslint-disable-next-line no-control-regex -- 有意：剥终端控制字符（sanitizeDisplayText 同源，quota 教训）
+const sanitizeText = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+// 报告剥离（降级轨上下文保护）：带 wf.report 标记的消息不进模型请求/压缩/标题
+const stripReports = (event: any) => {
+  if (Array.isArray(event?.messages)) {
+    event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
+  }
+};
+
 export async function registerCommands(ctx: any, deps: any) {
   const E = ctx?.session?.instructions?.entry;
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
     putReport, removeState, dumpStates, runner } = deps;
 
-  // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
-  const listOverrides = (dir: string) => {
-    try { return fs.readdirSync(`${dir}/.workflow/overrides`).filter((f: string) => f.endsWith(".md")); } catch { return []; }
-  };
   const inject = async (st: any) => {
     try {
       // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
@@ -39,39 +49,59 @@ export async function registerCommands(ctx: any, deps: any) {
     }
   };
 
+  // T02+T04：状态机推进 = load→校验→应用→inject→save 循环（≤3 次）。
+  //  - 拒绝分支：仅当已有前置行才落审计（T02——旧版对全新会话也 save，凭空造出
+  //    {slug:"",phase:null} 幽灵行占住面板）；审计为 best-effort，写失败不影响拒绝返回。
+  //  - 成功分支：save 返回 stale-rev（并发写入使快照过期）→ 重载最新快照重跑整条评估
+  //    （关卡/计数以最新状态为准）；最终写不进 → 显式报错，绝不静默丢推进（旧版忽略
+  //    save 返回值，冲突时用户收到成功 guidance 而 DB 未动）。
+  //  - inject 保持在 save 前（entryErr 需随本次 save 持久化）；emitUpdated 移到 save 成功
+  //    之后（不向 TUI 广播未落库的状态）。
   const transition = async (sessionID: string, cmd: string, text?: string) => {
     const flow = FLOWS[cmd];
-    const st = (await load(sessionID)) ?? {
-      sessionID, slug: "", phase: null,
-      rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
-      lanes: {}, artifacts: {}, log: [], createdAt: new Date().toISOString(),
-    };
-    const from = st.phase ?? null;
-    const at = new Date().toISOString();
+    for (let attempt = 1; ; attempt++) {
+      const loaded = await load(sessionID);
+      // T09：评估/改写只作用于克隆——loaded 恒为「DB 现势」快照，save 最终失败的 entry 回滚
+      // 依赖它（原地改写会让回滚注入未落库的 phase/rounds，名存实亡）
+      const st = loaded ? structuredClone(loaded) : {
+        sessionID, slug: "", phase: null,
+        rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
+        lanes: {}, artifacts: {}, log: [], createdAt: new Date().toISOString(),
+      };
+      const from = st.phase ?? null;
+      const at = new Date().toISOString();
 
-    // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
-    const r = evaluateTransition(cmd, st, text, at, LIMS);
-    if (!r.ok) {
-      logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
-      await save(st);
-      return r.msg;
-    }
+      // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
+      const r = evaluateTransition(cmd, st, text, at, LIMS);
+      if (!r.ok) {
+        logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
+        if (loaded) { try { await save(st); } catch { /* 审计 best-effort */ } } // T02：无前行不落盘
+        return r.msg;
+      }
 
-    st.phase = flow.to;
-    st.updatedAt = at;
-    // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
-    if (!st.projectID) {
-      try {
-        const s = await ctx.session.get({ sessionID });
-        st.projectID = s?.projectID ?? null;
-        st.directory = s?.location?.directory ?? null;
-      } catch { }
+      st.phase = flow.to;
+      st.updatedAt = at;
+      // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
+      if (!st.projectID) {
+        try {
+          const s = await ctx.session.get({ sessionID });
+          st.projectID = s?.projectID ?? null;
+          st.directory = s?.location?.directory ?? null;
+        } catch { }
+      }
+      logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
+      await inject(st);
+      const saved = await save(st);
+      if (!saved.ok) {
+        if (saved.reason === "stale-rev" && attempt < 3) continue; // T04：并发冲突→以最新快照重评估
+        // T09：entry 回滚到 DB 现势——消除「系统提示已进新阶段、DB 未动」的矛盾信号
+        if (loaded) await inject(loaded);
+        else { try { await E.remove({ sessionID, key: ENTRY_KEY }); } catch { } } // 新建会话建行失败：无行则清指引
+        return `❌ 状态保存失败（${saved.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
+      }
+      await emitUpdated(st);
+      return guidance(flow.to, st, LIMS);
     }
-    logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
-    await emitUpdated(st);
-    await inject(st);
-    await save(st);
-    return guidance(flow.to, st, LIMS);
   };
 
   // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
@@ -99,8 +129,6 @@ export async function registerCommands(ctx: any, deps: any) {
   // 报告经 wait 排空后以 prompt(resume:false, steer, metadata 标记) 注入会话（2.2.6 源码
   // session.ts:187 保证不 wake），配合 context/compaction/generate hook 按标记剥离，
   // 报告不进模型上下文（quota 全套范式）。
-  // eslint-disable-next-line no-control-regex -- 有意：剥终端控制字符（sanitizeDisplayText 同源，quota 教训）
-  const sanitizeText = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
   const injectReport = async (sid: string, text: string, cmdName: string, at: string) => {
     try {
       await ctx.session.wait?.({ sessionID: sid });
@@ -149,13 +177,12 @@ export async function registerCommands(ctx: any, deps: any) {
       });
     };
 
-    // ── 11 个流转命令（表驱动：description 与原逐一注册逐字一致）────────
+    // ── 10 个流转命令（表驱动：description 与原逐一注册逐字一致；M16-r28 assign 并入 test-design）──
     const FLOW_COMMANDS = [
       ["wf:intake", "工作流入口：澄清需求/读 .learnings/补 gitignore（参数=slug）"],
       ["wf:plan", "进入 planning：委派 wf/planner 产出 plan.md"],
-      ["wf:review", "进入 review（并行：planner-reviewer ∥ tester feasibility），≤3 轮"],
-      ["wf:assign", "进入 assign：冻结接口、按 T<nn> 分配 lane"],
-      ["wf:test-design", "进入 test_design：tester(mode=design) 按冻结接口写红验收测试（未经此阶段不可 build）"],
+      ["wf:review", "进入 review（并发委派：planner-reviewer ∥ tester feasibility），≤3 轮"],
+      ["wf:test-design", "进入 test_design：双通道关卡（须 test-plan.md）；冻结接口排 lane + tester(design) 写红验收测试（M16-r28：原 assign 并入）"],
       ["wf:build", "进入 building：每 lane 一 worktree + wf/builder（TDD）"],
       ["wf:reconcile", "进入 reconcile：合并各 worktree 回主树，冲突上报用户"],
       ["wf:review-build", "进入 build_review：wf/builder-reviewer，≤3 轮"],
@@ -172,7 +199,8 @@ export async function registerCommands(ctx: any, deps: any) {
       description: `查看当前工作流状态与审计轨迹（只读，${VERSION}）`,
       execute: async (a: any) => {
         const st = await load(a.sessionID);
-        if (!st) return `wf 工作流(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`;
+        // T03：幽灵行（无 slug 且无 phase，历史缺陷产物）等同无任务
+        if (!st || (!st.slug && !st.phase)) return `wf 工作流(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`;
         const r = st.rounds ?? {};
         return [
           `wf 工作流(${VERSION})状态｜session=${st.sessionID}`,
@@ -193,7 +221,7 @@ export async function registerCommands(ctx: any, deps: any) {
       description: "诊断本会话工作流：审计轨迹拒绝/阻断取证、关卡与轮次、产物磁盘对账、注入/RPC 异常与下一步",
       execute: async (a: any) => {
         const st = await load(a.sessionID);
-        if (!st) return `wf 诊断(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`;
+        if (!st || (!st.slug && !st.phase)) return `wf 诊断(${VERSION})：本会话无活动任务。先执行 /wf:intake <slug>。`; // T03
         // 产物对账：落盘目录三级回退（resolveProjectDir，与 wf_write_artifact 同源）
         const dir = await resolveProjectDir(st, a.sessionID);
         let artifactFiles: string[] = [];
@@ -219,33 +247,49 @@ export async function registerCommands(ctx: any, deps: any) {
       name: "wf:lane",
       description: `登记/查看 lane：set <Tnn> <子会话ID> [worktree] / rm <Tnn> / 默认 ls（${VERSION}）`,
       execute: async (a: any) => {
-        const st = await load(a.sessionID); // lane 挂在 leader 会话自持状态上
-        if (!st) return "❌ 本会话无活动任务。lane 登记需先 /wf:intake <slug>。";
-        st.lanes = st.lanes ?? {};
         const t = promptText(a.prompt).trim().split(/\s+/);
         const op = (t[0] ?? "ls").toLowerCase();
-        if (op === "set") {
-          const id = String(t[1] ?? "");
-          const sid = String(t[2] ?? "");
-          const wt = String(t[3] ?? "");
-          if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(id)) return `❌ lane ID 非法：「${id}」（用 T01 这类：字母数字开头，≤32 字符，仅 A-Za-z0-9._-）`;
-          if (!/^ses_[A-Za-z0-9]+/.test(sid)) return `❌ 子会话 ID 非法：「${sid}」（应形如 ses_xxx，来自 subagent 返回值）`;
-          st.lanes[id] = { sessionID: sid, worktree: wt || null, at: new Date().toISOString() };
-        } else if (op === "rm") {
+        // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm（≤3 次），
+        // 返回错误串=操作不成立，null=已写入 st.lanes
+        const applyOp = (st: any): string | null => {
+          st.lanes = st.lanes ?? {};
+          if (op === "set") {
+            const id = String(t[1] ?? "");
+            const sid = String(t[2] ?? "");
+            const wt = String(t[3] ?? "");
+            if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(id)) return `❌ lane ID 非法：「${id}」（用 T01 这类：字母数字开头，≤32 字符，仅 A-Za-z0-9._-）`;
+            if (!/^ses_[A-Za-z0-9]+/.test(sid)) return `❌ 子会话 ID 非法：「${sid}」（应形如 ses_xxx，来自 subagent 返回值）`;
+            st.lanes[id] = { sessionID: sid, worktree: wt || null, at: new Date().toISOString() };
+            return null;
+          }
           const id = String(t[1] ?? "");
           if (!(id in st.lanes)) return `❌ 没有 lane「${id}」。当前：${Object.keys(st.lanes).join(", ") || "(空)"}`;
           delete st.lanes[id];
-        } else {
-          const ks = Object.keys(st.lanes);
+          return null;
+        };
+        const st0 = await load(a.sessionID); // lane 挂在 leader 会话自持状态上
+        if (!st0) return "❌ 本会话无活动任务。lane 登记需先 /wf:intake <slug>。";
+        if (op !== "set" && op !== "rm") { // ls（默认）只读，不落盘
+          const ks = Object.keys(st0.lanes ?? {});
           if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID> [worktree路径]";
-          return ks.map((k) => {
-            const v = st.lanes[k];
+          return ks.map((k: string) => {
+            const v = st0.lanes[k];
             return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}（${String(v.at ?? "").slice(0, 19)}）`;
           }).join("\n");
         }
-        await save(st);
-        await emitUpdated(st);
-        return `✅ lanes(${VERSION}) = ${JSON.stringify(st.lanes)}`;
+        for (let attempt = 1; ; attempt++) {
+          const st = attempt === 1 ? st0 : await load(a.sessionID);
+          if (!st) return "❌ 状态行已不存在（并发 reset？），lane 变更未生效。";
+          const err = applyOp(st);
+          if (err) return err;
+          const saved = await save(st);
+          if (saved.ok) {
+            await emitUpdated(st);
+            return `✅ lanes(${VERSION}) = ${JSON.stringify(st.lanes)}`;
+          }
+          if (saved.reason === "stale-rev" && attempt < 3) continue;
+          return `❌ 状态保存失败（${saved.reason}），lane 变更未生效，请重试。`;
+        }
       },
     });
     add({
@@ -317,13 +361,6 @@ export async function registerCommands(ctx: any, deps: any) {
     });
   });
 
-  // 报告剥离（降级轨上下文保护）：带 wf.report 标记的消息不进模型请求/压缩/标题
-  // （quota 全套；fail-soft——宿主无 session.hook 时报告入上下文，功能不阻塞）
-  const stripReports = (event: any) => {
-    if (Array.isArray(event?.messages)) {
-      event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
-    }
-  };
   const hookRegs: any[] = [];
   try {
     for (const h of ["context", "compaction", "generate"]) {

@@ -1,5 +1,6 @@
 // P0-b：shell 写目标解析测试（重定向 + 写/删类命令尾参）
-// 已知边界（锁定现状，见 lib.js 注释）：`tee out.txt < input` 会把 "input" 误判为目标。
+// M16-r28 B1-1 翻案：`=>` 箭头/比较不再误判为重定向（真机实证 node -e 代码被误拦）；
+//   目标含 $/反引号/纯数字跳过；`tee out.txt < input` 不再把 input 当目标（尾参过滤 <>&| 起始）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { shellWriteTargets } from "../server/lib.ts";
@@ -55,4 +56,26 @@ test("旗标与纯数字参数不算目标（如 chmod 644 f）", () => {
 test("家目录目标（~）保留原始形态由调用方过滤", () => {
   // lib 层不过滤 ~（hook 里 continue），此处锁定解析行为
   assert.deepEqual(shellWriteTargets("echo x > ~/.zshrc"), ["~/.zshrc"]);
+});
+
+// ── M16-r28 B1-1 翻案锁定（真机误伤形态）────────────────────────────
+test("箭头函数与比较符不再误判为重定向（真机 run-2 实证形态）", () => {
+  assert.deepEqual(shellWriteTargets(`node -e "const f=x=>x+1; console.log(f(2))"`), []);
+  assert.deepEqual(shellWriteTargets("node -e 'console.log(a > b ? `x` : {y:1})'"), []);
+  assert.deepEqual(shellWriteTargets("sed -i 's/a->b/c/' f.ts"), []);
+});
+
+test("目标含 $/反引号/纯数字跳过（无法判定具体文件）", () => {
+  assert.deepEqual(shellWriteTargets("echo x > \"$OUT/f.txt\""), []);
+  assert.deepEqual(shellWriteTargets("echo x > ${h}h"), []);
+  assert.deepEqual(shellWriteTargets("node -e 'if (n > 2) go()'"), []);
+});
+
+test("tee out.txt < input 不再把 input 当目标（原已知边界翻案）", () => {
+  assert.deepEqual(shellWriteTargets("cat data | tee out.txt < input"), ["out.txt"]);
+});
+
+test("真实重定向不受翻案影响仍解析", () => {
+  assert.deepEqual(shellWriteTargets("make > build.log 2> errors.log"), ["build.log", "errors.log"]);
+  assert.deepEqual(shellWriteTargets("git checkout -- . && echo done > status.txt"), ["status.txt"]);
 });

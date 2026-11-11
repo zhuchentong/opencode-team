@@ -24,7 +24,9 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
           try {
             lastReport = (await getReport(String(input?.sessionID ?? ""))) ?? null;
           } catch { /* 读槽失败按无报告处理 */ }
-          if (!st) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
+          // T03：active 收紧——幽灵行（无 slug 且无 phase，历史缺陷：拒绝分支对全新会话落盘）
+          // 与已 reset 残留行一律报 inactive，让 TUI 走回退列表，不再锁死面板
+          if (!st || (!st.slug && !st.phase)) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
           return {
             sessionID: st.sessionID,
             active: true,

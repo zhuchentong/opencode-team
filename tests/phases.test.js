@@ -1,7 +1,7 @@
 // P0-b：shared/phases.ts 单一来源一致性守卫（防 server/tui/lib 三处漂移）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING } from "../shared/phases.ts";
+import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING, LEGACY_PHASES } from "../shared/phases.ts";
 import { FLOWS, KIND_FILES, LIMITS } from "../server/lib.ts";
 
 test("PHASE_ORDER 无重复", () => {
@@ -25,8 +25,8 @@ test("FLOWS 所有 counter ∈ LIMITS 键", () => {
   }
 });
 
-test("FLOWS 所有 from 阶段 ∈ PHASE_ORDER ∪ FOLD ∪ null（from 用数组，null 不适用）", () => {
-  const legal = new Set([...PHASE_ORDER, ...Object.keys(FOLD), "*"]);
+test("FLOWS 所有 from 阶段 ∈ PHASE_ORDER ∪ FOLD ∪ LEGACY ∪ null（from 用数组，null 不适用；M16-r28：LEGACY=存量在途任务兼容边）", () => {
+  const legal = new Set([...PHASE_ORDER, ...Object.keys(FOLD), ...LEGACY_PHASES, "*"]);
   for (const [cmd, flow] of Object.entries(FLOWS)) {
     for (const f of flow.from) assert.ok(legal.has(f), `${cmd} 的来源阶段 ${f} 不在合法集`);
   }

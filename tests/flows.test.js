@@ -19,12 +19,12 @@ const advance = (st, cmd, text, at) => {
   return r;
 };
 
-test("FLOWS 全表正向流转链（主路径，无返工）", () => {
+test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并入 test-design）", () => {
   const st = mkSt();
-  const steps = ["wf:intake", "wf:plan", "wf:review", "wf:assign", "wf:test-design",
+  const steps = ["wf:intake", "wf:plan", "wf:review", "wf:test-design",
     "wf:build", "wf:reconcile", "wf:review-build", "wf:test", "wf:done"];
   for (const cmd of steps) {
-    if (cmd === "wf:assign") st.testPlanWritten = true; // gate 前置条件
+    if (cmd === "wf:test-design") st.testPlanWritten = true; // gate 前置条件
     if (cmd === "wf:done") st.testReportVerdict = "PASS"; // gate 前置条件
     const r = advance(st, cmd, "demo-task");
     assert.equal(r.ok, true, `${cmd} 应通过：${JSON.stringify(r)}`);
@@ -48,15 +48,23 @@ test("非法来源被拒（planning 状态不可直接 wf:build）", () => {
   assert.equal(r.note, "illegal-transition");
 });
 
-test("gate-rejected：review 未产出 test-plan 时 wf:assign 被拒（不消耗额度）", () => {
+test("gate-rejected：review 未产出 test-plan 时 wf:test-design 被拒（不消耗额度；M16-r28 关卡随 assign 迁移）", () => {
   const st = mkSt("review");
   const before = { ...st.rounds };
-  const r = advance(st, "wf:assign");
+  const r = advance(st, "wf:test-design");
   assert.equal(r.ok, false);
   assert.equal(r.note, "gate-rejected");
   assert.match(r.msg, /test-plan\.md/);
+  assert.match(r.msg, /wf_command\(name="wf:test-design"\)/, "拒绝文案指路新命令名");
   assert.deepEqual(st.rounds, before, "拒绝不得改变计数器");
   assert.equal(st.phase, "review", "阶段不变");
+});
+
+test("M16-r28 存量兼容：卡在 assign 阶段的在途任务可直接 wf:test-design", () => {
+  const st = mkSt("assign", { testPlanWritten: true });
+  const r = advance(st, "wf:test-design");
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(st.phase, "test_design");
 });
 
 test("gate-rejected：testReportVerdict=FAIL 时 wf:done 被拒", () => {
@@ -163,7 +171,7 @@ test("intake 首次（无阶段）：设置 slug；空文本回退 untitled", ()
   assert.equal(st2.slug, "untitled");
   const st3 = mkSt();
   assert.equal(advance(st3, "wf:intake", { text: "对象形态 slug" }).ok, true, "prompt 对象形态");
-  assert.equal(st3.slug, "slug", "中文折叠、字母段保留");
+  assert.equal(st3.slug, "对象形态-slug", "T01：Unicode slug 保留中文");
 });
 
 test("intake 非重置分支下 slug 仍被新 text 覆盖（锁定现状：slugify 非空即覆盖），rounds 保留", () => {

@@ -7,16 +7,16 @@ import { Wf } from "../shared/rpc.ts";
 
 test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
   assert.equal(Wf.id, "wf"); // wire 前缀 rpc.wf.<name> 的字符串来源
-  assert.deepEqual(Object.keys(Wf.methods).sort(), ["exec", "list", "state"]);
-  assert.deepEqual(Object.keys(Wf.events).sort(), ["report", "updated"]);
+  assert.deepEqual(Object.keys(Wf.methods).toSorted(), ["exec", "list", "state"]);
+  assert.deepEqual(Object.keys(Wf.events).toSorted(), ["report", "updated"]);
 
   // exec（P2 主轨通道）：入参必填 sessionID+name；出参必含 text 字符串
-  assert.deepEqual(Wf.methods.exec.input.required.sort(), ["name", "sessionID"]);
+  assert.deepEqual(Wf.methods.exec.input.required.toSorted(), ["name", "sessionID"]);
   assert.equal(Wf.methods.exec.input.additionalProperties, false);
   assert.deepEqual(Wf.methods.exec.output.required, ["text"]);
 
   // report 事件：sessionID|at 去重键与新鲜度门依赖三字段全 required
-  assert.deepEqual(Wf.events.report.schema.required.sort(), ["at", "sessionID", "text"]);
+  assert.deepEqual(Wf.events.report.schema.required.toSorted(), ["at", "sessionID", "text"]);
 
   // state 输出必须携带 lastReport（轮询主通道契约，r29e bug A 教训）
   assert.ok(Wf.methods.state.output.properties.rounds, "state 输出形状基本项在位");

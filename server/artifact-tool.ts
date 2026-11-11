@@ -43,32 +43,50 @@ export function registerArtifactTool(ctx: any, deps: any) {
           const content = typeof args?.content === "string" ? args.content : String(args?.content ?? "");
           const mk = KIND_FILES[kind];
           if (!mk) return { content: `❌ 未知 kind=${kind}（可用：${Object.keys(KIND_FILES).join(" | ")}）` };
-          const st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
-          if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请先由用户执行 /wf:intake <slug>。" };
+          let st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
+          if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
           // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
           const dir = await resolveProjectDir(st, context?.sessionID);
-          const file = mk(st);
+          const file = mk(st); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
           const target = `${dir}/.workflow/${st.slug}/${file}`;
           fs.mkdirSync(`${dir}/.workflow/${st.slug}`, { recursive: true });
           fs.writeFileSync(target, content.endsWith("\n") ? content : `${content}\n`);
-          st.artifacts = st.artifacts ?? {};
-          st.artifacts[file] = { at: new Date().toISOString(), bytes: fs.statSync(target).size };
-          if (kind === "test-plan") st.testPlanWritten = true;
-          if (kind === "test-report") {
-            st.testReportVerdict = parseVerdict(content); // P0-b：解析提取至 lib
+          const bytes = fs.statSync(target).size;
+          const verdict = kind === "test-report" ? parseVerdict(content) : undefined; // P0-b：解析提取至 lib
+          // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
+          const mark = (row: any) => {
+            row.artifacts = row.artifacts ?? {};
+            row.artifacts[file] = { at: new Date().toISOString(), bytes };
+            if (kind === "test-plan") row.testPlanWritten = true;
+            if (kind === "test-report") row.testReportVerdict = verdict;
+            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: file });
+          };
+          mark(st);
+          let saved = await save(st);
+          let rowGone = false; // T12：区分「行被并发删除」与「持续 stale-rev」
+          for (let attempt = 1; !saved.ok && saved.reason === "stale-rev" && attempt < 3; attempt++) {
+            const fresh = await resolveState(context?.sessionID, context?.agent);
+            if (!fresh?.slug) { rowGone = true; break; } // 行被并发清除：无从重放
+            mark(fresh);
+            st = fresh;
+            saved = await save(fresh);
           }
-          logAdd(st, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: st.phase, to: st.phase, ok: true, note: file });
-          await save(st);
+          if (!saved.ok) {
+            if (rowGone) {
+              return { content: `✅ 已写入 ${target}（${bytes} bytes）；⚠️ 状态行已被并发清除（reset？），记账跳过——产物已落盘，重开任务后可用 /wf:diagnose 对账` };
+            }
+            return { content: `✅ 已写入 ${target}（${bytes} bytes）；❌ 状态记账保存失败（${saved.reason}），产物对账不一致（/wf:diagnose 可核对），请重试写入。` };
+          }
           await emitUpdated(st);
-          let note = `✅ [${VERSION}] 已写入 ${target}（${st.artifacts[file].bytes} bytes）`;
+          let note = `✅ [${VERSION}] 已写入 ${target}（${bytes} bytes）`;
           if (kind === "test-report" && !hasStrictVerdictLine(content)) {
             note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
           }
           // P4 公告：verdict 指路（与 GATES["wf:done"] 拒绝文案同语义，agent 在 tool output 直接看到）
           if (kind === "test-report") {
             note += st.testReportVerdict === "PASS"
-              ? `\n→ 验收 PASS：请用户执行 /wf:done（验收关卡放行）`
-              : `\n→ 验收 ${st.testReportVerdict ?? "UNKNOWN"}：FAIL → 请用户执行 /wf:fix 修复后重跑 /wf:test（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
+              ? `\n→ 验收 PASS：请 leader 调用 wf_command(name="wf:done") 推进（验收关卡放行；用户手敲亦可）`
+              : `\n→ 验收 ${st.testReportVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲；UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
           }
           return { content: note };
         } catch (e) {

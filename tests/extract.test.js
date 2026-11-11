@@ -40,14 +40,18 @@ test("非 patch 工具不读 patchText（path 优先）", () => {
   assert.deepEqual(extractPaths("edit", { patchText: "*** Update File: x", path: "real.js" }), ["real.js"]);
 });
 
-test("slugify：小写、非法字符转连字符、首尾去连字符、截断 40", () => {
+test("slugify：小写、非法字符转连字符、首尾去连字符、截断 40（T01 Unicode 保留）", () => {
   assert.equal(slugify("Hello World"), "hello-world");
   assert.equal(slugify("My Cool Feature!"), "my-cool-feature");
   assert.equal(slugify("--a--b--"), "a-b");
-  assert.equal(slugify("对象形态 slug"), "slug", "中文段折叠为连字符，字母段保留");
-  assert.equal(slugify("任务a 测试b"), "a-b", "中英混排：字母保留、中文折叠");
-  assert.equal(slugify("纯中文"), "", "无 a-z0-9 内容→空串");
+  assert.equal(slugify("对象形态 slug"), "对象形态-slug", "T01：中文段保留");
+  assert.equal(slugify("任务a 测试b"), "任务a-测试b", "中英混排：Unicode 字母数字均保留");
+  assert.equal(slugify("纯中文"), "纯中文", "T01：不再折叠为空");
   assert.equal(slugify(null), "");
+  // T13：码点截断——U+20000（扩展区 B，\p{L}，UTF-16 为代理对）不被切半
+  const sur = slugify("𠀀".repeat(50));
+  assert.equal(Array.from(sur).length, 40, "按码点截 40");
+  assert.ok(!/[\uD800-\uDBFF]$/.test(sur), "结尾不得是孤立高位代理");
   const long = slugify("x".repeat(100) + "-tail");
   assert.ok(long.length <= 40, `长度 ${long.length}`);
   assert.equal(long, "x".repeat(40));

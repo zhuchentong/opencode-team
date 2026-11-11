@@ -1,9 +1,12 @@
 // wf-workflow — 阶段定义单一来源（M10-d A1，消除 server/tui 两处漂移）
 // server 用：BLOCKING（阶段闸门）；tui 用：PHASE_ORDER / STAGE_LABEL / FOLD / CANON（进度条、标签、折叠、canonical 产物）
-export const PHASE_ORDER: string[] = ["intake", "planning", "review", "assign", "test_design", "building", "build_review", "testing", "fixing", "done"];
+// M16-r28：assign 阶段并入 test_design——PHASE_ORDER 收缩为 9 阶段；LEGACY_PHASES 保留历史阶段名
+// （在途任务存量兼容 + FLOWS from 合法集守卫引用，不再作为可达阶段；reconcile 属 FOLD 折叠态不在此列）
+export const PHASE_ORDER: string[] = ["intake", "planning", "review", "test_design", "building", "build_review", "testing", "fixing", "done"];
+export const LEGACY_PHASES: string[] = ["assign"];
 
 export const STAGE_LABEL: Record<string, string> = {
-  intake: "intake", planning: "planning", review: "review ∥ 可行性", assign: "assign",
+  intake: "intake", planning: "planning", review: "review ∥ 可行性", assign: "assign→test_design",
   test_design: "test_design（红）",
   building: "building", reconcile: "building+合并", build_review: "build_review",
   testing: "testing", fixing: "fixing", done: "done ∥ 复盘", retrospect: "done ∥ 复盘",

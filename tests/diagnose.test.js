@@ -11,7 +11,7 @@ test("entryValue：非 done 阶段 = 头行 + 完整 guidance（抗 compaction �
   const v = entryValue(st);
   assert.match(v, /^phase=planning slug=demo rounds=/);
   assert.ok(v.includes("禁止修改业务代码"), "guidance 正文进入 entry");
-  assert.ok(v.includes("/wf:review"), "下一步指引进入 entry");
+  assert.ok(v.includes(`wf_command(name="wf:review")`), "下一步指引进入 entry（T06：工具推进格式）");
 });
 
 test("entryValue：done 终态只留一行提示（不长期占用系统提示）", () => {
@@ -28,7 +28,7 @@ const mkLog = () => ([
   { at: "t1", cmd: "wf:intake", from: null, to: "intake", ok: true },
   { at: "t2", cmd: "wf:review", from: "building", to: "building", ok: false, note: "illegal-transition" },
   { at: "t3", cmd: "wf:review", from: "building", to: "building", ok: false, note: "illegal-transition" },
-  { at: "t4", cmd: "wf:assign", from: "review", to: "review", ok: false, note: "gate-rejected" },
+  { at: "t4", cmd: "wf:test-design", from: "review", to: "review", ok: false, note: "gate-rejected" },
   { at: "t5", cmd: "gate:block", tool: "edit", detail: "src/app.tsx", from: "planning", to: "planning", ok: false, note: "blocked" },
   { at: "t6", cmd: "gate:block", tool: "shell", detail: "out.txt", from: "planning", to: "planning", ok: false, note: "blocked" },
 ]);
@@ -50,7 +50,7 @@ test("diagnoseReport：拒绝分类计数 + 阻断取证 + 上限告警 + 关卡
   assert.match(r, /plan_review 已 3\/3 轮/);
   assert.match(r, /testPlan=❌ 未产出/);
   assert.match(r, /记账但磁盘缺失：test-plan\.md/); // artifacts 记账但 readdir 只有 plan.md
-  assert.match(r, /下一步：\/wf:assign/);
+  assert.match(r, /下一步：\/wf:test-design/);
 });
 
 test("diagnoseReport：产物对账一致 + 注入异常上报", () => {

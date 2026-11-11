@@ -8,6 +8,7 @@ import { createStore } from "./state.ts";
 import { createObserver } from "./observe.ts";
 import { createRpcBridge } from "./rpc-bridge.ts";
 import { registerArtifactTool } from "./artifact-tool.ts";
+import { registerCommandTool } from "./command-tool.ts"; // T05：模型侧状态机入口
 import { registerGuardHook } from "./guard-hook.ts";
 import { registerHint } from "./hint.ts";
 import { registerCommands } from "./commands.ts";
@@ -44,8 +45,12 @@ export default {
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
 
+    // ── T05：wf_command 工具——leader 侧状态机入口（见 command-tool.ts）──
+    // runner 为可变引用：commands 注册时填充 run，工具 execute 惰性取用（顺序不敏感）
+    const cmdTool = registerCommandTool(ctx, { load, runner, probeOnce });
+
     // ── M4：阶段越权硬阻断（planning/review 拒业务代码写；shell 门控与实测结论见 guard-hook.ts）──
-    const hookReg = registerGuardHook(ctx, { resolveState, isAllowed, allowHint, probeOnce, save });
+    const hookReg = registerGuardHook(ctx, { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir });
 
     // ── P3：superpowers 式自动激活提示（fail-soft，见 hint.ts）────────
     const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
@@ -55,7 +60,7 @@ export default {
       putReport, removeState, dumpStates, runner });
 
     return () => {
-      for (const r of [commands, tools, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }
+      for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg]) { try { r?.dispose?.(); } catch { } }
       closeStore();
     };
   },
