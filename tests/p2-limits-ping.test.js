@@ -45,18 +45,27 @@ test("pingReport：注册齐全", () => {
 
 test("pingReport：缺失/额外/无 model/{agents} 包裹 形状容错", () => {
   const r = pingReport({ agents: [{ id: "wf/planner" }, { name: "wf/superbot", model: { providerID: "x" } }] });
-  assert.match(r, /wf 角色：2\/7 已注册/);
+  // 计数只算 WF_ROLES 交集：planner=1/7；superbot 属"额外"（只点名，不进注册列表/model 行）
+  assert.match(r, /wf 角色：1\/7 已注册/);
   assert.match(r, /⚠️ 缺失：wf\/planner-reviewer/);
-  assert.match(r, /model=x\/\?/);
   assert.match(r, /wf\/planner model=\(继承会话模型\)/);
   assert.match(r, /ℹ️ 额外：wf\/superbot/);
 });
 
 // 2.2.6 真机形状：ctx.agent.list() 返回 {location, data:[...]}（agent-probe 实证；曾因不认 data 恒报 0/7）
-test("pingReport：{location,data} 真机形状", () => {
+// 真机完整形状=7 subagent + wf/leader(primary)——曾因把 leader 计入分子报 8/7（计数只算 WF_ROLES 交集）
+test("pingReport：{location,data} 真机形状（含 leader → 7/7 + 额外）", () => {
+  const r = pingReport({ location: { directory: "/p" }, data: [...WF_ROLES.map((name) => ({ id: name, mode: "subagent" })), { id: "wf/leader", mode: "primary" }] });
+  assert.match(r, /wf 角色：7\/7 已注册/);
+  assert.ok(!r.includes("缺失"));
+  assert.match(r, /ℹ️ 额外：wf\/leader/);
+});
+
+test("pingReport：纯 7 角色形状不带额外行", () => {
   const r = pingReport({ location: { directory: "/p" }, data: WF_ROLES.map((name) => ({ id: name, mode: "subagent" })) });
   assert.match(r, /wf 角色：7\/7 已注册/);
   assert.ok(!r.includes("缺失"));
+  assert.ok(!r.includes("额外"));
 });
 
 test("pingReport：空/异常形状不崩", () => {

@@ -350,11 +350,14 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
     model: a?.model?.providerID ? `${a.model.providerID}/${a.model.id ?? "?"}` : null,
   }));
   const found = norm.filter((n) => n.name.startsWith("wf/"));
-  const missing = WF_ROLES.filter((r) => !found.some((f) => f.name === r));
+  // 计数只算 WF_ROLES 交集：primary（wf/leader）等 wf/ 前缀但不属 7 角色的归"额外"
+  //（真机实证：registry 含 7 subagent + wf/leader primary → 原实现计成 8/7）
+  const matched = found.filter((f) => WF_ROLES.includes(f.name));
+  const missing = WF_ROLES.filter((r) => !matched.some((f) => f.name === r));
   const extra = found.filter((f) => !WF_ROLES.includes(f.name)).map((f) => f.name);
   return [
-    `wf 角色：${found.length}/${WF_ROLES.length} 已注册`,
-    ...found.map((f) => `  ${f.name} model=${f.model ?? "(继承会话模型)"}`),
+    `wf 角色：${matched.length}/${WF_ROLES.length} 已注册`,
+    ...matched.map((f) => `  ${f.name} model=${f.model ?? "(继承会话模型)"}`),
     ...(missing.length ? [`  ⚠️ 缺失：${missing.join(", ")}`] : []),
     ...(extra.length ? [`  ℹ️ 额外：${extra.join(", ")}`] : []),
   ].join("\n");

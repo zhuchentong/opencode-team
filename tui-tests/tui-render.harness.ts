@@ -124,6 +124,10 @@ console.log(`插件 id: ${t.id}`);
   // 流派 A 不用 JSX/Show/memo 声明式壳（防两个流派混用产生未验证形态）
   ok("P4 渲染走低层原语而非 JSX 元素", !src.includes("<box") && !src.includes("<text"));
   ok("P4 无 createMemo 声明式壳", !src.includes("createMemo"));
+  // P3b 防退化（P3a→P3b 真机崩溃根因偏离，p0-probe 真机实证形态之外一律禁止）：
+  // render 顶层零 effect 创建（纯计算上下文禁区）、零同步外部调用（数据拉取经 microtask/timer/事件）
+  ok("P4 无 effect 创建（P3a 偏离①回归禁止）", !src.includes("createEffect("));
+  ok("P4 无 untrack 包裹（P3a 偏离①配套禁止）", !src.includes("untrack("));
 }
 
 // ── P5：挂载渲染——render 返回单一元素 + testRender 帧不崩 ───────────

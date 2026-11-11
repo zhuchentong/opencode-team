@@ -1,41 +1,50 @@
-// wf-workflow TUI（P3 重设计：流派 A 稳定容器 + quota 式输入拦截主轨）
-// 渲染（ERR-20261110-005/009 的正解，P0② 真机验证不崩）：
-//   slot render 只建一次恒定 container box；容器内唯一一条 insert(container, () => buildTree())
-//   ——信号变化在 Solid 自管的 render effect 内换树（宿主 claim.render 永不被重新执行）。
-//   render 顶层零响应式读取（theme/sessionID/snap 全部只进 accessor / createEffect）。
-//   usage-monitor/agents-sidebar 双家真机背书 + containers===1/inserts===1 测试锚。
-// 命令主轨（P0⑧ 真机验证）：return 键 priority-1 拦截层——输入以 /wf: 开头则清空编辑器并
+// wf-workflow TUI（P3b：渲染逐字收敛到 P0 探针真机已证不崩的形态）
+// ── P3a→P3b 修订根因（真机实证：流派 A 容器本身不崩=P0 build 每 2.5s tick 容器内换树 30+ 次零崩溃；
+//    P3a 崩在 sidebar.content = 对 P0 形态的三处偏离）：
+//    ① render 顶层建了 effect（P0 没有）——effect/纯计算上下文禁区；
+//    ② render 顶层同步调用 refresh()——首个 await 前的同步段运行在宿主 PluginOutput nodes() memo
+//      的追踪上下文内，若其中有任何响应式读取（context.client/data getters）会被 memo 吸收为依赖，
+//      依赖一变 → memo 重跑 → 重新执行 claim.render 返回全新根 → 撞 reconciler `e.length`；
+//    ③ 文本 children 用裸字符串（P0 用 insert(t,[str]) 数组形态 + truncate prop）。
+//    P3b 全部逐字收敛：render 顶层=只建容器+一条 insert+返回；一切响应式读取只进 accessor；
+//    一切数据拉取经 queueMicrotask/timer/事件回调（追踪上下文之外）。
+// 主轨命令（P0⑧ 真机验证）：return 键 priority-1 拦截层——输入以 /wf: 开头则清空编辑器并
 //   经 RPC exec 本地执行（返回值渲染 toast）；否则同步返回 false 透传（返回 Promise 即算已处理）。
 //   server 同名命令注册保留作降级轨（Web/Desktop：wait→prompt(resume:false) 注入）。
-// 数据通道：RPC methods（state/list/exec，location 必带）主 + updated/report 事件（P0④ 五条件
-//   版已通）+ data.listen 兜底 + 5s 轮询对账；事件按 location.directory 过滤（P0 多实例发现）。
+// 数据通道：RPC methods（state/list/exec，location 必带）主 + updated/report 事件 + data.listen
+//   兜底 + 5s 轮询对账；事件按 location.directory 过滤（P0 多实例发现）。
 // toast：sessionID|at 去重（exec 返回同一 at，本地渲染先行登记，防事件/轮询二次弹）+ 60s 新鲜度门。
+// 探针：本次起无条件写 .workflow/_debug/tui-refresh.log（低量：loaded/slot-render/build 抽样/
+//   refresh 变化时/recv 每次到达）——真机取证优先。
 import { Plugin } from "@opencode/plugin/tui";
-import { createSignal, createEffect, untrack } from "solid-js";
+import { createSignal } from "solid-js";
 import * as ot from "@opentui/solid";
-const { createElement, insert, setProp } = ot as any; // 低层原语（@opentui/solid 导出，宿主注入运行时实例）
+const { createElement, insert, setProp } = ot as any; // 低层原语（宿主注入运行时实例，P0 同款）
 import { Wf } from "../shared/rpc.ts";
 import { STAGE_ORDER, STAGE_LABEL, FOLD, CANON } from "../shared/phases.ts";
 
-const TUI_BUILD = "M16-p3-schoolA";
+const TUI_BUILD = "M16-p3b-schoolA-p0identical";
 const ROWS = 20;
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
-const sanitize = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").replace(/[\r\n]+/g, " ");
+const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
+const sanitize = (s: string) => (String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ");
 
-// 元素工厂（usage-monitor element() 范式）：props 跳 undefined；children 过滤 null/undefined/false；
-// 文本永远是字符串且非空（空槽单空格 " "——opentui orphan text 教训）
-function el(tag: string, props: Record<string, any>, children: any[] = []): any {
-  const node = createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v !== undefined) setProp(node, k, v);
-  }
-  for (const c of children) {
-    if (c !== null && c !== undefined && c !== false) insert(node, c);
-  }
-  return node;
+// ── 节点构造：P0 探针逐字收敛（真机不崩的形态）────────────────────
+function textEl(s: string, fg?: any) {
+  const t = createElement("text");
+  try { if (fg) setProp(t, "fg", fg); } catch { /* ignore */ }
+  setProp(t, "truncate", true);
+  insert(t, [sanitize(s)]); // 数组形态（P0 实证）；文本恒非空
+  return t;
 }
-const txt = (value: string, fg: any): any => el("text", { fg }, [sanitize(value || " ")]);
+function boxEl(children: unknown[]) {
+  const b = createElement("box");
+  setProp(b, "width", "100%");
+  setProp(b, "flexDirection", "column");
+  for (const c of children) if (c !== null && c !== undefined && c !== false) insert(b, c);
+  return b;
+}
 
 const stageOf = (phase: any) => {
   const p = FOLD[phase] ?? phase;
@@ -51,7 +60,7 @@ const listLine = (x: any) => {
 // 文案模板与 r29f 逐字一致：恒定 20 行（分隔线/slug/阶段/进度/轮次/关卡/产物），空槽 " "
 const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any) => {
   const t: string[] = new Array(ROWS).fill(" ");
-  const c: string[] = new Array(ROWS).fill(T.text.muted);
+  const c: any[] = new Array(ROWS).fill(T.text.muted);
   t[0] = "── wf ──────────────";
   t[ROWS - 1] = "──────────────────────";
   if (err) {
@@ -108,25 +117,25 @@ const buildRows = (s: any, err: string | null, oth: string[], othScope: string, 
 export default Plugin.define({
   id: "wf-workflow-tui",
   setup(context: any) {
-    const debug = context?.options?.debug === true;
     const compact = context?.options?.compact === true;
-    const REPO = String(context?.location?.directory ?? "");
+    // REPO 兜底：location 缺失时由模块 URL 反推仓库根（P3a 疑点：探针可能写错位置）
+    const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", import.meta.url).pathname).replace(/\/$/, "");
     const LOADED_AT = new Date().toISOString();
-    // 探针收敛（方案 2.5）：默认关，options.debug=true 时写 .workflow/_debug/tui-refresh.log
+    let seq = 0;
     const probe = (data: Record<string, unknown>) => {
-      if (!debug) return;
       (async () => {
         try {
           const fs = await import("node:fs");
           const dir = `${REPO}/.workflow/_debug`;
           fs.mkdirSync(dir, { recursive: true });
-          fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({ at: new Date().toISOString(), build: TUI_BUILD, loadedAt: LOADED_AT, ...data }) + "\n");
+          fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({ at: new Date().toISOString(), build: TUI_BUILD, loadedAt: LOADED_AT, seq: ++seq, ...data }) + "\n");
         } catch { /* 探针失败不影响 UI */ }
       })();
     };
-    probe({ evt: "loaded" });
+    // loaded 探针带 options 形状（本次真机问题：options.debug 是否传达到 TUI）
+    probe({ evt: "loaded", repo: REPO, options: JSON.stringify(context?.options ?? null), loc: str(context?.location?.directory), hasSlot: typeof context?.ui?.slot === "function", hasKeymap: typeof context?.keymap?.layer === "function", hasDataListen: typeof context?.data?.listen === "function", hasRendererEditor: !!context?.renderer });
 
-    // ── 数据层 ─────────────────────────────────────────────────────
+    // ── 数据层（全部拉取只发生在 timer/microtask/事件回调——追踪上下文之外）──
     const [snap, setSnap] = createSignal<any>(null); // { st, oth, othScope, err }
     let latestSid = "";
     const shown = new Set<string>();
@@ -159,7 +168,7 @@ export default Plugin.define({
         }
         context.ui.toast.show({ message: text, variant: "info" });
         probe({ reportEv: "toast-shown", chan });
-      } catch (er) { probe({ reportEv: "toast-err", err: str((er as Error)?.message ?? er) }); }
+      } catch (er) { probe({ reportEv: "toast-err", err: errMsg(er) }); }
     };
 
     let lastFp = "";
@@ -200,7 +209,7 @@ export default Plugin.define({
           setSnap({ st: s ?? { active: false }, oth, othScope, err: null });
         }
       } catch (e) {
-        const msg = str((e as Error)?.message ?? e);
+        const msg = errMsg(e);
         probe({ evt: "refresh-err", err: msg });
         const fp = "ERR:" + msg;
         if (fp !== lastFp) { lastFp = fp; setSnap({ st: null, oth: [], othScope: "", err: msg }); }
@@ -214,12 +223,12 @@ export default Plugin.define({
         if (r?.text) toastReport({ sessionID: latestSid, text: r.text, at: r.at }, "local");
         await refresh();
       } catch (e) {
-        context.ui.toast.show({ message: `wf 执行失败：${str((e as Error)?.message ?? e)}`, variant: "error" });
+        context.ui.toast.show({ message: `wf 执行失败：${errMsg(e)}`, variant: "error" });
       }
     };
 
     // 事件通道（P0④ 五条件版真机已通）+ data.listen 兜底
-    const offUpdated = rpc().events.on("updated", (e: any) => { if (locOk(e)) refresh(); });
+    const offUpdated = rpc().events.on("updated", (e: any) => { if (locOk(e)) void refresh(); });
     const offReport = rpc().events.on("report", (e: any) => {
       if (!locOk(e)) return;
       toastReport(e && typeof e === "object" && "data" in e ? (e as any).data : e, "rpc");
@@ -233,54 +242,54 @@ export default Plugin.define({
         if (!locOk(details)) return;
         const payload = details?.data ?? details;
         if (type === "rpc.wf.report") toastReport(payload, "data");
-        else if (type === "rpc.wf.updated") refresh();
+        else if (type === "rpc.wf.updated") void refresh();
       });
     } catch { /* data.listen 不可用则走其余通道 */ }
     probe({ evt: "subscribed", hasDataListen: !!offData });
 
-    const timer = setInterval(() => { refresh(); }, 5000);
+    const timer = setInterval(() => { void refresh(); }, 5000);
 
-    // ── 渲染：流派 A 稳定容器 ──────────────────────────────────────
-    const renderError = (msg: string): any =>
-      el("box", { width: "100%" }, [txt(`wf 渲染异常: ${msg}`, context.theme?.text?.feedback?.error ?? "red")]);
-
-    const buildTree = (): any => {
-      // accessor 内才读响应式（snap/sessionID/theme）——换树只发生在容器内部，
-      // 由 Solid render effect 自管（宿主 nodes() memo 永不重跑 claim.render）
-      const T = context.theme ?? { text: { muted: "gray", base: "white", feedback: { error: "red", success: "green" }, action: { primary: "cyan" } } };
-      try {
-        const data = snap();
-        if (compact) {
-          const s = data?.st;
-          if (!s?.active) return txt(str(data?.err ? `wf 错误: ${data.err}` : "  wf: 无活动任务"), T.text.muted);
-          const r = s.rounds ?? {};
-          const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
-          return txt(`▶ ${label} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`, T.text.action.primary);
-        }
-        const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
-        return el("box", { flexDirection: "column" }, t.map((line: string, i: number) => txt(line, c[i])));
-      } catch (e) {
-        return renderError(str((e as Error)?.message ?? e));
-      }
-    };
+    // ── 渲染：P0 探针逐字形态（真机 build 30+ 次容器内换树零崩溃）──────
+    let containers = 0;
+    let builds = 0;
 
     const unregister = context.ui.slot({
       append: "sidebar.content",
       render: (input: any) => {
-        // render 顶层：只建容器 + 一条 insert——零响应式读取（sessionID 经 untrack 同步取一次
-        // + createEffect 跟随后续会话切换，读取不进宿主 nodes() memo）
-        const container = el("box", { width: "100%", flexDirection: "column" });
-        const syncSid = () => {
-          const sid = String(input.sessionID ?? "");
-          if (sid !== latestSid) {
-            latestSid = sid;
-            lastFp = "";
-            refresh();
+        // render 顶层：只建容器 + 一条 insert + 返回——零响应式读取、零调用外部函数
+        containers += 1;
+        const container = boxEl([]);
+        insert(container, () => {
+          // 一切响应式读取（input.sessionID/snap/theme）只在本 accessor 内——
+          // 变化只重跑本函数、容器内换树（Solid 自管 render effect，宿主 claim.render 永不重跑）
+          builds += 1;
+          if (builds === 1 || builds === 2 || builds === 5 || builds % 20 === 0) {
+            probe({ evt: "build", n: builds, containers, sid: str(input?.sessionID), hasSnap: !!snap() });
           }
-        };
-        untrack(syncSid);
-        createEffect(syncSid);
-        insert(container, () => buildTree());
+          try {
+            const sid = String(input?.sessionID ?? "");
+            if (sid && sid !== latestSid) {
+              latestSid = sid;
+              lastFp = "";
+              queueMicrotask(() => { void refresh(); }); // 拉取推迟出追踪上下文（P3a 根因②的修复）
+            }
+            const T = context.theme ?? { text: { muted: "gray", base: "white", feedback: { error: "red", success: "green" }, action: { primary: "cyan" } } };
+            const data = snap();
+            if (compact) {
+              const s = data?.st;
+              if (!s?.active) return textEl(str(data?.err ? `wf 错误: ${data.err}` : "  wf: 无活动任务"), T.text.muted);
+              const rr = s.rounds ?? {};
+              const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
+              return textEl(`▶ ${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
+            }
+            const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
+            return boxEl(t.map((line: string, i: number) => textEl(line, c[i])));
+          } catch (e) {
+            probe({ evt: "render-ERR", err: errMsg(e) });
+            return boxEl([textEl(`wf 渲染异常: ${errMsg(e)}`, "red")]);
+          }
+        });
+        probe({ evt: "slot-render", containers }); // containers>1 = 宿主重跑 render 的实证（应避免）
         return container;
       },
     });
