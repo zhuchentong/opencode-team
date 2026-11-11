@@ -76,7 +76,10 @@ export async function registerCommands(ctx: any, deps: any) {
 
   // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
   // 记录：命令名/文本长度/RPC 通道形状/emit 结果——与 TUI 侧 tui-refresh.log reportEv 联看定死点
+  // P6 收敛：默认关闭（真机调试期结束）；WF_DEBUG=1 开启
+  const PROBE_ON = process.env.WF_DEBUG === "1";
   const reportProbe = async (sessionID: unknown, data: Record<string, unknown>) => {
+    if (!PROBE_ON) return;
     try {
       const dir = `${await debugDirFor(String(sessionID ?? ""))}/.workflow/_debug`;
       fs.mkdirSync(dir, { recursive: true });

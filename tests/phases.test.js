@@ -1,4 +1,4 @@
-// P0-b：shared/phases.js 单一来源一致性守卫（防 server/tui/lib 三处漂移）
+// P0-b：shared/phases.ts 单一来源一致性守卫（防 server/tui/lib 三处漂移）
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING } from "../shared/phases.ts";
@@ -43,13 +43,4 @@ test("STAGE_LABEL 覆盖 PHASE_ORDER ∪ FOLD 键（TUI 标签不缺项）", () 
   }
 });
 
-// 漂移防线：phases.js 为宿主旧模块图兼容 shim（见其头注释），真正单一来源是 phases.ts
-// （lib/tui 实际消费）。两文件若漂移，上面守卫只测 .js 而消费用 .ts → 守卫失效。
-// 此断言把两者焊死：内容必须逐字段全等。
-import * as tsPhases from "../shared/phases.ts";
-test("phases.js ↔ phases.ts 逐字段全等（防 shim 漂移）", () => {
-  const js = { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING };
-  for (const [k, v] of Object.entries(js)) {
-    assert.deepEqual(tsPhases[k], v, `phases.${k} 在 .js 与 .ts 间漂移`);
-  }
-});
+// P6：phases.js 兼容 shim 已删除（宿主模块图全面切换 dist/tui.js 与 .ts 入口，真机验证后无旧引用）

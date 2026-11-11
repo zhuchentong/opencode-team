@@ -125,7 +125,10 @@ export default Plugin.define({
     const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", import.meta.url).pathname).replace(/\/$/, "");
     const LOADED_AT = new Date().toISOString();
     let seq = 0;
+    // P6 收敛：探针默认关闭（真机调试期结束）；WF_DEBUG=1 ./scripts/tui-restart.sh 开启
+    const PROBE_ON = process.env.WF_DEBUG === "1";
     const probe = (data: Record<string, unknown>) => {
+      if (!PROBE_ON) return;
       (async () => {
         try {
           const fs = await import("node:fs");

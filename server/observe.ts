@@ -17,7 +17,8 @@ export function createObserver(ctx: any, opt: any) {
 
   // 首次触发探针（只写一次，验证插件所见入参形状；ERR-002 教训：先探形状再使用）
   // P0-a：目录改为按会话解析（原为模块级 DBG 常量，硬编码仓库路径）
-  const PROBE = opt.probe !== false;
+  // P6 收敛：默认关闭——真机调试期结束；需要时 options.probe=true 或环境变量 WF_DEBUG=1（server/TUI 通用）
+  const PROBE = opt.probe === true || process.env.WF_DEBUG === "1";
   const probeOnce = async (sessionID: string, name: string, data: Record<string, unknown>) => {
     try {
       if (!PROBE) return;

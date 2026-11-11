@@ -283,7 +283,9 @@ var tui_default = Plugin.define({
 		const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", "" + import.meta.url).pathname).replace(/\/$/, "");
 		const LOADED_AT = (/* @__PURE__ */ new Date()).toISOString();
 		let seq = 0;
+		const PROBE_ON = process.env.WF_DEBUG === "1";
 		const probe = (data) => {
+			if (!PROBE_ON) return;
 			(async () => {
 				try {
 					const fs = await import("node:fs");
