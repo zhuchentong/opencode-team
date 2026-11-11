@@ -334,7 +334,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
 
 // ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────
 // WF_ROLES = 工作流契约的 7 个 subagent 角色（leader 除外，leader 是当前会话）。
-// agents 形状容错：数组或 {agents}，项取 name/id 与 model.providerID/model.id。
+// agents 形状容错：数组、{agents} 或 {data}（2.2.6 真机 ctx.agent.list() 实际返回
+// {location, data:[...]}——agent-probe.json 2026-11-10 实证），项取 name/id 与 model.providerID/model.id。
 export const WF_ROLES = ["wf/planner", "wf/planner-reviewer", "wf/tester", "wf/builder",
   "wf/builder-reviewer", "wf/fixer", "wf/learner"];
 export interface AgentLike {
@@ -342,8 +343,8 @@ export interface AgentLike {
   id?: string;
   model?: { providerID?: string; id?: string };
 }
-export function pingReport(agents: AgentLike[] | { agents?: AgentLike[] } | null | undefined): string {
-  const arr = Array.isArray(agents) ? agents : (agents?.agents ?? []);
+export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: AgentLike[] } | null | undefined): string {
+  const arr = Array.isArray(agents) ? agents : (agents?.agents ?? agents?.data ?? []);
   const norm = arr.map((a) => ({
     name: String(a?.name ?? a?.id ?? ""),
     model: a?.model?.providerID ? `${a.model.providerID}/${a.model.id ?? "?"}` : null,

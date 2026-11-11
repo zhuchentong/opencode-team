@@ -182,7 +182,8 @@ test("options.limits 覆盖端到端：plan_review=1 时第二轮 review 被拒"
 
 test("wf:ping：ctx.agent.list 可用 → 注册表；缺失 → fail-soft 文案", async () => {
   const m = mkCtx();
-  m.ctx.agent = { list: async () => [{ name: "wf/planner", model: { providerID: "p", id: "m" } }] };
+  // mock 与 2.2.6 真机形状同源（{location,data}——曾因 mock 用裸数组掩盖 pingReport 不认 data 的 0/7 bug）
+  m.ctx.agent = { list: async () => ({ location: { directory: "/p" }, data: [{ name: "wf/planner", model: { providerID: "p", id: "m" } }] }) };
   await plugin.setup(m.ctx);
   const ping = await cmd(m, "wf:ping").execute({ sessionID: "ses_p", prompt: {} });
   assert.match(ping, /wf 角色：1\/7 已注册/);

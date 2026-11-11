@@ -52,6 +52,13 @@ test("pingReport：缺失/额外/无 model/{agents} 包裹 形状容错", () => 
   assert.match(r, /ℹ️ 额外：wf\/superbot/);
 });
 
+// 2.2.6 真机形状：ctx.agent.list() 返回 {location, data:[...]}（agent-probe 实证；曾因不认 data 恒报 0/7）
+test("pingReport：{location,data} 真机形状", () => {
+  const r = pingReport({ location: { directory: "/p" }, data: WF_ROLES.map((name) => ({ id: name, mode: "subagent" })) });
+  assert.match(r, /wf 角色：7\/7 已注册/);
+  assert.ok(!r.includes("缺失"));
+});
+
 test("pingReport：空/异常形状不崩", () => {
   assert.match(pingReport([]), /0\/7/);
   assert.match(pingReport(null), /0\/7/);
