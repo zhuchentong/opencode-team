@@ -147,3 +147,24 @@ test("M16-r32 瘦身预算：各产物的体积/结构约束写入对应角色�
   // learner：lessons ≤6KB
   assert.match(renderRole("learner"), /≤6KB/, "learner 应含 lessons 预算");
 });
+
+test("M16-r33 写入者契约：产出角色自写产物+patch 修订+回执禁全文（防回归）", () => {
+  // 真机取证：todolist leader 代写 3 产物=双倍生成（planner 回复一遍+leader tool 入参一遍）；
+  // 统一写入者=子代理自写，修订用 patch 只输出变更段。
+  for (const name of ["planner", "planner-reviewer", "tester", "builder-reviewer", "learner"]) {
+    const body = renderRole(name);
+    assert.match(body, /wf_write_artifact/, `${name} 应指明经 wf_write_artifact 落盘`);
+    assert.match(body, /自行|自写/, `${name} 应要求子代理自写产物`);
+    assert.match(body, /patch/, `${name} 应含 patch 增量修订指引`);
+    assert.match(body, /摘要|勿回传全文|禁回传全文|不回传全文/, `${name} 应要求回执只带摘要禁全文`);
+  }
+  // planner 修订契约：先读原文、old 逐字摘录
+  const planner = renderRole("planner");
+  assert.match(planner, /逐字|原文/, "planner patch 修订应先读原文逐字摘录 old");
+  // leader 是代写行为发起方：必须含写入者契约（禁代写/禁要求全文回传）+ 体量前缀 + 委派带预算
+  const leader = renderRole("leader");
+  assert.match(leader, /禁止代写/, "leader 应禁止代写产物");
+  assert.match(leader, /全文作为最终回复|由你写入/, "leader 应禁止要求子代理全文回传代写");
+  assert.match(leader, /\[S\]\/\[M\]\/\[L\]/, "leader 冷启动应含体量前缀");
+  assert.match(leader, /产物预算/, "leader 委派应要求携带产物预算");
+});

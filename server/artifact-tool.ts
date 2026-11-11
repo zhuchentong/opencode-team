@@ -20,14 +20,27 @@ export function registerArtifactTool(ctx: any, deps: any) {
       description:
         "把 wf 工作流产物写入 <项目>/.workflow/<slug>/。kind 决定文件名：" +
         Object.keys(KIND_FILES).join(" | ") +
-        "。循环类产物（plan-review/build-review）自动按当前轮次编号。",
+        "。循环类产物（plan-review/build-review）自动按当前轮次编号。" +
+        "首写用 content（完整内容）；修订已有产物用 patch=[{old,new}]（精确唯一匹配、顺序应用，只输出变更段，勿全量重写）——content 与 patch 二选一。",
       input: {
         type: "object",
         properties: {
           kind: { type: "string", enum: Object.keys(KIND_FILES), description: "产物类型" },
-          content: { type: "string", description: "完整文件内容" },
+          content: { type: "string", description: "完整文件内容（首写用；与 patch 二选一）" },
+          patch: {
+            type: "array",
+            description: "增量修订（修订已有产物用；与 content 二选一）：old 逐字摘录原文、唯一匹配，按序应用",
+            items: {
+              type: "object",
+              properties: {
+                old: { type: "string", description: "原文中待替换的片段（逐字摘录，须唯一）" },
+                new: { type: "string", description: "替换后的内容" },
+              },
+              required: ["old", "new"],
+            },
+          },
         },
-        required: ["kind", "content"],
+        required: ["kind"],
       },
       options: { codemode: false },
       execute: async (args: any, context: any) => {
@@ -40,9 +53,13 @@ export function registerArtifactTool(ctx: any, deps: any) {
           });
           await logToolsOnce(namesPromise, context?.sessionID);
           const kind = String(args?.kind ?? "");
-          const content = typeof args?.content === "string" ? args.content : String(args?.content ?? "");
           const mk = KIND_FILES[kind];
           if (!mk) return { content: `❌ 未知 kind=${kind}（可用：${Object.keys(KIND_FILES).join(" | ")}）` };
+          // M16-r33 P1a：content（首写）与 patch（增量修订）二选一
+          const hasContent = typeof args?.content === "string";
+          const patch = Array.isArray(args?.patch) ? args.patch : null;
+          if (hasContent && patch) return { content: "❌ content 与 patch 互斥：首写用 content，修订已有产物用 patch。" };
+          if (!hasContent && !patch) return { content: "❌ 须提供 content（首写完整内容）或 patch（增量修订 [{old,new}]）之一。" };
           let st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
           if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
           // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
@@ -50,16 +67,40 @@ export function registerArtifactTool(ctx: any, deps: any) {
           const file = mk(st); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
           const target = `${dir}/.workflow/${st.slug}/${file}`;
           fs.mkdirSync(`${dir}/.workflow/${st.slug}`, { recursive: true });
-          fs.writeFileSync(target, content.endsWith("\n") ? content : `${content}\n`);
+          // M16-r33 P1a：patch 模式——读磁盘原文，顺序应用（每条 old 对当前内容唯一精确匹配）；
+          // 未命中/歧义/目标不存在 → 报错不落盘。修订只输出变更段，省全量重写的生成耗时。
+          let finalContent: string;
+          let mode: "write" | "patch";
+          if (patch) {
+            if (!fs.existsSync(target)) return { content: `❌ patch 目标不存在：${target}（首写必须用 content）。` };
+            let cur = fs.readFileSync(target, "utf8");
+            for (let i = 0; i < patch.length; i++) {
+              const old = String(patch[i]?.old ?? "");
+              const nw = String(patch[i]?.new ?? "");
+              if (old === nw) continue; // 幂等跳过
+              if (!old) return { content: `❌ patch[${i}].old 为空（须逐字摘录原文片段）。` };
+              const first = cur.indexOf(old);
+              if (first < 0) return { content: `❌ patch[${i}] 未命中：old 须逐字摘录产物原文（修订前先 read 产物），本次未落盘。` };
+              if (cur.indexOf(old, first + 1) >= 0) return { content: `❌ patch[${i}] 歧义：old 在产物中出现多次，请补充上下文使其唯一，本次未落盘。` };
+              cur = cur.slice(0, first) + nw + cur.slice(first + old.length);
+            }
+            finalContent = cur;
+            mode = "patch";
+          } else {
+            finalContent = args.content;
+            mode = "write";
+          }
+          fs.writeFileSync(target, finalContent.endsWith("\n") ? finalContent : `${finalContent}\n`);
           const bytes = fs.statSync(target).size;
-          const verdict = kind === "test-report" ? parseVerdict(content) : undefined; // P0-b：解析提取至 lib
+          // M16-r33：verdict 从**结果全文**解析（patch 模式入参无 content，必须读结果，否则 done 关卡误拦）
+          const verdict = kind === "test-report" ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
           const mark = (row: any) => {
             row.artifacts = row.artifacts ?? {};
             row.artifacts[file] = { at: new Date().toISOString(), bytes };
             if (kind === "test-plan") row.testPlanWritten = true;
             if (kind === "test-report") row.testReportVerdict = verdict;
-            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: file });
+            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "patch" ? `${file} mode=patch` : file });
           };
           mark(st);
           let saved = await save(st);
@@ -82,10 +123,10 @@ export function registerArtifactTool(ctx: any, deps: any) {
           // M16-r29：阶段纪律——产物错位告警（不阻断，落盘/记账照常）
           const phaseWarn = artifactPhaseWarning(kind, st.phase);
           if (phaseWarn) note += `\n${phaseWarn}`;
-          // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）
-          const sizeWarn = artifactSizeWarning(kind, bytes);
+          // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）；M16-r33：按任务体量分级
+          const sizeWarn = artifactSizeWarning(kind, bytes, st.size);
           if (sizeWarn) note += `\n${sizeWarn}`;
-          if (kind === "test-report" && !hasStrictVerdictLine(content)) {
+          if (kind === "test-report" && !hasStrictVerdictLine(finalContent)) {
             note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
           }
           // P4 公告：verdict 指路（与 GATES["wf:done"] 拒绝文案同语义，agent 在 tool output 直接看到）

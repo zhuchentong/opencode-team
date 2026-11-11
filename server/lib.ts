@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r32";
+export const VERSION = "M16-r33";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -33,6 +33,8 @@ export interface FlowLogEntry {
 export interface WfState {
   slug?: string;
   phase?: string | null;
+  // M16-r33 P2：任务体量分级（intake 前缀 [S]/[M]/[L] 声明，缺省 M）——驱动产物预算与从简指引
+  size?: string;
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -278,7 +280,13 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.testPlanWritten;
       delete st.testReportVerdict;
     }
-    st.slug = slugify(force ? raw.slice(1).trim() : raw) || st.slug || "untitled";
+    // M16-r33 P2：体量前缀 [S]/[M]/[L]（可跟在 ! 强制符后）——声明任务体量，驱动预算分级
+    let body = force ? raw.slice(1).trim() : raw;
+    let size = "M";
+    const sm = body.match(/^\[([SML])\]\s*/i);
+    if (sm) { size = sm[1].toUpperCase(); body = body.slice(sm[0].length); }
+    st.slug = slugify(body) || st.slug || "untitled";
+    st.size = size;
   }
 
   return { ok: true };
@@ -293,6 +301,19 @@ export function guidance(phase: string | null | undefined, st: WfState, limits: 
   return base;
 }
 
+// M16-r33 P1b：写入者契约——子代理自写产物（leader 代写=双倍生成：回复一遍+tool 入参一遍），
+// 修订用 patch 只输出变更段。真机取证：todolist leader 代写 3 产物；implant 子代理自写只付一次。
+const WRITE_CONTRACT = "写入契约：产物由子代理自行调用 wf_write_artifact 落盘，leader 禁止代写（双倍生成成本）；回执只带摘要+路径+证据，勿回传全文。修订先读产物原文，用 patch 只输出变更段（old 逐字摘录）。";
+// M16-r33 P2：双通道预算注入——phase guidance 渲染当前级预算（leader 自看），委派 prompt 也须携带（子代理看）
+function budgetLine(st: WfState, kinds: string[]): string {
+  const tier = st.size === "S" ? "S" : "M";
+  const parts = kinds.map((k) => `${k}≤${budgetFor(k, tier)}KB`).join("、");
+  return `产物预算（${tier} 级，字节计）：${parts}。委派 prompt 必须携带本预算；超预算用 patch 删减，勿全量重写。`;
+}
+function leanLine(st: WfState): string | null {
+  return st.size === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
+}
+
 function guidanceBase(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...limits };
   const s = st.slug || "(未定)";
@@ -301,6 +322,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
       `1) 与用户澄清需求；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
       `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
     ].join("\n");
@@ -310,6 +332,9 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。`,
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
+      WRITE_CONTRACT,
+      budgetLine(st, ["plan"]),
+      ...(leanLine(st) ? [leanLine(st)] : []),
       `完成 → wf_command(name="wf:review")`,
     ].join("\n");
     case "review": {
@@ -320,6 +345,9 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
         `  a) wf/planner-reviewer（五角度，审 plan.md → wf_write_artifact(kind=plan-review)）；`,
         `  b) wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，不写任何代码文件)。`,
         `委派契约：prompt 只带 plan.md 路径与任务行摘录，声明子代理禁止全仓扫描（只读产物点名文件）。`,
+        WRITE_CONTRACT,
+        budgetLine(st, ["plan-review", "test-plan"]),
+        ...(leanLine(st) ? [leanLine(st)] : []),
       ];
       if ((r.plan_review ?? 0) >= 2) {
         lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer 的 sessionID 委派（省冷启动）；复核范围=上轮 plan-review-r${(r.plan_review ?? 1) - 1}.md 的 findings 逐条销项 + 本轮 plan.md 修订 diff 全文（防返工引入新缺陷）+ 交叉一致性抽查，勿全文重审。`);
@@ -351,11 +379,15 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "build_review": return [
       `【wf 工作流｜build_review（第 ${r.build_review}/${L.build_review} 轮）】slug=${s}`,
       `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）。`,
+      WRITE_CONTRACT,
+      budgetLine(st, ["build-review"]),
       `有遗漏 → wf_command(name="wf:build") 返工（重派 wf/builder），修完 wf_command(name="wf:reconcile") → name="wf:review-build"；通过 → wf_command(name="wf:test")；超限 → 停下问用户`,
     ].join("\n");
     case "testing": return [
       `【wf 工作流｜testing】slug=${s}`,
       `委派 wf/tester(mode=verify) → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。`,
+      WRITE_CONTRACT,
+      budgetLine(st, ["test-report"]),
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")`,
     ].join("\n");
     case "fixing": return [
@@ -366,6 +398,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "done": return [
       `【wf 工作流｜done】slug=${s}`,
       `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+      WRITE_CONTRACT,
+      budgetLine(st, ["lessons"]),
       `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。`,
     ].join("\n");
     default: return `【wf 工作流】阶段 ${phase}`;
@@ -400,10 +434,25 @@ export const ARTIFACT_BUDGET_KB: Record<string, number> = {
   "test-report": 10,
   lessons: 6,
 };
-export function artifactSizeWarning(kind: string, bytes: number): string | null {
-  const budget = ARTIFACT_BUDGET_KB[kind];
+// M16-r33 P2：S 级（简易/演示任务）收紧预算——真机取证 todolist 简易任务 plan 26KB/test-plan 22KB
+// 杀鸡用牛刀。L 级用 M 预算（体量标记只驱动从简指引，不放宽体积）。单位=KB（字节计，中文×~1.5）。
+export const ARTIFACT_BUDGET_S_KB: Record<string, number> = {
+  plan: 5,
+  "plan-review": 3,
+  "test-plan": 3,
+  "build-review": 3,
+  "test-report": 4,
+  lessons: 3,
+};
+export function budgetFor(kind: string, size?: string | null): number | null {
+  const table = size === "S" ? ARTIFACT_BUDGET_S_KB : ARTIFACT_BUDGET_KB;
+  return table[kind] ?? null;
+}
+export function artifactSizeWarning(kind: string, bytes: number, size?: string | null): string | null {
+  const budget = budgetFor(kind, size);
   if (!budget || bytes <= budget * 1024) return null;
-  return `⚠️ 产物超瘦身预算：${kind} ${(bytes / 1024).toFixed(1)}KB > ${budget}KB——请精简（表格化/只留要点/删冗长散文），过长产物拖慢生成与下游审核。`;
+  const tier = size === "S" ? "S" : "M";
+  return `⚠️ 产物超瘦身预算：${kind} ${(bytes / 1024).toFixed(1)}KB > ${budget}KB（${tier} 级，字节计）——请精简（表格化/只留要点/删冗长散文）；修订用 wf_write_artifact 的 patch 模式删减冗余章节，勿全量重写。`;
 }
 
 // ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────
