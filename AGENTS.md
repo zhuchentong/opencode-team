@@ -21,6 +21,7 @@
 - `shared/rpc.ts`：RPC 契约，server 与 TUI 两进程各自 import 同源文件；`tests/rpc-drift.test.js` 逐字段快照锁死——改形状必须同步守卫，否则事件/调用静默失联。
 - `tui/index.tsx`：流派 A 低层原语渲染，**禁 JSX**（harness 静态守卫全文件禁 `<box`/`<text`）；slot render 顶层零响应式、唯一动态点是容器内一条 `insert(accessor)`。此结构真机崩溃形态见 README「宿主契约备忘」，勿"顺手重构"。
 - `server/index.ts` 仅按依赖序组装接线，逻辑都在各模块内。
+- 完整「想改什么 → 改哪个文件」映射见 README「配置变更点速查」表；升级宿主/改流程语义先过 `docs/UPGRADE.md`。
 
 ## 宿主联动 gotchas（2.2.6 真机实证）
 

@@ -11,9 +11,11 @@ import { LIMITS, isDaily, budgetFor, type Limits, type WfState } from "./lib.ts"
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
 export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
+  // 易变区纪律（借鉴 my-opencode-deepseek-config 字节稳定前缀）：静态指引在前，
+  // 易变内容（轮次/续用 sessionID/head 行）殿后——返工同阶段 r+1、子会话登记只打穿尾部，静态段保 prompt cache。
   const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
-  if (st.phase === "done") return `${head}\n${DONE_ENTRY}`;
-  return `${head}\n${guidance(st.phase, st, limits, overrides)}`;
+  if (st.phase === "done") return `${DONE_ENTRY}\n${head}`;
+  return `${guidance(st.phase, st, limits, overrides)}\n${head}`;
 }
 
 export function guidance(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
@@ -65,7 +67,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
     case "intake": return [
       `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
       `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
-      `1) 与用户澄清需求；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `1) 与用户澄清需求（一次一问、多选优先，歧义收敛后再推进；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
       S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
       `完成 → wf_command(name="wf:plan")`,
@@ -75,38 +77,43 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
         : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`, ...reuseLines(st, "wf/planner")]),
+      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
       `完成 → wf_command(name="wf:review")`,
+      ...(S ? [] : reuseLines(st, "wf/planner")),
     ].join("\n");
     case "review": {
       const lines = [
-        `【wf 工作流｜review·日常模式（第 ${r.plan_review}/${L.plan_review} 轮）】slug=${s}`,
+        `【wf 工作流｜review·日常模式】slug=${s}`,
         `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
         S ? `S 级：leader 按五维（可行性/完整性/正确性/风险/交叉验证）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
           : `委派 wf/planner-reviewer 独立五维验证 plan.md（可行性/完整性/正确性/风险/交叉验证）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。`,
-        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`]),
+        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`,
+          `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`]),
         budgetLine(st, S ? ["plan"] : ["plan-review"]),
       ];
       if (!S && (r.plan_review ?? 0) >= 2) {
-        lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 销项 + plan.md 修订 diff + 一致性抽查，勿全文重审。`);
-        lines.push(...reuseLines(st, "wf/planner-reviewer"));
+        lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 当未验证线索逐条确认销项 + plan.md 修订 diff + 一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(S
         ? `自验通过 → wf_command(name="wf:build")；不过 → 修订 plan 后再验；超限 → 停下问用户`
         : `FAIL → wf_command(name="wf:plan") 带意见修订再 wf:review；PASS → wf_command(name="wf:build")（关卡校验 plan-review 结论）；超限 → 停下问用户`);
+      lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
+      if (!S && (r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
       return lines.join("\n");
     }
     case "building": {
-      const rework = (r.test_fix ?? 0) > 0 ? `（返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID）` : "";
-      return [
-        `【wf 工作流｜building·日常模式】slug=${s}${rework}`,
+      const lines = [
+        `【wf 工作流｜building·日常模式】slug=${s}`,
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
           : `委派 wf/builder：按 T<nn> 功能点逐点 TDD（红测试从 plan 验收标准写，先红后绿），主树串行（多 builder 并行=例外，需用户同意+worktree）。`,
-        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`, ...reuseLines(st, "wf/builder")]),
+        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
-      ].join("\n");
+      ];
+      if ((r.test_fix ?? 0) > 0) lines.push(`返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
+      if (!S) lines.push(...reuseLines(st, "wf/builder"));
+      return lines.join("\n");
     }
     case "testing": return [
       `【wf 工作流｜testing·日常模式】slug=${s}`,
@@ -134,7 +141,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
   switch (phase) {
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
-      `1) 与用户澄清需求；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `1) 与用户澄清需求（一次一问、多选优先，歧义收敛后再推进；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
       `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
       `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
@@ -146,30 +153,32 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       WRITE_CONTRACT,
-      ...reuseLines(st, "wf/planner"),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
       `完成 → wf_command(name="wf:review")`,
+      ...reuseLines(st, "wf/planner"),
     ].join("\n");
     case "review": {
       const lines = [
-        `【wf 工作流｜review（第 ${r.plan_review}/${L.plan_review} 轮）】slug=${s}`,
+        `【wf 工作流｜review】slug=${s}`,
         `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
         `并发委派（同一轮内各 subagent 用 background=true 同时发出，两路完成通知到齐后再裁决，勿逐个前台等待）：`,
         `  a) wf/planner-reviewer（五角度，审 plan.md → wf_write_artifact(kind=plan-review)）；`,
         `  b) wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，不写任何代码文件)。`,
+        `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`,
         `委派契约：prompt 只带 plan.md 路径与任务行摘录，声明子代理禁止全仓扫描（只读产物点名文件）。`,
         WRITE_CONTRACT,
         budgetLine(st, ["plan-review", "test-plan"]),
         ...(leanLine(st) ? [leanLine(st)] : []),
       ];
       if ((r.plan_review ?? 0) >= 2) {
-        lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer 的 sessionID 委派（省冷启动）；复核范围=上轮 plan-review-r${(r.plan_review ?? 1) - 1}.md 的 findings 逐条销项 + 本轮 plan.md 修订 diff 全文（防返工引入新缺陷）+ 交叉一致性抽查，勿全文重审。`);
-        lines.push(...reuseLines(st, "wf/planner-reviewer"));
+        lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer 的 sessionID 委派（省冷启动）；复核范围=上轮 plan-review-r${(r.plan_review ?? 1) - 1}.md 的 findings 当未验证线索逐条确认销项 + 本轮 plan.md 修订 diff 全文（防返工引入新缺陷）+ 交叉一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(
         `任一不通过 → wf_command(name="wf:plan") 回规划并带意见委派 wf/planner，再 wf_command(name="wf:review")；双通道通过 → wf_command(name="wf:test-design")（关卡随迁：须 test-plan.md 已产出）；超限 → 停下问用户`,
       );
+      lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
+      if ((r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
       return lines.join("\n");
     }
     case "test_design": return [
@@ -178,8 +187,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `先冻结接口，按 T<nn> 排串行执行顺序（默认一个 wf/builder 串行完成整场任务；多 builder 并行拆树=例外，需用户同意）。`,
       `委派 wf/tester(mode=design)：按已冻结接口在主树测试目录写会失败的验收/集成测试（红），作为执行 worktree 的 TDD 锚点。`,
       `委派契约：prompt 只带 test-plan.md/plan.md 接口签名段落，禁止全仓扫描；优先续用 feasibility 拍 wf/tester 的 sessionID（省冷启动）。`,
-      ...reuseLines(st, "wf/tester"),
       `发现接口问题 → wf_command(name="wf:plan") 回规划修订（返工边）；完成 → wf_command(name="wf:build")`,
+      ...reuseLines(st, "wf/tester"),
     ].join("\n");
     case "building": return [
       `【wf 工作流｜building】slug=${s}`,
@@ -193,12 +202,14 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `合并完成 → wf_command(name="wf:review-build")`,
     ].join("\n");
     case "build_review": return [
-      `【wf 工作流｜build_review（第 ${r.build_review}/${L.build_review} 轮）】slug=${s}`,
+      `【wf 工作流｜build_review】slug=${s}`,
       `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）。`,
+      `分级审查：初检聚焦完成度+关键风险，直接出完整报告；命中升级触发（改动跨 ≥3 模块/触及安全敏感路径/critical-major 无法就地确认/用户要求）才 Full 全量，报告注明触发；r≥2 把上轮 findings 当未验证线索逐条确认，勿重新推导。`,
       WRITE_CONTRACT,
-      ...reuseLines(st, "wf/builder", "wf/builder-reviewer"),
       budgetLine(st, ["build-review"]),
       `有遗漏 → wf_command(name="wf:build") 返工（重派 wf/builder），修完 wf_command(name="wf:reconcile") → name="wf:review-build"；通过 → wf_command(name="wf:test")；超限 → 停下问用户`,
+      `轮次：第 ${r.build_review}/${L.build_review} 轮`,
+      ...reuseLines(st, "wf/builder", "wf/builder-reviewer"),
     ].join("\n");
     case "testing": return [
       `【wf 工作流｜testing】slug=${s}`,
@@ -208,10 +219,11 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")`,
     ].join("\n");
     case "fixing": return [
-      `【wf 工作流｜fixing（第 ${r.test_fix}/${L.test_fix} 轮）】slug=${s}`,
+      `【wf 工作流｜fixing】slug=${s}`,
       `失败优先回原 builder（复用 sessionID，在其 worktree 内修，修完重新合并核验）；根因不明/跨模块 → wf/fixer。`,
-      ...reuseLines(st, "wf/builder", "wf/fixer"),
       `修改过 worktree 则先 wf_command(name="wf:reconcile") 回主树合并，再 wf_command(name="wf:test")；超限 → 停下问用户`,
+      `轮次：第 ${r.test_fix}/${L.test_fix} 轮`,
+      ...reuseLines(st, "wf/builder", "wf/fixer"),
     ].join("\n");
     case "done": return [
       `【wf 工作流｜done】slug=${s}`,

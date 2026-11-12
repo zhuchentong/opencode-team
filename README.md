@@ -130,12 +130,28 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 `/wf:ping` 可随时查看各角色当前注册状态与生效模型。
 
+> **写法陷阱（借鉴 my-opencode-deepseek-config 真机实证，DeepSeek 场景验证）**：agent frontmatter 的 `options.*` 装不下 provider 设置（如 `reasoningEffort` 无效——`options` 只落到 `request.body`），思考档位须在**模型层**声明；headless `opencode run` 不读 `agent.model`（主会话按全局 `model` 解析）；子会话/命令绑定的一次性调用按 `agent.model` 解析。将来启用 `options.agentModels` 落地本表时，须先真机核验 GLM 的对应参数面再写 frontmatter。
+
 ## 观测与诊断
 
 - 探针默认关闭；`WF_DEBUG=1`（或 server `options.probe:true`）时写 `.workflow/_debug/`（probeOnce 形状探针 / cmd-report.jsonl 广播记录 / tui-refresh.log TUI 生命周期）
 - `/wf:diagnose`：审计轨迹拒绝分类计数、越权阻断取证、轮次余量告警、产物「state 记账 vs 磁盘」对账、注入/RPC 异常、下一步建议
 - `/wf:debug`：全量状态快照落盘 `_debug/state.json` + 活跃任务枚举
 - 状态 GC：done 且 14 天未更新的状态在任务枚举（RPC list）时自动清理；`wf.db` 的 `events` 表 append-only 保留审计
+
+## 配置变更点速查
+
+| 想改的东西 | 文件 | 说明 |
+| --- | --- | --- |
+| 流转语义 / 关卡 / 循环上限默认值 | `server/lib.ts` | FLOWS/GATES/LIMITS 单一来源，bun test 覆盖 |
+| 阶段清单 / 侧边栏行序 | `shared/phases.ts` | server/TUI 共用；DAILY_STAGE_ORDER 可达集有守卫 |
+| 阶段 guidance 文案 / 易变区顺序 | `server/guidance.ts` | 易变区纪律：静态在前、轮次/sessionID/head 殿后 |
+| RPC 契约 | `shared/rpc.ts` | 改形状必须同步 `tests/rpc-drift.test.js` 快照 |
+| TUI 渲染 / 侧边栏 | `tui/index.tsx` → `bun run build` | dist/tui.js 入库；结构冻结见 harness P4 |
+| 角色行为 / 分级审查触发 / 拒绝契约 | `roles/*.md` | syncRoles 同步宿主；改后 `/wf:ping` 查漂移 |
+| 产物预算 | `server/lib.ts`（ARTIFACT_BUDGET_KB / _S_KB） | guidance 双通道渲染 |
+| 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
+| 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 
 ## 开发与测试
 
@@ -145,6 +161,8 @@ bun run build    # vite 构建 dist/tui.js（TUI 源码改动后必须）
 bun run check    # 门禁五合一：build → bun test → tsc --noEmit → oxlint → harness
 bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 ```
+
+> 升级宿主版本或改动流程语义前，先过 `docs/UPGRADE.md`（不变量 → 基线表 → 宿主核对点 → 验收命令）。
 
 ## 宿主契约备忘（2.2.6 真机实证，重设计依据）
 
@@ -159,6 +177,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 - **keymap**：`run` 返回 Promise 即算已处理（同步透传必须返回 `false`）；冒号命令名在宿主 slash 派发静默失效（主轨因此选 return 拦截形态）
 - **杂项**：插件 id 含 `:` 与 storage 文件命名冲突；`@opencode/schema` 运行时版本错位会崩（依赖全 external 共享宿主实例）；宿主对 node_modules 不跑 TSX transform（发布前预编译）
 - **subagent 续接形状（M16-r41 探针实证 `.workflow/_debug/subagent-probe.json`/`session-get-probe.json`）**：`execute.before` 对 `subagent` 工具**确触发**，input={tool,sessionID,agent,messageID,id,input}，工具入参 `input.input={agent,description,prompt,sessionID?}`（sessionID 可选，省略=新建；#43297「必填」不适用本宿主）；`input.agent`=调用方、`input.input.agent`=目标角色。`session.get({sessionID})` 返回 `time.{created,updated,busy,idle,viewed}`（**busy>idle=运行中**，可判存活）但**无 parentID 字段**——父归属由宿主原生 subagent 校验（「not a child of the current session」），插件侧无需亦无法经 parentID 复核
+- **guidance 易变区纪律（M16-r42，借鉴 my-opencode-deepseek-config 字节稳定前缀）**：`entryValue` 静态指引在前，轮次行/reuseLines（sessionID）/head 行殿后——同阶段重入（r+1）与子会话登记瞬间只打穿尾部，静态指引段保 prompt cache；收益量级有限不夸大。`roles/` 模板与 `wf_command` description 属字节稳定前缀面，改动须有意识（版本升级即换前缀，属预期）
 
 ## 已知边界（测试锁定现状）
 
@@ -182,6 +201,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 - M16-r39 正确性修复+重构批（日常 M 13 点单树串行 TDD；A 正确性→B 行为不变重构→C TUI→附加）：**A1** `logSeq` 单调序号修审计停追（旧 save 按 log.length 比对增量，50 条截断后 events 永远停追；logAdd 递增 logSeq、save 按序号差追加，存量无 logSeq 回退 length，迁移初始化）；**A2** plan 修订清双通道记账（kind=plan 写入 content/patch 任何 mode 清 `planReviewVerdict`+`testPlanWritten`——plan 已改旧审核结论/旧 test-plan 不得蒙混关卡；输出模式感知指路 daily→重新 wf:review、full→wf:review / wf:test-design；WRITE_CONTRACT 同步）；**A3** `logToolsOnce` 补 PROBE 门（probe:false 不再写 tools.json）；**A4** `writeTaskRow` 单语句 CAS 原子写（INSERT rev=1/UPDATE…WHERE rev，UNIQUE 冲突与 changes=0 归一 stale-rev；save 保留 pre-check 快速路径，消除读-写 TOCTOU 窗口）；**A5** wf:status 缺 at 脏数据兜底（`String(e.at ?? "")`）。**B 重构（行为不变）**：deps 类型化（Store/Observer/CommandDeps/ArtifactDeps + WfState 元数据字段，宿主入参保留 any）；`withStateRetry` 归一 transition/lane/artifact 记账三处重放（load/apply/save 回调，halt/gone/stale-rev 语义同源，apply 每 attempt 恰一次防审计翻倍）；guidance 拆分 `server/guidance.ts` + 版本归一 `shared/version.ts`（lib.ts 不再含 guidance 块、不 re-export 防环；TUI_BUILD=VERSION 同源，文案逐字不变）；wf:debug sessProbe 收敛单一扁平 `session.get({sessionID})`（5 候选形状探测退役）；allowRegexps 逐条 try/catch（一条非法不再崩 setup）。**C** TUI `WF_COMPACT=1` env 开关（options 不传达 TUI 的主路径；harness P13 初始帧断言）。**附加** missing 角色自动创建（`roles/fm/` 8 角色宿主 frontmatter 逐字快照，无 model；leader 落 agents/workflow.md；已存在文件 fm 绝不触碰；旧 wf/leader.md 不动）。**边界**：FLOWS/FLOWS_DAILY 流转语义、双轨输出编排、RPC 契约形状冻结未动；TUI 渲染结构冻结（仅 compact 判定行+TUI_BUILD 行）；真机目检（WF_COMPACT/角色创建）留用户验收
 - M16-r40 会话复用可靠化 A 层（真机实证：leader 凭记忆复述长 ses_ ID→截断→宿主拒→反复重试→冷启动，慢）：`WfState.roleSessions`（角色→{sessionID,at}，intake 重置清空防跨任务复用）；`trackRoleSession` 纯函数（仅 wf/* 非 leader + `/^ses_[A-Za-z0-9]+$/` 形状，同 ID 去重免 save 抖动）；登记双通道——artifact-tool.mark 搭 withStateRetry save 便车（planner/reviewer/tester/builder-reviewer/learner）+ guard-hook edit 分支（builder/fixer 只改码不写产物）；guidance 7 重委派点渲染完整 ID「逐字复制到 subagent sessionID 参数勿截断」；wf:status 显示 roleSessions。**边界**：登记时机=子会话首次调插件工具/编辑（非派发即捕获）；每角色单值 last-write-wins（多 lane 仅存最近）；渲染为软约束 leader 仍可能截断→r41 B 层兜底
 - M16-r41 会话复用可靠化 B 层（续接自愈守卫，借鉴 omo-slim「不靠模型抄对 ID」+ terminal-gate 思想）：guard-hook 在 edit/shell 过滤**前**加 subagent/task 分支（仅 `isLeader` 双别名）——省略 sessionID(新建)/ID 正确/无登记/**全形状非前缀不符(多 lane)**→放行；**形状非法 OR 登记 ID 真前缀**（截断）→ throw 附完整 ID 一次性纠正（`GATE_ERR` 穿透 fail-open，S1）+ 审计 `session:correct` + 附子会话存活状态（session.get time.busy/idle：运行中警示勿续用防静默分叉 / 已完成可安全续用）。guidance reuseLine + leader.md 补「仅续用已完成子会话」。**探针实证**：hook 确对 subagent 触发（非静默 no-op）；session.get 有 time.busy/idle 无 parentID。**边界**：每角色单值→仅纠正真前缀/非法形状，全形状不符放行交宿主归属校验（多 lane 安全）；存活附注 best-effort（取不到 time 不附注不报错）；**改参自愈/execute.after 机械捕获经评估暂缓**（改参 v1 失效 v2 未证实风险高、throw 已一次收敛；A 层捕获已可靠、execute.after 注册会覆盖测试 mock 的 before hook）
+- M16-r42 借鉴引入批（源：znlgis/my-opencode-deepseek-config，omo-slim 同源实践）：**两级审查**——planner-reviewer/builder-reviewer 角色模板加初检 Abbreviated（默认直接出完整报告，干净结果不升级）+ 升级触发清单（计划域：架构冲突/粒度不可执行/关键风险漏识别；执行域：跨≥3模块/安全敏感路径/critical-major 无法就地确认/用户要求）+ r≥2 前轮 findings 按未验证线索确认销项；guidance review/build_review 各渲染一行分级提示。**拒绝契约**——planner/tester/builder/fixer 模板各加「不处理→指路」。**guidance 易变区纪律**——`entryValue` head 行殿后、标题去轮次改尾部「轮次：第 r/N 轮」行、reuseLines 移尾（daily r≥2 条件保留）；done=DONE_ENTRY 在前 head 殿后。**intake 澄清纪律**——daily/full 两分支加「一次一问、多选优先、歧义收敛；没听懂→一句话重述」。**文档**——新增 docs/UPGRADE.md（不变量/基线表/宿主核对点/验收命令）；README 加配置变更点速查表+模型路由写法陷阱注记。**边界**：审查分级为 prompt 级软契约不落 state（`/wf:status` 无分级记录，观测走 review/build-review 产物正文）；roles 改动生效须 `syncRoles=true`（本机已开）+ `/wf:ping` 查漂移；learner/leader 模板未重复加拒绝契约（已固化，精简优先于新增）
 - `transition` 在 save 连续冲突（3 次）失败时回滚 entry 指引（T09），但 reports 槽/事件通道的时间戳不回滚——用户以 `/wf:status` 为准
 
 ## 设计借鉴对照
@@ -197,6 +217,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 | omo-slim 每角色模型路由 | README 候选表 + `/wf:ping` 查看生效模型；`options.agentModels` 未启用 | ⏳ 待选型 |
 | omo-slim 项目级自定义 | `.workflow/overrides/` 约定 | ✅ 采纳 |
 | omo-slim 续接不靠模型抄 ID + terminal-gate | roleSessions 自动登记 + guidance 渲染完整 ID（A 层 r40）+ subagent 截断自愈守卫 + 存活附注（B 层 r41） | ✅ 采纳（task_revive 本体 v2 已废弃不借；父归属宿主原生已校验，不借 adoption/lease/job-board） |
+| znlgis/my-opencode-deepseek-config（omo-slim 同源纯配置实践） | 两级审查+升级触发+线索确认（roles + guidance）；角色拒绝契约；guidance 易变区纪律（易变殿后）；docs/UPGRADE.md 升级核对流程 | ✅ 采纳（M16-r42）；thinking tiers / skill 名册预算 / 权限基线属宿主层，不引入 |
 | Council 共识 / marketplace / multiplexer | — | ❌ 不照搬（场景/宿主不符） |
 
 ## 许可

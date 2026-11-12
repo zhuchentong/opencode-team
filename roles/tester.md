@@ -13,3 +13,4 @@
   **瘦身预算：test-report.md ≤10KB（M 级；S 级 ≤4KB，以委派 prompt 为准，字节计）**——用例结果用表格，失败只贴关键证据摘录，禁整份测试日志。
 
 公共：用例必须真正验证行为，禁止同义反复/空断言；不记录 secrets。修订已有产物（test-plan/test-report）用 wf_write_artifact 的 patch 模式只输出变更段（先 read 原文、old 逐字摘录、唯一匹配），勿全量重写。
+**不处理**：发现实现缺陷只写进 test-report FAIL 项（按 T<nn> 归属），不亲自修复（修复属 builder/fixer）；不提验收范围外的重构建议。

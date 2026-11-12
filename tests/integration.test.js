@@ -184,7 +184,8 @@ test("options.limits 覆盖端到端：plan_review=1 时第二轮 review 被拒"
   await cmd(m, "wf:intake").execute({ sessionID: "ses_l", prompt: { text: "[FULL] lim" } }); // M16-r34：完整流（review 格式断言）
   await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
   const r1 = await cmd(m, "wf:review").execute({ sessionID: "ses_l", prompt: {} });
-  assert.match(r1, /review（第 1\/1 轮）/, "guidance 显示覆盖后上限");
+  assert.match(r1, /【wf 工作流｜review】/, "review 标题（去轮次）");
+  assert.match(r1, /第 1\/1 轮/, "guidance 显示覆盖后上限（轮次行在易变区尾部）");
   await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
   const r2 = await cmd(m, "wf:review").execute({ sessionID: "ses_l", prompt: {} });
   assert.match(r2, /plan_review 已 1\/1 轮/);
@@ -332,7 +333,7 @@ test("T04 stale-rev：冲突一次重试成功；持续冲突显式失败不假�
   assert.equal(stOf(m, "ses_t4").phase, "planning", "保存失败不得假装推进");
   // T09：entry 回滚——失败后系统提示指引必须回到 DB 现势（phase=planning），
   // 而非已改写但未落库的目标阶段（transition 克隆化保证 loaded 未被污染）
-  assert.match(m.entries.at(-1).value, /^phase=planning/, "T09：save 失败后 entry 回滚到 DB 现势");
+  assert.match(m.entries.at(-1).value, /phase=planning slug=race/, "T09：save 失败后 entry 回滚到 DB 现势（head 已殿后）");
   dispose?.();
 });
 

@@ -10,7 +10,8 @@ test("entryValue：非 done 阶段 = 头行 + 完整 guidance（抗 compaction �
     rounds: { plan_review: 1, build_review: 0, test_fix: 0 },
   };
   const v = entryValue(st);
-  assert.match(v, /^phase=planning slug=demo rounds=/);
+  assert.match(v, /phase=planning slug=demo rounds=/, "head 行保留（易变区殿后）");
+  assert.ok(v.indexOf("禁止修改业务代码") < v.lastIndexOf("phase=planning"), "易变区纪律：静态指引在前、易变 head 殿后");
   assert.ok(v.includes("禁止修改业务代码"), "guidance 正文进入 entry");
   assert.ok(v.includes(`wf_command(name="wf:review")`), "下一步指引进入 entry（T06：工具推进格式）");
 });
