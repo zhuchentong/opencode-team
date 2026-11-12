@@ -38,7 +38,7 @@ const mkCtx = () => {
       scan: async () => ({ entries: [] }),
     },
     session: {
-      get: async () => ({ projectID: "pi1", location: { directory: DIR } }),
+      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
       wait: async () => {},
       prompt: async () => {},
       hook: async () => ({ dispose() {} }),

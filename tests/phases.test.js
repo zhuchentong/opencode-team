@@ -1,8 +1,8 @@
 // P0-b：shared/phases.ts 单一来源一致性守卫（防 server/tui/lib 三处漂移）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING, LEGACY_PHASES } from "../shared/phases.ts";
-import { FLOWS, KIND_FILES, LIMITS } from "../server/lib.ts";
+import { PHASE_ORDER, STAGE_LABEL, FOLD, CANON, BLOCKING, LEGACY_PHASES, DAILY_STAGE_ORDER } from "../shared/phases.ts";
+import { FLOWS, FLOWS_DAILY, KIND_FILES, LIMITS } from "../server/lib.ts";
 
 test("PHASE_ORDER 无重复", () => {
   assert.equal(new Set(PHASE_ORDER).size, PHASE_ORDER.length);
@@ -44,3 +44,14 @@ test("STAGE_LABEL 覆盖 PHASE_ORDER ∪ FOLD 键（TUI 标签不缺项）", () 
 });
 
 // P6：phases.js 兼容 shim 已删除（宿主模块图全面切换 dist/tui.js 与 .ts 入口，真机验证后无旧引用）
+
+// M16-r35：DAILY_STAGE_ORDER 守卫——TUI 日常进度条单一来源，必须与 FLOWS_DAILY 可达集一致
+test("DAILY_STAGE_ORDER ⊆ PHASE_ORDER 且无重复", () => {
+  assert.equal(new Set(DAILY_STAGE_ORDER).size, DAILY_STAGE_ORDER.length);
+  for (const p of DAILY_STAGE_ORDER) assert.ok(PHASE_ORDER.includes(p), `DAILY_STAGE_ORDER 未知阶段 ${p}`);
+});
+
+test("DAILY_STAGE_ORDER = FLOWS_DAILY 可达 to 集（防视图/流转漂移）", () => {
+  const reachable = new Set(Object.values(FLOWS_DAILY).map((f) => f.to));
+  assert.deepEqual([...reachable].toSorted(), [...DAILY_STAGE_ORDER].toSorted());
+});

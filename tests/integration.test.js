@@ -45,7 +45,7 @@ const mkCtx = (opts = {}) => {
       scan: async () => ({ entries: [] }),
     },
     session: {
-      get: async () => ({ projectID: "pi1", location: { directory: DIR } }),
+      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
       wait: async () => {}, // P2：降级轨排空等待（测试会话恒空闲）
       prompt: async (i) => { prompts.push(i); },
       hook: async (name, fn) => { hooks.push({ name, fn }); return { dispose() {} }; },

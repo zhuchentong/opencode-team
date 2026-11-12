@@ -21,7 +21,7 @@ const mkCtx = () => {
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
     session: {
-      get: async () => ({ projectID: "pi1", location: { directory: DIR } }),
+      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
       wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
       instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
     },

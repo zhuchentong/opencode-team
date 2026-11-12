@@ -21,9 +21,9 @@ import { createSignal } from "solid-js";
 import * as ot from "@opentui/solid";
 const { createElement, insert, setProp } = ot as any; // 低层原语（宿主注入运行时实例，P0 同款）
 import { Wf } from "../shared/rpc.ts";
-import { STAGE_ORDER, STAGE_LABEL, FOLD, CANON } from "../shared/phases.ts";
+import { STAGE_ORDER, STAGE_LABEL, FOLD, CANON, DAILY_STAGE_ORDER } from "../shared/phases.ts";
 
-const TUI_BUILD = "M16-p4-notify";
+const TUI_BUILD = "M16-r35-sidebar";
 const ROWS = 20;
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -46,9 +46,9 @@ function boxEl(children: unknown[]) {
   return b;
 }
 
-const stageOf = (phase: any) => {
+const stageOf = (phase: any, order: string[] = STAGE_ORDER) => {
   const p = FOLD[phase] ?? phase;
-  const i = STAGE_ORDER.indexOf(p);
+  const i = order.indexOf(p);
   return i < 0 ? 0 : i;
 };
 
@@ -58,7 +58,8 @@ const listLine = (x: any) => {
 };
 
 // 文案模板与 r29f 逐字一致：恒定 20 行（分隔线/slug/阶段/进度/轮次/关卡/产物），空槽 " "
-const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any) => {
+// M16-r35：导出供 harness P11 纯函数直测（绕开 testRender 信号→换树盲区）；渲染结构不变。
+export const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any) => {
   const t: string[] = Array.from({ length: ROWS }, () => " ");
   const c: any[] = Array.from({ length: ROWS }, () => T.text.muted);
   t[0] = "── wf ──────────────";
@@ -81,8 +82,11 @@ const buildRows = (s: any, err: string | null, oth: string[], othScope: string, 
     return { t, c };
   }
   const r = s.rounds ?? {};
-  const i = stageOf(s.phase);
-  const total = STAGE_ORDER.length;
+  // M16-r35：模式感知——daily 按 6 格连续进度；mode 缺失（存量）/full 走 9 格旧视图逐字不变
+  const daily = s.mode === "daily";
+  const order = daily ? DAILY_STAGE_ORDER : STAGE_ORDER;
+  const i = stageOf(s.phase, order);
+  const total = order.length;
   const isDone = s.phase === "done" || s.phase === "retrospect";
   const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
   const planV = r.plan_review ?? 0;
@@ -91,24 +95,34 @@ const buildRows = (s: any, err: string | null, oth: string[], othScope: string, 
   const done = isDone ? total : i;
   const bar = "●".repeat(done) + "○".repeat(total - done);
   const arts = s.artifacts ?? {};
-  const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0).length;
+  const hasPlanReview = Object.keys(arts).some((n: string) => n.startsWith("plan-review"));
+  const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0 && !(daily && n.startsWith("plan-review"))).length;
   const verdict = s.testReportVerdict;
-  t[1] = `  ${str(s.slug || "(未定)")}`; c[1] = T.text.base;
+  const size = str(s.size || "M");
+  const pv = s.planReviewVerdict;
+  t[1] = daily ? `  ${str(s.slug || "(未定)")} [daily·${size}]` : `  ${str(s.slug || "(未定)")}`; c[1] = T.text.base;
   t[2] = `  F${i} ${label}`; c[2] = T.text.action.primary;
   t[3] = `  ${bar} ${done}/${total}`; c[3] = T.text.action.primary;
   t[4] = " "; c[4] = T.text.base;
   t[5] = "── 轮次 ────────────";
   t[6] = `      plan  ${planV}/3`; c[6] = planV >= 3 ? T.text.feedback.error : T.text.base;
-  t[7] = `      build ${buildV}/3`; c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base;
+  if (daily) { t[7] = "      build —（日常无）"; c[7] = T.text.muted; }
+  else { t[7] = `      build ${buildV}/3`; c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base; }
   t[8] = `      fix   ${fixV}/3`; c[8] = fixV >= 3 ? T.text.feedback.error : T.text.base;
   t[9] = " "; c[9] = T.text.base;
   t[10] = "── 关卡 ────────────";
-  t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`; c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted;
+  if (daily) {
+    if (size === "S") { t[11] = "      verify 自检（S）"; c[11] = T.text.muted; }
+    else { t[11] = `      verify ${pv ? str(pv) : "—"}`; c[11] = pv === "PASS" ? T.text.feedback.success : pv === "FAIL" ? T.text.feedback.error : T.text.muted; }
+  } else { t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`; c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted; }
   t[12] = `      report    ${verdict ? str(verdict) : "—"}`; c[12] = verdict === "PASS" ? T.text.feedback.success : verdict === "FAIL" ? T.text.feedback.error : T.text.muted;
   t[13] = " "; c[13] = T.text.base;
   t[14] = "── 产物 ────────────";
   t[15] = `      plan.md ${arts["plan.md"] ? "✓" : "✗"}`; c[15] = arts["plan.md"] ? T.text.feedback.success : T.text.muted;
-  t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`; c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted;
+  if (daily) {
+    if (size === "S") { t[16] = "      plan-review —（S 免）"; c[16] = T.text.muted; }
+    else { t[16] = `      plan-review ${hasPlanReview ? "✓" : "✗"}`; c[16] = hasPlanReview ? T.text.feedback.success : T.text.muted; }
+  } else { t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`; c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted; }
   t[17] = `      test-report.md ${arts["test-report.md"] ? "✓" : "✗"}`; c[17] = arts["test-report.md"] ? T.text.feedback.success : T.text.muted;
   t[18] = `      其他产物 ${extraCount} 项`;
   return { t, c };
@@ -307,7 +321,8 @@ export default Plugin.define({
               if (!s?.active) return textEl(str(data?.err ? `wf 错误: ${data.err}` : "  wf: 无活动任务"), T.text.muted);
               const rr = s.rounds ?? {};
               const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
-              return textEl(`▶ ${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
+              const badge = s.mode === "daily" ? `[daily·${str(s.size || "M")}] ` : "";
+              return textEl(`▶ ${badge}${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
             }
             const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
             return boxEl(t.map((line: string, i: number) => textEl(line, c[i])));

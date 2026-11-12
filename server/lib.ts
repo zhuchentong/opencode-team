@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r34";
+export const VERSION = "M16-r36";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -258,6 +258,18 @@ export const promptText = (p: unknown): string => {
   if (p && typeof p === "object") { const q = p as PromptLike; return String(q.text ?? q.content ?? ""); }
   return "";
 };
+
+// ── M16-r36：工作流硬性限定 wf/leader（服务端强制，非提示词约定）────────
+// 只读/清理豁免集：任何 agent 可用（用户自助诊断/清理不受限）。
+export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset"]);
+// 判定：豁免集放行；其余仅 wf/leader；agent 不可确认 → 变更类 fail-closed（符合硬限定意图）。
+// lane 整体 leader-only（含 ls，有意收紧：lane 属任务内部细节）。返回拒绝文案或 null（放行）。
+export function leaderOnlyReject(agent: string, cmd: string): string | null {
+  if (READONLY_CMDS.has(cmd)) return null;
+  if (agent === "wf/leader") return null;
+  if (!agent) return `❌ 无法确认 agent 身份，工作流变更仅限 wf/leader：请在 wf/leader 会话执行（查看状态可用 /wf:status）。`;
+  return `❌ 工作流仅限 wf/leader（当前 agent=${agent}）。请切换到 wf/leader 会话执行；查看状态可用 /wf:status。`;
+}
 
 // ── 流转校验+应用（P0-b 提取自 transition 闭包，行为与 M16 一致）────
 // 通过 → 原地完成 counter 递增（进入即计数）与 intake 重置/slug 设置，返回 { ok: true }；

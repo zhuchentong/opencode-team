@@ -20,4 +20,11 @@ test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
 
   // state 输出必须携带 lastReport（轮询主通道契约，r29e bug A 教训）
   assert.ok(Wf.methods.state.output.properties.rounds, "state 输出形状基本项在位");
+
+  // M16-r35：侧边栏模式感知——state 输出携带 mode/size/planReviewVerdict（nullable，存量任务为 null）
+  for (const k of ["mode", "size", "planReviewVerdict"]) {
+    const p = Wf.methods.state.output.properties[k];
+    assert.ok(p, `state 输出缺 ${k}（TUI 模式感知前提）`);
+    assert.deepEqual(p.type, ["string", "null"], `${k} 应为 nullable string`);
+  }
 });

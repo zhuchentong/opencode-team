@@ -14,6 +14,10 @@ const stateSchema = {
     rounds: { type: "object", additionalProperties: true },
     testPlanWritten: { type: "boolean" },
     testReportVerdict: { type: ["string", "null"] },
+    // M16-r35：侧边栏模式感知（nullable——存量任务无 mode 字段，TUI 按 full 旧视图渲染）
+    mode: { type: ["string", "null"] },
+    size: { type: ["string", "null"] },
+    planReviewVerdict: { type: ["string", "null"] },
     artifacts: { type: "object", additionalProperties: true },
     updatedAt: { type: ["string", "null"] },
   },

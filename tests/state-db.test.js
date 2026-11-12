@@ -11,7 +11,7 @@ const dbFile = (dir) => `${dir}/.workflow/wf.db`;
 const mkCtx = (dir, extra = {}) => ({
   location: { directory: dir },
   storage: { scan: async () => ({ entries: [] }), get: async () => null, set: async () => {}, remove: async () => {} },
-  session: { get: async () => ({ projectID: "pi1", location: { directory: dir } }) },
+  session: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: dir } }) },
   ...extra,
 });
 const newStore = async (dir, extra) => {

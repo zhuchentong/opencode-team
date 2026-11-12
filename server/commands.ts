@@ -10,7 +10,7 @@
 // LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）。
 import * as fs from "node:fs";
 import {
-  VERSION, BLOCKING_PHASES, flowFor, nextFor,
+  VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
 } from "./lib.ts";
 import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
@@ -31,6 +31,13 @@ const stripReports = (event: any) => {
   if (Array.isArray(event?.messages)) {
     event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
   }
+};
+// M16-r36：agent 解析——快路径 a.agent（聊天命令若携带）→ session.get 兜底（Session.Info.agent 实证）。
+// sessionGet 注入以便单测；解析失败返回 ""（变更类 fail-closed 由 leaderOnlyReject 裁决）。
+const resolveAgent = async (a: any, sessionGet: (q: { sessionID: string }) => Promise<any>): Promise<string> => {
+  const direct = String(a?.agent ?? "");
+  if (direct) return direct;
+  try { return String((await sessionGet({ sessionID: String(a?.sessionID ?? "") }))?.agent ?? ""); } catch { return ""; }
 };
 // M16-r31：角色托管漂移守卫文案（fail-soft，读宿主文件失败不阻塞 ping）
 const roleGuardText = (opt: any) => {
@@ -176,11 +183,31 @@ export async function registerCommands(ctx: any, deps: any) {
     // 返回值保留（tests 行为锚；宿主不消费）。
     const add = (def: any) => {
       const base = def.execute;
-      byName[def.name] = base;
+      // M16-r36：单一强制点——聊天命令/wf_command/TUI exec 三入口同调 byName，guarded 一处覆盖。
+      // 变更类仅 wf/leader（agent 经 a.agent ?? session.get 解析）；拒绝落审计 agent-rejected（有行才落盘，守 T02）。
+      const guarded = async (a: any) => {
+        if (ctx?.options?.leaderOnly !== false) {
+          const agent = await resolveAgent(a, ctx.session.get);
+          await probeOnce(a?.sessionID, "cmd-agent-probe", { cmd: def.name, aKeys: Object.keys(a ?? {}), agent });
+          const rej = leaderOnlyReject(agent, def.name);
+          if (rej) {
+            try {
+              const st = await load(String(a?.sessionID ?? ""));
+              if (st && (st.slug || st.phase)) {
+                logAdd(st, { at: new Date().toISOString(), cmd: def.name, from: st.phase, to: st.phase, ok: false, note: `agent-rejected:${agent || "(unknown)"}` });
+                await save(st);
+              }
+            } catch { /* 审计 best-effort，不影响拒绝 */ }
+            return rej;
+          }
+        }
+        return base(a);
+      };
+      byName[def.name] = guarded;
       editor.add({
         ...def,
         execute: async (a: any) => {
-          const out = await base(a);
+          const out = await guarded(a);
           const text = typeof out === "string" ? out : "";
           const sid = String(a?.sessionID ?? "");
           const at = new Date().toISOString();

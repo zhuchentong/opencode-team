@@ -24,6 +24,9 @@ var Wf = { define: (def) => def }.define({
 					},
 					testPlanWritten: { type: "boolean" },
 					testReportVerdict: { type: ["string", "null"] },
+					mode: { type: ["string", "null"] },
+					size: { type: ["string", "null"] },
+					planReviewVerdict: { type: ["string", "null"] },
 					artifacts: {
 						type: "object",
 						additionalProperties: true
@@ -158,9 +161,17 @@ var CANON = [
 	"test-report.md"
 ];
 var STAGE_ORDER = PHASE_ORDER;
+var DAILY_STAGE_ORDER = [
+	"intake",
+	"planning",
+	"review",
+	"building",
+	"testing",
+	"done"
+];
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
-var TUI_BUILD = "M16-p4-notify";
+var TUI_BUILD = "M16-r35-sidebar";
 var ROWS = 20;
 var str = (v) => v === null || v === void 0 ? "" : String(v);
 var errMsg = (e) => String(e?.message ?? e);
@@ -181,9 +192,9 @@ function boxEl(children) {
 	for (const c of children) if (c !== null && c !== void 0 && c !== false) insert(b, c);
 	return b;
 }
-var stageOf = (phase) => {
+var stageOf = (phase, order = STAGE_ORDER) => {
 	const p = FOLD[phase] ?? phase;
-	const i = STAGE_ORDER.indexOf(p);
+	const i = order.indexOf(p);
 	return i < 0 ? 0 : i;
 };
 var listLine = (x) => {
@@ -225,8 +236,10 @@ var buildRows = (s, err, oth, othScope, T) => {
 		};
 	}
 	const r = s.rounds ?? {};
-	const i = stageOf(s.phase);
-	const total = STAGE_ORDER.length;
+	const daily = s.mode === "daily";
+	const order = daily ? DAILY_STAGE_ORDER : STAGE_ORDER;
+	const i = stageOf(s.phase, order);
+	const total = order.length;
 	const isDone = s.phase === "done" || s.phase === "retrospect";
 	const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
 	const planV = r.plan_review ?? 0;
@@ -235,9 +248,12 @@ var buildRows = (s, err, oth, othScope, T) => {
 	const done = isDone ? total : i;
 	const bar = "●".repeat(done) + "○".repeat(total - done);
 	const arts = s.artifacts ?? {};
-	const extraCount = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0).length;
+	const hasPlanReview = Object.keys(arts).some((n) => n.startsWith("plan-review"));
+	const extraCount = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0 && !(daily && n.startsWith("plan-review"))).length;
 	const verdict = s.testReportVerdict;
-	t[1] = `  ${str(s.slug || "(未定)")}`;
+	const size = str(s.size || "M");
+	const pv = s.planReviewVerdict;
+	t[1] = daily ? `  ${str(s.slug || "(未定)")} [daily·${size}]` : `  ${str(s.slug || "(未定)")}`;
 	c[1] = T.text.base;
 	t[2] = `  F${i} ${label}`;
 	c[2] = T.text.action.primary;
@@ -248,15 +264,30 @@ var buildRows = (s, err, oth, othScope, T) => {
 	t[5] = "── 轮次 ────────────";
 	t[6] = `      plan  ${planV}/3`;
 	c[6] = planV >= 3 ? T.text.feedback.error : T.text.base;
-	t[7] = `      build ${buildV}/3`;
-	c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base;
+	if (daily) {
+		t[7] = "      build —（日常无）";
+		c[7] = T.text.muted;
+	} else {
+		t[7] = `      build ${buildV}/3`;
+		c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base;
+	}
 	t[8] = `      fix   ${fixV}/3`;
 	c[8] = fixV >= 3 ? T.text.feedback.error : T.text.base;
 	t[9] = " ";
 	c[9] = T.text.base;
 	t[10] = "── 关卡 ────────────";
-	t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`;
-	c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted;
+	if (daily) {
+		if (size === "S") {
+			t[11] = "      verify 自检（S）";
+			c[11] = T.text.muted;
+		} else {
+			t[11] = `      verify ${pv ? str(pv) : "—"}`;
+			c[11] = pv === "PASS" ? T.text.feedback.success : pv === "FAIL" ? T.text.feedback.error : T.text.muted;
+		}
+	} else {
+		t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`;
+		c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted;
+	}
 	t[12] = `      report    ${verdict ? str(verdict) : "—"}`;
 	c[12] = verdict === "PASS" ? T.text.feedback.success : verdict === "FAIL" ? T.text.feedback.error : T.text.muted;
 	t[13] = " ";
@@ -264,8 +295,18 @@ var buildRows = (s, err, oth, othScope, T) => {
 	t[14] = "── 产物 ────────────";
 	t[15] = `      plan.md ${arts["plan.md"] ? "✓" : "✗"}`;
 	c[15] = arts["plan.md"] ? T.text.feedback.success : T.text.muted;
-	t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`;
-	c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted;
+	if (daily) {
+		if (size === "S") {
+			t[16] = "      plan-review —（S 免）";
+			c[16] = T.text.muted;
+		} else {
+			t[16] = `      plan-review ${hasPlanReview ? "✓" : "✗"}`;
+			c[16] = hasPlanReview ? T.text.feedback.success : T.text.muted;
+		}
+	} else {
+		t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`;
+		c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted;
+	}
 	t[17] = `      test-report.md ${arts["test-report.md"] ? "✓" : "✗"}`;
 	c[17] = arts["test-report.md"] ? T.text.feedback.success : T.text.muted;
 	t[18] = `      其他产物 ${extraCount} 项`;
@@ -557,7 +598,8 @@ var tui_default = Plugin.define({
 							const s = data?.st;
 							if (!s?.active) return textEl(str(data?.err ? `wf 错误: ${data.err}` : "  wf: 无活动任务"), T.text.muted);
 							const rr = s.rounds ?? {};
-							return textEl(`▶ ${STAGE_LABEL[s.phase] ?? str(s.phase ?? "?")} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
+							const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
+							return textEl(`▶ ${s.mode === "daily" ? `[daily·${str(s.size || "M")}] ` : ""}${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
 						}
 						const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
 						return boxEl(t.map((line, i) => textEl(line, c[i])));
@@ -628,4 +670,4 @@ var tui_default = Plugin.define({
 		};
 	}
 });
-export { tui_default as default };
+export { buildRows, tui_default as default };

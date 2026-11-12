@@ -35,6 +35,10 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
             rounds: st.rounds ?? {},
             testPlanWritten: !!st.testPlanWritten,
             testReportVerdict: st.testReportVerdict ?? null,
+            // M16-r35：侧边栏模式感知三字段（存量任务为 null → TUI 按 full 旧视图渲染）
+            mode: st.mode ?? null,
+            size: st.size ?? null,
+            planReviewVerdict: st.planReviewVerdict ?? null,
             artifacts: st.artifacts ?? {},
             updatedAt: st.updatedAt ?? null,
             lastReport,

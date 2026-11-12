@@ -54,7 +54,7 @@ export default {
     const hookReg = registerGuardHook(ctx, { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir });
 
     // ── P3：superpowers 式自动激活提示（fail-soft，见 hint.ts）────────
-    const chatReg = registerHint(ctx, opt, { resolveState, probeOnce });
+    const chatReg = registerHint(ctx, opt, { resolveState, probeOnce, sessionGet: (q: any) => ctx.session.get(q) });
 
     // ── M16-r31：角色内容插件托管（opt-in syncRoles，fail-soft，见 roles.ts）──
     const roleReg = registerRoleSync(ctx, opt);

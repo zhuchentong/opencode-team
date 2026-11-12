@@ -40,7 +40,7 @@ if (!fs.existsSync(mockDir)) {
 
 // 虚拟模块解析依赖上面的占位包，须动态 import（静态 import 会提升到自举之前）
 // @ts-ignore bun 原生支持 .tsx
-const { default: mod } = await import("../tui/index.tsx");
+const { default: mod, buildRows } = await import("../tui/index.tsx");
 const { testRender } = await import("@opentui/solid");
 
 const errors: string[] = [];
@@ -311,6 +311,38 @@ console.log(`插件 id: ${t.id}`);
   } catch (e: any) {
     ok("P10 通知层不崩", false, e?.message);
   }
+}
+
+// ── P11：M16-r35 侧边栏模式感知——buildRows 纯函数直测（绕开 testRender 信号→换树盲区）──
+{
+  const T = theme;
+  const base = { active: true, slug: "todo", rounds: {}, artifacts: {}, testPlanWritten: false, testReportVerdict: null };
+  // daily S：徽标 + 6 格连续进度 + 无 test-plan 假 ✗ + verify 自检 + plan-review 免
+  const s = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
+  ok("P11 daily S slug 行带 [daily·S] 徽标", s.t[1].includes("[daily·S]"), s.t[1]);
+  ok("P11 daily building=F3 连续索引", s.t[2].includes("F3"), s.t[2]);
+  ok("P11 daily 进度 3/6（非 4/9 跳格）", s.t[3].includes("3/6") && s.t[3].includes("●●●○○○"), s.t[3]);
+  ok("P11 daily 无 test-plan 假缺失", !s.t.some((r: string) => r.includes("test-plan")), JSON.stringify(s.t));
+  ok("P11 daily S verify 显示自检", s.t[11].includes("自检"), s.t[11]);
+  ok("P11 daily S plan-review 显示免", s.t[16].includes("免"), s.t[16]);
+  ok("P11 daily build 轮次置灰占位", s.t[7].includes("—"), s.t[7]);
+  // daily M：verify 关卡随 planReviewVerdict + plan-review 产物显式 + 其他产物不重复计数
+  const m = buildRows({ ...base, mode: "daily", size: "M", phase: "review", planReviewVerdict: "PASS", artifacts: { "plan.md": { at: "x" }, "plan-review-r1.md": { at: "x" } } }, null, [], "", T);
+  ok("P11 daily M verify PASS 可见", m.t[11].includes("verify") && m.t[11].includes("PASS"), m.t[11]);
+  ok("P11 daily M plan-review ✓", m.t[16].includes("plan-review") && m.t[16].includes("✓"), m.t[16]);
+  ok("P11 daily M plan-review 不计入其他产物", m.t[18].includes("0 项"), m.t[18]);
+  ok("P11 daily M verify PASS 绿色", m.c[11] === T.text.feedback.success);
+  // daily done：6/6 满格
+  const d = buildRows({ ...base, mode: "daily", size: "S", phase: "done" }, null, [], "", T);
+  ok("P11 daily done 6/6 满格", d.t[3].includes("6/6"), d.t[3]);
+  // 存量回归锚：无 mode（旧任务）/full → 9 格旧视图逐字不变
+  const legacy = buildRows({ ...base, phase: "building" }, null, [], "", T);
+  ok("P11 存量 building 仍 4/9", legacy.t[3].includes("4/9"), legacy.t[3]);
+  ok("P11 存量 test-plan 关卡仍在", legacy.t[11].includes("test-plan"), legacy.t[11]);
+  ok("P11 存量 test-plan.md 产物行仍在", legacy.t[16].includes("test-plan.md"), legacy.t[16]);
+  ok("P11 存量 slug 行无徽标", !legacy.t[1].includes("["), legacy.t[1]);
+  const full = buildRows({ ...base, mode: "full", phase: "building" }, null, [], "", T);
+  ok("P11 full 与存量视图逐字一致", JSON.stringify(full) === JSON.stringify(legacy));
 }
 
 console.log("（清理 setup 定时器与订阅）");
