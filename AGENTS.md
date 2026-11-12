@@ -10,7 +10,7 @@
 
 - `bun run check` — 唯一门禁五合一：build → `bun test` → `tsc --noEmit` → oxlint → TUI harness。**声明完成前必须跑过。**
 - 单测文件：`bun test tests/flows.test.js`（node:test 兼容，mock ctx，状态库写 `/tmp/opencode/`，无需真宿主）。
-- TUI harness 不是 bun test 文件：单独 `bun tui-tests/tui-render.harness.ts`（46 断言）。
+- TUI harness 不是 bun test 文件：单独 `bun tui-tests/tui-render.harness.ts`。
 - `bun run lint`：oxlint 仅 `correctness=error` 阻塞，warnings 不阻塞。
 - 改 `tui/` 源码后**必须 `bun run build`**：`dist/tui.js` 是已入库的发布产物，宿主直接读它；忘记 build = 改动不生效。
 

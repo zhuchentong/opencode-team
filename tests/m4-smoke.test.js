@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import plugin from "../server/index.ts";
 import * as lib from "../server/lib.ts";
+import * as g from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分（lib 不再 re-export，防环）
 
 test("插件默认导出形状", () => {
   assert.equal(plugin.id, "wf-workflow");
@@ -11,7 +12,13 @@ test("插件默认导出形状", () => {
 
 test("lib 导出关键纯逻辑", () => {
   for (const k of ["FLOWS", "GATES", "LIMITS", "KIND_FILES", "evaluateTransition",
-    "makeAllowChecker", "shellWriteTargets", "extractPaths", "parseVerdict", "guidance"]) {
+    "makeAllowChecker", "shellWriteTargets", "extractPaths", "parseVerdict"]) {
     assert.ok(lib[k] !== undefined, `lib 缺少导出 ${k}`);
+  }
+});
+
+test("guidance 模块导出关键指引函数（M16-r39 T08 拆分）", () => {
+  for (const k of ["guidance", "entryValue", "DONE_ENTRY"]) {
+    assert.ok(g[k] !== undefined, `guidance 缺少导出 ${k}`);
   }
 });

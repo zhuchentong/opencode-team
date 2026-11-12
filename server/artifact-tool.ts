@@ -8,10 +8,21 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning } from "./lib.ts";
-import { logAdd } from "./state.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, isDaily, trackRoleSession, type WfState } from "./lib.ts";
+import { logAdd, withStateRetry, type Store } from "./state.ts";
+import { type Observer } from "./observe.ts";
 
-export function registerArtifactTool(ctx: any, deps: any) {
+// M16-r39 T06：deps 类型化（ArtifactDeps 契约；宿主入参 ctx 保留 any）
+export interface ArtifactDeps {
+  resolveState: Store["resolveState"];
+  resolveProjectDir: Store["resolveProjectDir"];
+  save: Store["save"];
+  emitUpdated: (st: WfState) => Promise<void>;
+  probeOnce: Observer["probeOnce"];
+  logToolsOnce: Observer["logToolsOnce"];
+}
+
+export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
   const { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce } = deps;
   return ctx.tool.transform((draft: any) => {
     const namesPromise = Promise.resolve(draft.list?.()).catch(() => null);
@@ -60,13 +71,13 @@ export function registerArtifactTool(ctx: any, deps: any) {
           const patch = Array.isArray(args?.patch) ? args.patch : null;
           if (hasContent && patch) return { content: "❌ content 与 patch 互斥：首写用 content，修订已有产物用 patch。" };
           if (!hasContent && !patch) return { content: "❌ 须提供 content（首写完整内容）或 patch（增量修订 [{old,new}]）之一。" };
-          let st = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
-          if (!st?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
+          const initial = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
+          if (!initial?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
           // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
-          const dir = await resolveProjectDir(st, context?.sessionID);
-          const file = mk(st); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
-          const target = `${dir}/.workflow/${st.slug}/${file}`;
-          fs.mkdirSync(`${dir}/.workflow/${st.slug}`, { recursive: true });
+          const dir = await resolveProjectDir(initial, context?.sessionID);
+          const file = mk(initial); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
+          const target = `${dir}/.workflow/${initial.slug}/${file}`;
+          fs.mkdirSync(`${dir}/.workflow/${initial.slug}`, { recursive: true });
           // M16-r33 P1a：patch 模式——读磁盘原文，顺序应用（每条 old 对当前内容唯一精确匹配）；
           // 未命中/歧义/目标不存在 → 报错不落盘。修订只输出变更段，省全量重写的生成耗时。
           let finalContent: string;
@@ -96,30 +107,38 @@ export function registerArtifactTool(ctx: any, deps: any) {
           // M16-r34：plan-review 也解析 verdict（日常模式 M/L 独立验证结论，wf:build 关卡校验）
           const verdict = (kind === "test-report" || kind === "plan-review") ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
-          const mark = (row: any) => {
+          const mark = (row: WfState) => {
+            // M16-r40：角色→子会话自动登记（搭本次记账 save 便车，零额外写盘）——
+            // 产物写入者（planner/reviewer/tester/builder-reviewer/learner）在此暴露子会话身份
+            trackRoleSession(row, context?.agent, context?.sessionID);
             row.artifacts = row.artifacts ?? {};
             row.artifacts[file] = { at: new Date().toISOString(), bytes };
             if (kind === "test-plan") row.testPlanWritten = true;
             if (kind === "test-report") row.testReportVerdict = verdict;
             if (kind === "plan-review") row.planReviewVerdict = verdict; // M16-r34：日常 M/L 验证关卡记账
+            // M16-r39 T02：plan 修订（content/patch、任何 mode）清双通道记账——
+            // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡
+            if (kind === "plan") { delete row.planReviewVerdict; delete row.testPlanWritten; }
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "patch" ? `${file} mode=patch` : file });
           };
-          mark(st);
-          let saved = await save(st);
-          let rowGone = false; // T12：区分「行被并发删除」与「持续 stale-rev」
-          for (let attempt = 1; !saved.ok && saved.reason === "stale-rev" && attempt < 3; attempt++) {
-            const fresh = await resolveState(context?.sessionID, context?.agent);
-            if (!fresh?.slug) { rowGone = true; break; } // 行被并发清除：无从重放
-            mark(fresh);
-            st = fresh;
-            saved = await save(fresh);
-          }
-          if (!saved.ok) {
-            if (rowGone) {
+          // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
+          // load(1)=初始 st、load(n)=resolveState 最新快照（无 slug→null=gone，行被并发清除）
+          const res = await withStateRetry({
+            load: async (attempt) => {
+              if (attempt === 1) return initial;
+              const fresh = await resolveState(context?.sessionID, context?.agent);
+              return fresh?.slug ? fresh : null;
+            },
+            apply: (row) => { mark(row); return null; },
+            save,
+          });
+          if (!res.ok) {
+            if (res.reason === "gone") {
               return { content: `✅ 已写入 ${target}（${bytes} bytes）；⚠️ 状态行已被并发清除（reset？），记账跳过——产物已落盘，重开任务后可用 /wf:diagnose 对账` };
             }
-            return { content: `✅ 已写入 ${target}（${bytes} bytes）；❌ 状态记账保存失败（${saved.reason}），产物对账不一致（/wf:diagnose 可核对），请重试写入。` };
+            return { content: `✅ 已写入 ${target}（${bytes} bytes）；❌ 状态记账保存失败（${res.reason}），产物对账不一致（/wf:diagnose 可核对），请重试写入。` };
           }
+          const st = res.st;
           await emitUpdated(st);
           let note = `✅ [${VERSION}] 已写入 ${target}（${bytes} bytes）`;
           // M16-r29：阶段纪律——产物错位告警（不阻断，落盘/记账照常）
@@ -142,6 +161,10 @@ export function registerArtifactTool(ctx: any, deps: any) {
             note += st.planReviewVerdict === "PASS"
               ? `\n→ 验证 PASS：请 leader 调用 wf_command(name="wf:build") 推进（日常模式验证关卡放行）`
               : `\n→ 验证 ${st.planReviewVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 wf:plan 带意见修订后再验（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
+          }
+          // M16-r39 T02：plan 修订清双通道记账——模式感知的重新验证指路
+          if (kind === "plan") {
+            note += "\nplan 已修订：review 结论与 test-plan 记账已清，须重新 " + (isDaily(st) ? "wf:review" : "wf:review / wf:test-design");
           }
           return { content: note };
         } catch (e) {

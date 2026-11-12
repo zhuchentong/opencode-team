@@ -9,8 +9,12 @@
 // shell 门并入下方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
 // P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor } from "./lib.ts";
+import * as fs from "node:fs";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, trackRoleSession, isLeader } from "./lib.ts";
 import { logAdd } from "./state.ts";
+
+// probe 4：session.get 返回形状摘要（模块级纯函数，避免每次调用重建；供一次性取证）
+const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentID ?? null, hasParentID: "parentID" in s, time: s.time ?? null } : null;
 
 // P4：下一步提示（NEXT/NEXT_DAILY 表与流转指引同源，防文案漂移）；T06：模型侧经 wf_command 推进
 // M16-r34：mode 感知（daily 用 NEXT_DAILY）；模块级纯函数，只捕获模块 import，不依赖闭包
@@ -25,6 +29,10 @@ export function registerGuardHook(ctx: any, deps: any) {
     try { await save(st); } catch { }
   };
 
+  // M16-r41 B 层：subagent 形状探针一次性开关（ERR-002 先探形状再使用；existsSync 自禁用，非 P6 常态探针）
+  let subagentProbed = false;
+  let sessionGetProbed = false;
+
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
   return ctx.tool.hook("execute.before", async (input: any, output: any) => {
     try {
@@ -36,9 +44,91 @@ export function registerGuardHook(ctx: any, deps: any) {
       // M10-c v2：shell 也经 tool hook 门控（实测 ctx.shell.hook 的 input 仅 {command,cwd,timeout,shell,env}，
       // 无 sessionID/agent 无法按会话管辖；tool hook 对 tool=="shell" 携带 input.input.command + 会话身份）
       const toolName = String(input?.tool);
+      // ── M16-r41 B 层：subagent 续接自愈守卫（leader 专属；必须置于 edit/shell 过滤之前）──
+      // 根因：leader 凭记忆复述长 ses_ ID→截断→宿主拒→反复重试→冷启动。A 层已自动登记 roleSessions
+      //   并在 guidance 渲染完整 ID；此处在续接入口对「截断/非法」的 sessionID 一次性纠正（附完整 ID）。
+      // 收窄（多 lane 安全）：仅「形状非法 OR 登记 ID 的真前缀」才纠正；全形状非前缀的不符→放行交宿主归属校验。
+      if (toolName === "subagent" || toolName === "task") {
+        // probe 1：subagent 首次接入 hook，一次性取证「触发 + 入参形状」（best-effort，不影响守卫）
+        if (!subagentProbed) {
+          subagentProbed = true;
+          try {
+            let dir = process.cwd();
+            try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+            const dbg = `${dir}/.workflow/_debug`;
+            if (!fs.existsSync(`${dbg}/subagent-probe.json`)) {
+              fs.mkdirSync(dbg, { recursive: true });
+              fs.writeFileSync(`${dbg}/subagent-probe.json`, JSON.stringify({
+                at: new Date().toISOString(), tool: toolName,
+                inputKeys: Object.keys(input ?? {}), argKeys: Object.keys(input?.input ?? {}),
+                hookAgent: input?.agent, argAgent: input?.input?.agent,
+                hasSessionID: input?.input ? "sessionID" in input.input : false,
+              }, null, 2));
+            }
+          } catch { /* 探针 best-effort */ }
+        }
+        // probe 4：session.get 返回形状一次性取证（parentID/time.busy/idle → 归属+存活校验可行性）
+        if (!sessionGetProbed) {
+          sessionGetProbed = true;
+          try {
+            const callerSid = String(input?.sessionID ?? "");
+            const caller = await ctx.session.get({ sessionID: callerSid });
+            let dir4 = process.cwd();
+            if (caller?.location?.directory) dir4 = String(caller.location.directory);
+            const childSid = input?.input?.sessionID ? String(input.input.sessionID) : "";
+            let child: any = null; let childErr: string | null = null;
+            if (childSid) { try { child = await ctx.session.get({ sessionID: childSid }); } catch (e) { childErr = String((e as Error)?.message ?? e); } }
+            const dbg4 = `${dir4}/.workflow/_debug`;
+            if (!fs.existsSync(`${dbg4}/session-get-probe.json`)) {
+              fs.mkdirSync(dbg4, { recursive: true });
+              fs.writeFileSync(`${dbg4}/session-get-probe.json`, JSON.stringify({
+                at: new Date().toISOString(),
+                caller: { sessionID: callerSid, ...sessionShape(caller) },
+                child: childSid ? { sessionID: childSid, ...sessionShape(child), err: childErr } : null,
+              }, null, 2));
+            }
+          } catch { /* 探针 best-effort */ }
+        }
+        if (!isLeader(String(input?.agent ?? ""))) return; // 仅 leader 的续接受管辖
+        const st = await resolveState(input?.sessionID, input?.agent);
+        if (!st) return;
+        const args = input?.input ?? {};
+        const target = String(args.agent ?? "");
+        const passedRaw = args.sessionID;
+        if (passedRaw == null || String(passedRaw) === "") return; // 省略 sessionID=新建，不干预
+        const tracked = st.roleSessions?.[target]?.sessionID;
+        if (!tracked) return; // 该角色无登记，不干预
+        const passed = String(passedRaw);
+        if (passed === tracked) return; // ID 正确，放行
+        const shapeOk = /^ses_[A-Za-z0-9]+$/.test(passed);
+        const isPrefix = tracked.startsWith(passed); // passed≠tracked 且非空 → startsWith 即真前缀
+        if (shapeOk && !isPrefix) return; // 全形状非前缀不符→宿主归属校验（多 lane/幻觉兜底）
+        // 形状非法 OR 真前缀截断 → 一次性纠正：附完整 ID（GATE_ERR 标记确保穿透 fail-open，S1）
+        logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: "corrected" });
+        try { await save(st); } catch { /* 取证 best-effort，不影响纠正 */ }
+        // probe 4 增强：session.get 返回 time.busy/idle（无 parentID，归属由宿主原生校验）→ 纠正时附存活状态，
+        //   防「续用运行中子会话→静默分叉」。best-effort：取不到 time 则不附注（不影响纠正本身）。
+        let liveNote = "";
+        try {
+          const child = await ctx.session.get({ sessionID: tracked });
+          const busy = Number(child?.time?.busy ?? 0); const idle = Number(child?.time?.idle ?? 0);
+          if (busy > 0 && idle > 0) liveNote = busy > idle
+            ? " ⚠ 该子会话仍在运行：请等其完成或直接新建，勿续用运行中会话（防静默分叉）。"
+            : " 该子会话已完成，可安全续用。";
+        } catch { /* 存活取证 best-effort */ }
+        throw new Error(
+          `${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」截断/非法。请逐字改用完整 ID 重试一次：sessionID=${tracked}（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。${liveNote}`
+        );
+      }
       if (!EDIT_TOOLS.has(toolName) && toolName !== "shell") return;
       const st = await resolveState(input?.sessionID, input?.agent); // M10-b：wf/* 子会话同样受阶段闸门管辖
-      if (!st || !BLOCKING_PHASES.has(st.phase)) return;
+      if (!st) return;
+      // M16-r40：角色→子会话自动登记——builder/fixer 只改码不写产物，在此捕获其 sessionID。
+      // 仅 EDIT_TOOLS 且 sessionID 变化才落盘（每子会话一次，避免 save 抖动）；登记失败不阻断（fail-open）。
+      if (EDIT_TOOLS.has(toolName) && trackRoleSession(st, input?.agent, input?.sessionID)) {
+        try { await save(st); } catch { /* 登记 best-effort，不影响闸门 */ }
+      }
+      if (!BLOCKING_PHASES.has(st.phase)) return;
       if (toolName === "shell") {
         const cmd = String(input?.input?.command ?? "");
         const base = String(input?.input?.cwd ?? st.directory ?? "");

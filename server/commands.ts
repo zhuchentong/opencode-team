@@ -11,13 +11,34 @@
 import * as fs from "node:fs";
 import {
   VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
-  evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
+  evaluateTransition, promptText, diagnoseReport, pingReport,
+  type WfState,
 } from "./lib.ts";
-import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
+import { guidance, entryValue } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
+import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, type Store } from "./state.ts";
+import { type Observer } from "./observe.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
+
+// M16-r39 T06：deps 类型化（CommandDeps 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）
+export interface CommandDeps {
+  load: Store["load"];
+  save: Store["save"];
+  resolveProjectDir: Store["resolveProjectDir"];
+  removeState: Store["removeState"];
+  putReport: Store["putReport"];
+  dumpStates: Store["dumpStates"];
+  debugDirFor: Observer["debugDirFor"];
+  probeOnce: Observer["probeOnce"];
+  LIMS: Record<string, number>;
+  emitUpdated: (st: WfState) => Promise<void>;
+  emitReport?: (sessionID: string, text: string, at: string) => Promise<void>;
+  WfDef?: unknown;
+  rpcErr?: string | null;
+  runner?: { run: ((name: string, a: any) => Promise<unknown>) | null };
+}
 
 // M16-r28 lint 清理：以下三个纯函数不捕获 registerCommands 闭包变量，上提模块级（function-scoping）
 // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
@@ -49,12 +70,12 @@ const roleGuardText = (opt: any) => {
   } catch { return ""; }
 };
 
-export async function registerCommands(ctx: any, deps: any) {
+export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const E = ctx?.session?.instructions?.entry;
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
     putReport, removeState, dumpStates, runner } = deps;
 
-  const inject = async (st: any) => {
+  const inject = async (st: WfState) => {
     try {
       // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
       // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
@@ -67,66 +88,74 @@ export async function registerCommands(ctx: any, deps: any) {
   };
 
   // T02+T04：状态机推进 = load→校验→应用→inject→save 循环（≤3 次）。
-  //  - 拒绝分支：仅当已有前置行才落审计（T02——旧版对全新会话也 save，凭空造出
-  //    {slug:"",phase:null} 幽灵行占住面板）；审计为 best-effort，写失败不影响拒绝返回。
-  //  - 成功分支：save 返回 stale-rev（并发写入使快照过期）→ 重载最新快照重跑整条评估
-  //    （关卡/计数以最新状态为准）；最终写不进 → 显式报错，绝不静默丢推进（旧版忽略
-  //    save 返回值，冲突时用户收到成功 guidance 而 DB 未动）。
-  //  - inject 保持在 save 前（entryErr 需随本次 save 持久化）；emitUpdated 移到 save 成功
-  //    之后（不向 TUI 广播未落库的状态）。
+  // M16-r39 T07：归一 withStateRetry——load 回调返回克隆（无前行→新建态，绝不透传 null，
+  // 否则新 intake 被误判 gone）；apply=evaluate+phase/log/inject（拒绝：有前行才审计 save，
+  // best-effort，返回 msg=halt 不重试）；终败回滚 entry 到 DB 现势（lastLoaded=原始 loaded）。
+  //  - inject 保持在 save 前（entryErr 需随本次 save 持久化）；emitUpdated/guidance 输出置于
+  //    retry ok 之后（不向 TUI 广播未落库的状态）。
   const transition = async (sessionID: string, cmd: string, text?: string) => {
-    for (let attempt = 1; ; attempt++) {
-      const loaded = await load(sessionID);
-      // T09：评估/改写只作用于克隆——loaded 恒为「DB 现势」快照，save 最终失败的 entry 回滚
-      // 依赖它（原地改写会让回滚注入未落库的 phase/rounds，名存实亡）
-      const st = loaded ? structuredClone(loaded) : {
-        sessionID, slug: "", phase: null,
-        rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
-        lanes: {}, artifacts: {}, log: [], createdAt: new Date().toISOString(),
-      };
-      const from = st.phase ?? null;
-      const at = new Date().toISOString();
-      // M16-r29：强制重置前产物记账快照（供中途 !intake 重置后的账实不符告警）
-      const preArtifacts = cmd === "wf:intake" ? Object.keys(st.artifacts ?? {}) : [];
+    let lastLoaded: WfState | null = null; // 原始 loaded（可 null）——终败 entry 回滚基准
+    let from: string | null = null;
+    let preArtifacts: string[] = [];
+    const res = await withStateRetry({
+      load: async () => {
+        const loaded = await load(sessionID);
+        lastLoaded = loaded;
+        // T09：评估/改写只作用于克隆——loaded 恒为「DB 现势」快照，save 最终失败的 entry 回滚
+        // 依赖它（原地改写会让回滚注入未落库的 phase/rounds，名存实亡）
+        return loaded ? structuredClone(loaded) : {
+          sessionID, slug: "", phase: null,
+          rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
+          lanes: {}, artifacts: {}, log: [], createdAt: new Date().toISOString(),
+        };
+      },
+      apply: async (st) => {
+        from = st.phase ?? null;
+        const at = new Date().toISOString();
+        // M16-r29：强制重置前产物记账快照（供中途 !intake 重置后的账实不符告警）
+        preArtifacts = cmd === "wf:intake" ? Object.keys(st.artifacts ?? {}) : [];
 
-      // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
-      const r = evaluateTransition(cmd, st, text, at, LIMS);
-      if (!r.ok) {
-        logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
-        if (loaded) { try { await save(st); } catch { /* 审计 best-effort */ } } // T02：无前行不落盘
-        return r.msg;
-      }
+        // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
+        const r = evaluateTransition(cmd, st, text, at, LIMS);
+        if (!r.ok) {
+          logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
+          if (lastLoaded) { try { await save(st); } catch { /* 审计 best-effort */ } } // T02：无前行不落盘
+          return r.msg; // halt：不重试
+        }
 
-      // M16-r34：mode 选择流转表（daily 子表 vs full）；evaluateTransition 已放行 → flow 必存在
-      const flow = flowFor(st, cmd)!;
-      st.phase = flow.to;
-      st.updatedAt = at;
-      // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
-      if (!st.projectID) {
-        try {
-          const s = await ctx.session.get({ sessionID });
-          st.projectID = s?.projectID ?? null;
-          st.directory = s?.location?.directory ?? null;
-        } catch { }
-      }
-      logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
-      await inject(st);
-      const saved = await save(st);
-      if (!saved.ok) {
-        if (saved.reason === "stale-rev" && attempt < 3) continue; // T04：并发冲突→以最新快照重评估
-        // T09：entry 回滚到 DB 现势——消除「系统提示已进新阶段、DB 未动」的矛盾信号
-        if (loaded) await inject(loaded);
-        else { try { await E.remove({ sessionID, key: ENTRY_KEY }); } catch { } } // 新建会话建行失败：无行则清指引
-        return `❌ 状态保存失败（${saved.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
-      }
-      await emitUpdated(st);
-      let out = guidance(flow.to, st, LIMS);
-      // M16-r29：中途强制重置（!intake）清空产物记账——账实不符告警（done 后正常换任务不告警）
-      if (cmd === "wf:intake" && from && from !== "done" && preArtifacts.length > 0) {
-        out += `\n⚠️ 强制重置已清空 ${preArtifacts.length} 项产物记账（${preArtifacts.join(", ")}）——磁盘文件仍在 .workflow/${st.prev?.slug ?? "旧slug"}/，新任务账实不符；如需沿用请先对账（/wf:diagnose）。`;
-      }
-      return out;
+        // M16-r34：mode 选择流转表（daily 子表 vs full）；evaluateTransition 已放行 → flow 必存在
+        const flow = flowFor(st, cmd)!;
+        st.phase = flow.to;
+        st.updatedAt = at;
+        // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
+        if (!st.projectID) {
+          try {
+            const s = await ctx.session.get({ sessionID });
+            st.projectID = s?.projectID ?? null;
+            st.directory = s?.location?.directory ?? null;
+          } catch { }
+        }
+        logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
+        await inject(st);
+        return null;
+      },
+      save,
+    });
+    if (!res.ok) {
+      if (res.reason === "halt") return res.msg ?? "";
+      // T09：entry 回滚到 DB 现势——消除「系统提示已进新阶段、DB 未动」的矛盾信号
+      if (lastLoaded) await inject(lastLoaded);
+      else { try { await E.remove({ sessionID, key: ENTRY_KEY }); } catch { } } // 新建会话建行失败：无行则清指引
+      return `❌ 状态保存失败（${res.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
     }
+    const st = res.st;
+    await emitUpdated(st);
+    let out = guidance(st.phase, st, LIMS);
+    // M16-r29：中途强制重置（!intake）清空产物记账——账实不符告警（done 后正常换任务不告警）
+    if (cmd === "wf:intake" && from && from !== "done" && preArtifacts.length > 0) {
+      out += `\n⚠️ 强制重置已清空 ${preArtifacts.length} 项产物记账（${preArtifacts.join(", ")}）——磁盘文件仍在 .workflow/${st.prev?.slug ?? "旧slug"}/，新任务账实不符；如需沿用请先对账（/wf:diagnose）。`;
+    }
+    return out;
   };
 
   // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
@@ -253,11 +282,12 @@ export async function registerCommands(ctx: any, deps: any) {
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
           `gates: testPlan=${st.testPlanWritten ? "✅" : "❌"}  testReport=${st.testReportVerdict ?? "-"}  planReview=${st.planReviewVerdict ?? "-"}`,
           `lanes: ${JSON.stringify(st.lanes ?? {})}`,
+          `roleSessions: ${JSON.stringify(st.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
           `下一步: ${nextFor(st, st.phase)}`,
           `最近流转:`,
           ...(st.log ?? []).slice(-8).map((e: any) =>
-            `  ${e.at.slice(11, 19)} ${e.cmd} ${e.from ?? "∅"}→${e.to}${e.ok ? "" : `（${e.note}）`}`),
+            `  ${String(e.at ?? "").slice(11, 19)} ${e.cmd} ${e.from ?? "∅"}→${e.to}${e.ok ? "" : `（${e.note}）`}`),
         ].join("\n");
       },
     });
@@ -296,7 +326,7 @@ export async function registerCommands(ctx: any, deps: any) {
         const op = (t[0] ?? "ls").toLowerCase();
         // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm（≤3 次），
         // 返回错误串=操作不成立，null=已写入 st.lanes
-        const applyOp = (st: any): string | null => {
+        const applyOp = (st: WfState): string | null => {
           st.lanes = st.lanes ?? {};
           if (op === "set") {
             const id = String(t[1] ?? "");
@@ -315,26 +345,27 @@ export async function registerCommands(ctx: any, deps: any) {
         const st0 = await load(a.sessionID); // lane 挂在 leader 会话自持状态上
         if (!st0) return "❌ 本会话无活动任务。lane 登记需先 /wf:intake <slug>。";
         if (op !== "set" && op !== "rm") { // ls（默认）只读，不落盘
-          const ks = Object.keys(st0.lanes ?? {});
+          const lanes = st0.lanes ?? {};
+          const ks = Object.keys(lanes);
           if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID> [worktree路径]";
           return ks.map((k: string) => {
-            const v = st0.lanes[k];
+            const v = lanes[k];
             return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}（${String(v.at ?? "").slice(0, 19)}）`;
           }).join("\n");
         }
-        for (let attempt = 1; ; attempt++) {
-          const st = attempt === 1 ? st0 : await load(a.sessionID);
-          if (!st) return "❌ 状态行已不存在（并发 reset？），lane 变更未生效。";
-          const err = applyOp(st);
-          if (err) return err;
-          const saved = await save(st);
-          if (saved.ok) {
-            await emitUpdated(st);
-            return `✅ lanes(${VERSION}) = ${JSON.stringify(st.lanes)}`;
-          }
-          if (saved.reason === "stale-rev" && attempt < 3) continue;
-          return `❌ 状态保存失败（${saved.reason}），lane 变更未生效，请重试。`;
+        // M16-r39 T07：归一 withStateRetry——load(1)=首快照 st0、load(n)=重载；apply=applyOp
+        const res = await withStateRetry({
+          load: async (attempt) => (attempt === 1 ? st0 : await load(a.sessionID)),
+          apply: (st) => applyOp(st),
+          save,
+        });
+        if (!res.ok) {
+          if (res.reason === "halt") return res.msg ?? "";
+          if (res.reason === "gone") return "❌ 状态行已不存在（并发 reset？），lane 变更未生效。";
+          return `❌ 状态保存失败（${res.reason}），lane 变更未生效，请重试。`;
         }
+        await emitUpdated(res.st);
+        return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}`;
       },
     });
     add({
@@ -344,7 +375,7 @@ export async function registerCommands(ctx: any, deps: any) {
         await removeState(a.sessionID); // P1：清任务行与报告槽（防新挂载重放旧 toast；events 流水保留审计）
         try { await E.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch { }
         try { await E.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch { }
-        await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} }); // M10-a：A3，TUI 实时反映清除
+        await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} } as WfState); // M10-a：A3，TUI 实时反映清除
         return "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。";
       },
     });
@@ -362,25 +393,14 @@ export async function registerCommands(ctx: any, deps: any) {
             catch (e2) { entries = `ERR1:${(e1 as Error)?.message ?? e1} | ERR2:${(e2 as Error)?.message ?? e2}`; }
           }
         }
+        // M16-r39 T09：sessProbe 收敛——5 candidates 形状探测已完成历史使命（扁平形状真机实证），
+        // 改单一扁平 ctx.session.get({sessionID})；state.json 键名 sessProbe 不变
         let sessProbe = null;
-        {
-          const tries: Record<string, any> = {};
-          const candidates = [
-            ["flat-sessionID", { sessionID: a.sessionID }],
-            ["path-sessionID", { path: { sessionID: a.sessionID } }],
-            ["path-id", { path: { id: a.sessionID } }],
-            ["query-sessionID", { query: { sessionID: a.sessionID } }],
-            ["string", a.sessionID],
-          ];
-          for (const [label, arg] of candidates) {
-            try {
-              const r = await ctx.session.get(arg);
-              tries[label] = { ok: true, topKeys: Object.keys(r ?? {}), dataKeys: Object.keys(r?.data ?? {}), location: r?.data?.location ?? r?.location ?? null };
-            } catch (e) {
-              tries[label] = { ok: false, err: String((e as Error)?.message ?? e).slice(0, 140) };
-            }
-          }
-          sessProbe = tries;
+        try {
+          const r = await ctx.session.get({ sessionID: a.sessionID });
+          sessProbe = { ok: true, topKeys: Object.keys(r ?? {}), location: r?.data?.location ?? r?.location ?? null };
+        } catch (e) {
+          sessProbe = { ok: false, err: String((e as Error)?.message ?? e).slice(0, 140) };
         }
         let rpcSelf = null;
         try { rpcSelf = WfDef ? await ctx.rpc(WfDef).state({ sessionID: a.sessionID }) : "no-rpc-def"; }

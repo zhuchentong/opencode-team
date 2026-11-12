@@ -2,7 +2,8 @@
 // 背景：真机 auth-login(r28) leader 把 reviewer/tester 提前塞进 planning，产物重复写浪费工时。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARTIFACT_PHASE, artifactPhaseWarning, guidance } from "../server/lib.ts";
+import { ARTIFACT_PHASE, artifactPhaseWarning } from "../server/lib.ts";
+import { guidance } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
 
 const mkSt = (phase, extra = {}) => ({
   sessionID: "ses_pd", slug: "demo", phase,

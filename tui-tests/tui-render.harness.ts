@@ -417,6 +417,45 @@ console.log(`插件 id: ${t.id}`);
   }
 }
 
+// ── P13: M16-r39 T11 WF_COMPACT env 开关——compact 判定 = options.compact===true || WF_COMPACT==="1" ──
+// testRender 换树盲区→仅断言初始帧（snap=null：compact 单行「无活动任务」；非 compact 表头「── Workflow」）。
+{
+  const prevEnv = process.env.WF_COMPACT;
+  const renderFrame = async (ctx: any, sid: string) => {
+    const { slots } = { slots: (ctx as any).__slots };
+    const setup = await testRender(() => slots["sidebar.content"]({ sessionID: sid }), { width: 50, height: 24 });
+    await setup.flush();
+    const frame: string = setup.captureCharFrame();
+    await setup.dispose();
+    return frame;
+  };
+  const setupWith = (options: any) => {
+    const m = makeCtx();
+    m.ctx.options = options;
+    cleanups.push(t.setup(m.ctx as any)!);
+    (m.ctx as any).__slots = m.slots;
+    return m.ctx;
+  };
+  try {
+    // env=1（options 空——真机 options 不传达 TUI 的主路径）
+    process.env.WF_COMPACT = "1";
+    const f1 = await renderFrame(setupWith({}), "ses_p13a");
+    ok("P13 WF_COMPACT=1 初始帧单行含「无活动任务」", f1.includes("无活动任务"), JSON.stringify(f1.slice(0, 80)));
+    ok("P13 WF_COMPACT=1 初始帧无表头「── Workflow」", !f1.includes("── Workflow"), JSON.stringify(f1.slice(0, 80)));
+    // options.compact:true 同效（env 未设）
+    delete process.env.WF_COMPACT;
+    const f2 = await renderFrame(setupWith({ compact: true }), "ses_p13b");
+    ok("P13 options.compact:true 同效（单行无表头）", f2.includes("无活动任务") && !f2.includes("── Workflow"), JSON.stringify(f2.slice(0, 80)));
+    // env 未设 + options 空 → 表头在（默认表格视图不回归）
+    const f3 = await renderFrame(setupWith({}), "ses_p13c");
+    ok("P13 env 未设默认表格视图表头在", f3.includes("── Workflow"), JSON.stringify(f3.slice(0, 80)));
+  } catch (e: any) {
+    ok("P13 WF_COMPACT 开关不崩", false, e?.message);
+  } finally {
+    if (prevEnv === undefined) delete process.env.WF_COMPACT; else process.env.WF_COMPACT = prevEnv;
+  }
+}
+
 console.log("（清理 setup 定时器与订阅）");
 for (const c of cleanups) { try { c(); } catch { } }
 console.log(`\n${pass} 通过, ${errors.length} 失败`);

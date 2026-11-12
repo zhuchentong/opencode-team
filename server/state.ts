@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
-import { type FlowLogEntry, isLeader } from "./lib.ts";
+import { type FlowLogEntry, type WfState, isLeader } from "./lib.ts";
 
 // instructions.entry 的 key（非存储键——P1 不动 entry 通道）
 export const ENTRY_KEY = "wf.phase";
@@ -22,11 +22,94 @@ export const HINT_KEY = "wf.hint"; // P3：自动激活一次性提示（不入�
 export const STATE_PREFIX = "wf-workflow/state/";
 export const REPORT_PREFIX = "wf-workflow/report/";
 
-export const logAdd = (st: any, entry: FlowLogEntry) => {
+export const logAdd = (st: WfState, entry: FlowLogEntry) => {
   st.log = Array.isArray(st.log) ? st.log : [];
+  // M16-r39 T01：单调序号——截断 50 不影响 events 增量判定（修审计停追）；
+  // 存量快照无 logSeq → 以当前 length 为基数（手工 push 场景同语义）
+  st.logSeq = (typeof st.logSeq === "number" ? st.logSeq : st.log.length) + 1;
   st.log.push(entry);
   if (st.log.length > 50) st.log = st.log.slice(-50);
 };
+
+// ── M16-r39 T04：单语句 CAS 原子写原语 ────────────────────────────────
+// 旧 save 读-比-写三步非原子（同进程 TOCTOU 窗口：qGet 与 qUpsert 之间并发写者插入）。
+// 新原语把胜负判定压进单条 SQL：null→INSERT rev=1（UNIQUE 冲突=并发抢先→stale-rev 可重试）；
+// number→UPDATE…WHERE session_id AND rev（changes=0→stale-rev）。跨进程原子性由单测证明。
+export interface TaskRow {
+  sessionID: string; slug: string; phase: string | null;
+  projectID: string | null; directory: string | null;
+  isActive: number | null; updatedAt: string; stateJson: string;
+}
+export function writeTaskRow(db: Database, row: TaskRow, expectedRev: number | null):
+  { ok: true; rev: number } | { ok: false; reason: "stale-rev" | "write-error" } {
+  try {
+    if (expectedRev == null) {
+      db.prepare(
+        `INSERT INTO tasks (session_id, slug, phase, project_id, directory, is_active, rev, updated_at, state_json)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ).run(row.sessionID, row.slug, row.phase, row.projectID, row.directory, row.isActive, row.updatedAt, row.stateJson);
+      return { ok: true, rev: 1 };
+    }
+    const r = db.prepare(
+      `UPDATE tasks SET slug=?, phase=?, project_id=?, directory=?, is_active=?, rev=?, updated_at=?, state_json=?
+       WHERE session_id=? AND rev=?`,
+    ).run(row.slug, row.phase, row.projectID, row.directory, row.isActive, expectedRev + 1, row.updatedAt, row.stateJson,
+      row.sessionID, expectedRev);
+    if (r.changes === 0) return { ok: false, reason: "stale-rev" };
+    return { ok: true, rev: expectedRev + 1 };
+  } catch (e) {
+    // UNIQUE 冲突（并发 INSERT 抢先）→ stale-rev 可重试；其余写错误 → write-error
+    if (/UNIQUE/i.test(String((e as Error)?.message ?? e))) return { ok: false, reason: "stale-rev" };
+    return { ok: false, reason: "write-error" };
+  }
+}
+
+// ── M16-r39 T06：deps 类型化（Store 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）──
+export type SaveResult = { ok: boolean; reason?: string; rev?: number };
+export interface ReportRow { sessionID: string; text: string; at: string | null }
+export interface StateListItem {
+  sessionID: string; slug: string; phase: string | null;
+  rounds: Record<string, number>; testPlanWritten: boolean;
+  testReportVerdict: string | null; updatedAt: string | null;
+}
+export interface Store {
+  load(sessionID: string): Promise<WfState | null>;
+  save(st: WfState): Promise<SaveResult>;
+  removeState(sessionID: string): Promise<void>;
+  resolveState(sessionID: string, agent?: string): Promise<WfState | null>;
+  resolveProjectDir(st: WfState | null, sessionID: string): Promise<string>;
+  scanStates(projectID?: string | null, directory?: string | null): Promise<StateListItem[]>;
+  putReport(r: { sessionID: string; text: string; at: string }): Promise<void>;
+  getReport(sessionID: string): Promise<ReportRow | null>;
+  dumpStates(): Promise<{ key: string; value: unknown }[]>;
+  ready: Promise<void>;
+  close(): void;
+}
+
+// ── M16-r39 T07：状态写回重试归一（transition/lane/artifact 记账三处同源）────
+// 语义：attempt=1..max；load null→gone；apply 返回串→halt（不重试，msg 透传）；
+// save ok→{ok:true,st}；stale-rev 且 attempt<max→重载重放；否则终败（reason 归一）。
+// apply 每 attempt 恰一次（审计记账不翻倍）；load(1) 由调用方决定复用首快照或新建。
+export type RetryResult = { ok: true; st: WfState } | { ok: false; reason: string; msg?: string };
+export async function withStateRetry(opts: {
+  load: (attempt: number) => Promise<WfState | null>;
+  apply: (st: WfState, attempt: number) => string | null | Promise<string | null>;
+  save: (st: WfState) => Promise<SaveResult>;
+  maxAttempts?: number; // 缺省 3
+}): Promise<RetryResult> {
+  const max = opts.maxAttempts ?? 3;
+  for (let attempt = 1; attempt <= max; attempt++) {
+    const st = await opts.load(attempt);
+    if (!st) return { ok: false, reason: "gone" };
+    const halt = await opts.apply(st, attempt);
+    if (typeof halt === "string") return { ok: false, reason: "halt", msg: halt };
+    const saved = await opts.save(st);
+    if (saved.ok) return { ok: true, st };
+    if (saved.reason === "stale-rev" && attempt < max) continue;
+    return { ok: false, reason: saved.reason ?? "write-error" };
+  }
+  return { ok: false, reason: "write-error" }; // 不可达（末次 attempt 必在循环内返回）
+}
 
 const STALE_MS = 14 * 24 * 3600 * 1000; // A7：done 状态 14 天 GC（原 storage 版语义保留）
 
@@ -58,11 +141,11 @@ CREATE TABLE IF NOT EXISTS reports (
 `;
 
 // 行→快照解析（模块级纯函数：只读 row.state_json，不依赖 createStore 闭包；lint function-scoping 上提）
-const parse = (row: any) => {
+const parse = (row: any): WfState | null => {
   try { return JSON.parse(row.state_json); } catch { return null; }
 };
 
-export function createStore(ctx: any) {
+export function createStore(ctx: any): Store {
   const dir = ctx?.location?.directory ?? process.cwd();
   const dbFile = join(dir, ".workflow", "wf.db");
   fs.mkdirSync(dirname(dbFile), { recursive: true });
@@ -78,6 +161,7 @@ export function createStore(ctx: any) {
   db.run(SCHEMA);
 
   const qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
+  // M16-r39 T04：qUpsert 仅留一次性迁移用（save 路径改委托 writeTaskRow 单语句 CAS）
   const qUpsert = db.prepare(
     `INSERT INTO tasks (session_id, slug, phase, project_id, directory, is_active, rev, updated_at, state_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -100,13 +184,14 @@ export function createStore(ctx: any) {
   const qGc = db.prepare("DELETE FROM tasks WHERE phase = 'done' AND updated_at IS NOT NULL AND updated_at < ?");
   const qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
 
-  const load = async (sessionID: string): Promise<any> => {
+  const load = async (sessionID: string): Promise<WfState | null> => {
     try { return parse(qGet.get(String(sessionID ?? ""))) ?? null; } catch { return null; }
   };
 
   // save：乐观锁写入。行已存在且快照携带的 rev 与当前行不一致 → 拒写（旧 last-write-wins 会静默
   // 丢更新，现在保新弃旧；console.warn 进 server 日志可回看）。无 rev 的新建快照 → 显式覆盖。
-  const save = async (st: any): Promise<{ ok: boolean; reason?: string; rev?: number }> => {
+  // M16-r39 T04：pre-check 快速路径保留，实际写入委托 writeTaskRow 单语句 CAS（消除读-写窗口）。
+  const save = async (st: WfState): Promise<SaveResult> => {
     if (!st || st.sessionID == null) return { ok: false, reason: "no-session" };
     st.updatedAt = new Date().toISOString();
     const sid = String(st.sessionID);
@@ -120,14 +205,24 @@ export function createStore(ctx: any) {
     st.rev = rev;
     const isActive = st.phase && st.phase !== "done" ? 1 : null;
     try {
-      qUpsert.run(sid, String(st.slug ?? ""), st.phase ?? null,
-        st.projectID != null ? String(st.projectID) : null,
-        st.directory != null ? String(st.directory) : null,
-        isActive, rev, st.updatedAt, JSON.stringify(st));
-      // append-only 流水：仅追加上次落盘后新增的 log 尾项（logAdd 的 50 条截断不影响判定）
-      const oldLog = prev ? (parse(prev)?.log ?? []) : [];
+      const w = writeTaskRow(db, {
+        sessionID: sid, slug: String(st.slug ?? ""), phase: st.phase ?? null,
+        projectID: st.projectID != null ? String(st.projectID) : null,
+        directory: st.directory != null ? String(st.directory) : null,
+        isActive, updatedAt: st.updatedAt, stateJson: JSON.stringify(st),
+      }, prev ? prev.rev : null);
+      if (!w.ok) {
+        try { console.warn(`[wf] save rejected (${w.reason}): session=${sid} incoming=${st.rev} current=${prev?.rev ?? "(无行)"}`); } catch { }
+        return { ok: false, reason: w.reason };
+      }
+      // append-only 流水：仅追加上次落盘后新增的 log 尾项。M16-r39 T01：按 logSeq 单调序号差判定
+      // （旧 length 比对在 50 条截断后恒差 0 → 审计停追）；存量无 logSeq → length 回退（手工 push 兼容）
+      const prevSt = prev ? parse(prev) : null;
       const newLog = Array.isArray(st.log) ? st.log : [];
-      for (const e of newLog.slice(oldLog.length)) qEv.run(sid, String(e?.at ?? st.updatedAt), JSON.stringify(e ?? {}));
+      const prevSeq = prevSt?.logSeq ?? prevSt?.log?.length ?? 0;
+      const curSeq = st.logSeq ?? newLog.length;
+      const n = Math.max(0, Math.min(curSeq - prevSeq, newLog.length));
+      for (const e of newLog.slice(newLog.length - n)) qEv.run(sid, String(e?.at ?? st.updatedAt), JSON.stringify(e ?? {}));
     } catch (e) {
       try { console.warn(`[wf] save failed: ${String((e as Error)?.message ?? e)}`); } catch { }
       return { ok: false, reason: "write-error" };
@@ -136,13 +231,13 @@ export function createStore(ctx: any) {
   };
 
   // reset：清除任务行与报告槽（events 流水为审计保留，不删）
-  const removeState = async (sessionID: string) => {
+  const removeState = async (sessionID: string): Promise<void> => {
     try { qTaskDel.run(String(sessionID ?? "")); } catch { }
     try { qRepDel.run(String(sessionID ?? "")); } catch { }
   };
 
   // M10-b：wf/* 子会话经项目反查管辖状态（原项目索引键 IDX 的 SQL 等价：同 project 最近落盘）
-  const resolveState = async (sessionID: string, agent?: string): Promise<any> => {
+  const resolveState = async (sessionID: string, agent?: string): Promise<WfState | null> => {
     const own = await load(sessionID);
     if (own) return own;
     const a = String(agent ?? "");
@@ -157,7 +252,7 @@ export function createStore(ctx: any) {
   };
 
   // 落盘目录三级回退同源提取：优先管辖状态的 directory，回退本会话 session.get，再回退 cwd
-  const resolveProjectDir = async (st: any, sessionID: string) => {
+  const resolveProjectDir = async (st: WfState | null, sessionID: string): Promise<string> => {
     let d = st?.directory ?? null;
     if (!d) {
       const sess = await ctx.session.get({ sessionID }).catch(() => null);
@@ -167,8 +262,8 @@ export function createStore(ctx: any) {
   };
 
   // M8-b 状态枚举 + A7 done GC + A6/M14 项目过滤（输出形状与 storage 版逐字段一致，rpc-bridge 直接消费）
-  const scanStates = async (projectID?: string | null, directory?: string | null) => {
-    const out: any[] = [];
+  const scanStates = async (projectID?: string | null, directory?: string | null): Promise<StateListItem[]> => {
+    const out: StateListItem[] = [];
     try {
       try { qGc.run(new Date(Date.now() - STALE_MS).toISOString()); } catch { /* GC 失败按保留处理 */ }
       for (const row of qAll.all()) {
@@ -180,7 +275,7 @@ export function createStore(ctx: any) {
           else if (!(directory && v.directory && String(v.directory) === String(directory))) continue;
         }
         out.push({
-          sessionID: v.sessionID ?? row.session_id,
+          sessionID: String(v.sessionID ?? row.session_id),
           slug: v.slug ?? "",
           phase: v.phase ?? null,
           rounds: v.rounds ?? {},
@@ -196,17 +291,17 @@ export function createStore(ctx: any) {
 
   // ── reports 命令输出槽（r29e 主通道的 SQLite 化；形状必须保持 {sessionID,text,at}
   //    ——bug A 教训：缺 sessionID 字段 TUI toastReport 过滤器会把 toast 全拦掉）──
-  const putReport = async (r: { sessionID: string; text: string; at: string }) => {
+  const putReport = async (r: { sessionID: string; text: string; at: string }): Promise<void> => {
     qRep.run(String(r.sessionID ?? ""), String(r.text ?? ""), r.at ? String(r.at) : null);
   };
-  const getReport = async (sessionID: string): Promise<any> => {
+  const getReport = async (sessionID: string): Promise<ReportRow | null> => {
     const row = qRepGet.get(String(sessionID ?? ""));
     if (!row) return null;
     return { sessionID: row.session_id, text: row.text, at: row.at ?? null };
   };
 
   // wf:debug 转储用：近似旧 storage scan 的 [{key, value}] 形状
-  const dumpStates = async () => {
+  const dumpStates = async (): Promise<{ key: string; value: unknown }[]> => {
     try {
       return qAll.all().map((row: any) => ({
         key: `${STATE_PREFIX}${row.session_id}`,
@@ -234,6 +329,7 @@ export function createStore(ctx: any) {
         if (!sid) continue;
         v.sessionID = sid;
         v.rev = 1; // 与 save 路径语义一致：快照携带 rev，迁移后 load→save 走乐观锁
+        v.logSeq = Array.isArray(v.log) ? v.log.length : 0; // M16-r39 T01：存量序号初始化（后续 logAdd 自此递增）
         const isActive = v.phase && v.phase !== "done" ? 1 : null;
         qUpsert.run(sid, String(v.slug ?? ""), v.phase ?? null,
           v.projectID != null ? String(v.projectID) : null,

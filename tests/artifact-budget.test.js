@@ -3,7 +3,8 @@
 // 机制：ARTIFACT_BUDGET_KB 软预算 + 超预算告警（不阻断，落盘/记账照常），与 r29 阶段告警同模式。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARTIFACT_BUDGET_KB, ARTIFACT_BUDGET_S_KB, budgetFor, artifactSizeWarning, KIND_FILES, guidance } from "../server/lib.ts";
+import { ARTIFACT_BUDGET_KB, ARTIFACT_BUDGET_S_KB, budgetFor, artifactSizeWarning, KIND_FILES } from "../server/lib.ts";
+import { guidance } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
 
 test("ARTIFACT_BUDGET_KB：六类产物预算齐全且为正数", () => {
   assert.deepEqual(Object.keys(ARTIFACT_BUDGET_KB).toSorted(), Object.keys(KIND_FILES).toSorted());

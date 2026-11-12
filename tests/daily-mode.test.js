@@ -8,8 +8,9 @@ import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
 import {
-  FLOWS, FLOWS_DAILY, GATES_DAILY, NEXT_DAILY, evaluateTransition, guidance, flowFor, isDaily,
+  FLOWS, FLOWS_DAILY, GATES_DAILY, NEXT_DAILY, evaluateTransition, flowFor, isDaily,
 } from "../server/lib.ts";
+import { guidance } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
 
 const DIR = "/tmp/opencode/wf-daily";
 const DB = `${DIR}/.workflow/wf.db`;

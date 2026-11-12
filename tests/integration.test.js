@@ -459,6 +459,61 @@ test("M16-r29 阶段纪律：planning 提前写 plan-review 告警不阻断；re
   dispose?.(); d2?.();
 });
 
+// ── T05（M16-r39 A5）：status 防御——历史脏数据 log 条目缺 at 不得 TypeError ──
+test("T05 status 防御：log 条目缺 at → wf:status 正常返回含流转行", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_at", prompt: { text: "at-demo" } });
+  // DB 直写：追加缺 at 的 log 条目（模拟历史脏数据）
+  {
+    const d = new Database(DB);
+    const row = d.query("SELECT state_json FROM tasks WHERE session_id = 'ses_at'").get();
+    const v = JSON.parse(row.state_json);
+    v.log.push({ cmd: "wf:plan", from: "intake", to: "planning", ok: true }); // 无 at
+    d.run("UPDATE tasks SET state_json = ? WHERE session_id = 'ses_at'", JSON.stringify(v));
+    d.close();
+  }
+  const out = await cmd(m, "wf:status").execute({ sessionID: "ses_at", prompt: {} });
+  assert.match(out, /最近流转/);
+  assert.match(out, /wf:plan intake→planning/, "缺 at 条目仍渲染流转行");
+  dispose?.();
+});
+
+// ── T09（M16-r39 B4）：sessProbe 收敛——5 candidates 探测改单一扁平 session.get ──
+test("T09 wf:debug sessProbe：单一扁平形状 {ok:true,topKeys,location}，无旧 5 候选键", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_dbg", prompt: { text: "dbg" } });
+  const out = await cmd(m, "wf:debug").execute({ sessionID: "ses_dbg", prompt: {} });
+  assert.match(out, /\.workflow\/_debug\/state\.json$/, "返回落盘路径");
+  const p = out.replace(/^wf 工作流状态已落盘：/, "");
+  const j = JSON.parse(fs.readFileSync(p, "utf8"));
+  assert.equal(j.sessProbe.ok, true, "扁平单探针 ok");
+  assert.ok(Array.isArray(j.sessProbe.topKeys), "topKeys 数组");
+  assert.ok(j.sessProbe.topKeys.includes("location"), "mock session 形状同源");
+  assert.deepEqual(j.sessProbe.location, { directory: DIR }, "location 提取（对象形状同源）");
+  assert.ok(!("path-sessionID" in j.sessProbe), "旧 5 候选形状不得残留");
+  assert.ok(!("flat-sessionID" in j.sessProbe), "旧标签键不得残留");
+  dispose?.();
+});
+
+// ── T10（M16-r39 B5）：allowRegexps 逐条容错——非法跳过、合法并入 allowRes ──
+test("T10 allowRegexps 容错：非法正则不抛 setup，合法正则并入放行判定", async () => {
+  const m = mkCtx({ allowRegexps: ["[invalid", "\\.custom$"] });
+  const dispose = await plugin.setup(m.ctx); // 旧实现：new RegExp("[invalid") SyntaxError
+  assert.equal(m.cmds.length, 16, "命令注册齐全（10 流转 + 6 辅助）");
+  assert.ok(m.tools.some((t) => t.name === "wf_write_artifact"), "工具注册齐全");
+  // 合法正则生效：planning 阶段 .custom 后缀放行，业务代码仍阻断
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_re", prompt: { text: "re" } });
+  await cmd(m, "wf:plan").execute({ sessionID: "ses_re", prompt: {} });
+  await m.hook()({ tool: "write", sessionID: "ses_re", agent: "build", input: { path: `${DIR}/notes.custom` } }, {});
+  await assert.rejects(
+    () => m.hook()({ tool: "edit", sessionID: "ses_re", agent: "build", input: { path: `${DIR}/src/app.ts` } }, {}),
+    (e) => /硬关卡/.test(String(e.message)),
+  );
+  dispose?.();
+});
+
 test("M16-r32 产物瘦身：超预算告警不阻断落盘/记账；预算内不告警", async () => {
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);

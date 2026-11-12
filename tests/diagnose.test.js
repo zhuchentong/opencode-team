@@ -1,7 +1,8 @@
 // P1：wf:diagnose 报告纯函数 + entry 注入值测试
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { diagnoseReport, entryValue, DONE_ENTRY } from "../server/lib.ts";
+import { diagnoseReport } from "../server/lib.ts";
+import { entryValue, DONE_ENTRY } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
 
 test("entryValue：非 done 阶段 = 头行 + 完整 guidance（抗 compaction 的注入面）", () => {
   const st = {

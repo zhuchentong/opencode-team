@@ -1,7 +1,8 @@
 // P2：options.limits 实例覆盖 + wf:ping 报告纯函数测试
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateTransition, guidance, entryValue, pingReport, WF_ROLES } from "../server/lib.ts";
+import { evaluateTransition, pingReport, WF_ROLES } from "../server/lib.ts";
+import { guidance, entryValue } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
 
 const mkSt = (phase = "review", rounds = { plan_review: 0, build_review: 0, test_fix: 0 }) => ({
   sessionID: "s", slug: "d", phase, rounds, artifacts: {}, lanes: {},

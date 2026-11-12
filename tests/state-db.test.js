@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
-import { createStore } from "../server/state.ts";
+import { createStore, logAdd, writeTaskRow } from "../server/state.ts";
 
 const tmpDir = () => fs.mkdtempSync("/tmp/opencode/wf-state-");
 const dbFile = (dir) => `${dir}/.workflow/wf.db`;
@@ -151,5 +151,118 @@ test(".workflow/.gitignore 防护：状态库与 WAL/SHM 不入 git", async () =
   const gi = fs.readFileSync(`${dir}/.workflow/.gitignore`, "utf8");
   assert.match(gi, /wf\.db/);
   assert.match(gi, /wf\.db-\*/);
+  s.close();
+});
+
+// ── T01（M16-r39 A1）：logSeq 修审计停追 ─────────────────────────────
+// 旧缺陷：save 按 oldLog.length 比对增量，log 截断 50 后 length 恒 50 → events 永远停追。
+// 修复：logAdd 维护单调 logSeq，save 按序号差追加；存量无 logSeq 回退 length。
+test("T01 logSeq：60 次 logAdd+save → events=60、log 截断 50、logSeq=60（审计不停追）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_seq", slug: "seq", phase: "intake", rounds: {}, log: [] });
+  for (let i = 1; i <= 60; i++) {
+    const st = await s.load("ses_seq");
+    logAdd(st, { cmd: "wf:x", at: `t${i}`, ok: true });
+    assert.equal((await s.save(st)).ok, true);
+  }
+  const d = new Database(dbFile(dir), { readonly: true });
+  const n = d.query("SELECT COUNT(*) AS n FROM events WHERE session_id = 'ses_seq'").get().n;
+  d.close();
+  const fin = await s.load("ses_seq");
+  assert.equal(n, 60, "events 不得因 50 条截断停追");
+  assert.equal(fin.log.length, 50, "快照 log 仍截断 50");
+  assert.equal(fin.logSeq, 60, "logSeq 单调累计");
+  s.close();
+});
+
+test("T01 logSeq：存量行无 logSeq（SQL 删字段）→ logAdd+save 恰追加 1 条（length 回退）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_leg", slug: "leg", phase: "planning", rounds: {}, log: [{ cmd: "wf:intake", at: "t0" }, { cmd: "wf:plan", at: "t1" }] });
+  // 模拟存量快照：SQL 删除 logSeq 字段（旧版本落盘的行无此字段）
+  const d = new Database(dbFile(dir));
+  const row = d.query("SELECT state_json FROM tasks WHERE session_id = 'ses_leg'").get();
+  const v = JSON.parse(row.state_json);
+  delete v.logSeq;
+  d.run("UPDATE tasks SET state_json = ? WHERE session_id = 'ses_leg'", JSON.stringify(v));
+  const before = d.query("SELECT COUNT(*) AS n FROM events WHERE session_id = 'ses_leg'").get().n;
+  d.close();
+  const st = await s.load("ses_leg");
+  logAdd(st, { cmd: "wf:review", at: "t2", ok: true });
+  assert.equal((await s.save(st)).ok, true);
+  const d2 = new Database(dbFile(dir), { readonly: true });
+  const after = d2.query("SELECT COUNT(*) AS n FROM events WHERE session_id = 'ses_leg'").get().n;
+  const last = d2.query("SELECT entry_json FROM events WHERE session_id = 'ses_leg' ORDER BY id DESC LIMIT 1").get();
+  d2.close();
+  assert.equal(after - before, 1, "存量无 logSeq 恰追加 1 条（length 回退，不重放全量）");
+  assert.equal(JSON.parse(last.entry_json).cmd, "wf:review");
+  s.close();
+});
+
+// ── T04（M16-r39 A4）：writeTaskRow 单语句 CAS 原子写 ─────────────────
+// 旧 save 读-比-写三步非原子（同进程 TOCTOU 窗口）；新原语 INSERT/UPDATE…WHERE rev
+// 单语句定胜负。跨进程原子性由本原语单测证明，save 保留 pre-check 快速路径。
+const mkCasRow = (phase) => ({
+  sessionID: "ses_cas", slug: "cas", phase, projectID: null, directory: null,
+  isActive: 1, updatedAt: "2026-11-12T00:00:00.000Z",
+  stateJson: JSON.stringify({ sessionID: "ses_cas", slug: "cas", phase, rounds: {} }),
+});
+test("T04 writeTaskRow：null→INSERT rev1；同 expectedRev 二次调用→stale-rev；UNIQUE 冲突→stale-rev", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir); // 建库/schema
+  const d = new Database(dbFile(dir));
+  // null → INSERT rev=1
+  assert.deepEqual(writeTaskRow(d, mkCasRow("intake"), null), { ok: true, rev: 1 });
+  // expectedRev=1 → UPDATE 成功 rev=2
+  assert.deepEqual(writeTaskRow(d, mkCasRow("planning"), 1), { ok: true, rev: 2 });
+  // 同一 expectedRev=1 二次调用 → stale-rev（CAS 定胜负，陈旧写不得覆盖）
+  assert.deepEqual(writeTaskRow(d, mkCasRow("review"), 1), { ok: false, reason: "stale-rev" });
+  const cur = d.query("SELECT phase, rev FROM tasks WHERE session_id = 'ses_cas'").get();
+  assert.equal(cur.phase, "planning", "stale 写不得覆盖 DB 现势");
+  assert.equal(cur.rev, 2);
+  // null → INSERT 遇 UNIQUE 冲突 → stale-rev（可重试语义）
+  assert.deepEqual(writeTaskRow(d, mkCasRow("intake"), null), { ok: false, reason: "stale-rev" });
+  d.close();
+  s.close();
+});
+
+test("T04 save pre-check 回归锚：load 后外部 UPDATE rev → save 拒 stale-rev 且 DB 不变", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_pc", slug: "pc", phase: "intake", rounds: {}, log: [] });
+  const st = await s.load("ses_pc");
+  const d = new Database(dbFile(dir));
+  d.run("UPDATE tasks SET rev = rev + 5 WHERE session_id = 'ses_pc'");
+  const before = d.query("SELECT state_json, rev FROM tasks WHERE session_id = 'ses_pc'").get();
+  d.close();
+  st.phase = "planning";
+  const r = await s.save(st);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "stale-rev");
+  const d2 = new Database(dbFile(dir), { readonly: true });
+  const after = d2.query("SELECT state_json, rev FROM tasks WHERE session_id = 'ses_pc'").get();
+  d2.close();
+  assert.equal(after.state_json, before.state_json, "拒写后 DB 快照不变");
+  assert.equal(after.rev, before.rev, "拒写后 rev 不变");
+  s.close();
+});
+
+// ── verify 补充边界（M16-r39 testing）：writeTaskRow 异常分支 ──
+// plan 原例覆盖 INSERT/UPDATE/stale/UNIQUE；此处补：行不存在时 UPDATE（changes=0）
+// 必须归一 stale-rev（可重试）而非 write-error；db 关闭后写 → write-error（不抛）。
+test("T04 边界：行不存在 UPDATE→stale-rev；db 已关闭→write-error 不抛", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir); // 建库/schema（空 tasks）
+  const d = new Database(dbFile(dir));
+  assert.deepEqual(writeTaskRow(d, mkCasRow("intake"), 5), { ok: false, reason: "stale-rev" },
+    "空表 UPDATE changes=0 → stale-rev（可重试语义，不得误报 write-error）");
+  assert.equal(d.query("SELECT COUNT(*) AS n FROM tasks").get().n, 0, "拒写不得建行");
+  d.close();
+  const d2 = new Database(dbFile(dir));
+  d2.close(); // 关闭后 prepare/run 抛 → 须捕获归一 write-error
+  const r = writeTaskRow(d2, mkCasRow("intake"), null);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "write-error");
   s.close();
 });

@@ -155,9 +155,11 @@ var DAILY_STAGE_ORDER = [
 	"testing",
 	"done"
 ];
+// shared/version.ts
+var VERSION = "M16-r39";
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
-var TUI_BUILD = "M16-r37-table";
+var TUI_BUILD = VERSION;
 var ROWS = 20;
 var str = (v) => v === null || v === void 0 ? "" : String(v);
 var errMsg = (e) => String(e?.message ?? e);
@@ -332,7 +334,7 @@ var isImportant = (text) => /⚠️|❌|FAIL|illegal/i.test(text);
 var tui_default = Plugin.define({
 	id: "wf-workflow-tui",
 	setup(context) {
-		const compact = context?.options?.compact === true;
+		const compact = context?.options?.compact === true || process.env.WF_COMPACT === "1";
 		const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", "" + import.meta.url).pathname).replace(/\/$/, "");
 		const LOADED_AT = (/* @__PURE__ */ new Date()).toISOString();
 		let seq = 0;

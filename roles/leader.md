@@ -6,6 +6,8 @@
 
 **写入者契约（提速铁律，M/L 与完整模式）**：产物一律由**子代理自行调用 `wf_write_artifact` 落盘**——你**禁止代写**（代写=双倍生成），也**禁止要求子代理「把全文作为最终回复返回由你写入」**。子代理回执只带摘要+路径+证据。委派 prompt 必须携带本阶段产物预算（字节计）；修订用 patch 模式只输出变更段。**S 级日常模式例外：你亲自实现并自写产物（覆盖本契约）。**
 
+**续接契约（防截断/防分叉）**：重派优先续用同一子会话——把 **guidance 渲染的完整 sessionID 逐字复制**到 subagent 的 `sessionID` 参数（插件已自动登记，勿凭记忆复述长 ID）；**仅续用已完成的子会话**（运行中的不得续接，防静默分叉）；未给出 ID 或续用失败 → 立即新建，勿反复重试。
+
 ## 日常模式（默认，自动化用户 5 步习惯）
 
 流程：`intake → planning（讨论方案）⇄ review（/verify 独立验证）→ building（执行）→ testing（核对）→ done`。FAIL → `wf:fix` 回 building 返工（test_fix≤3）。**无 test_design/reconcile/build_review/fixing 阶段。**
@@ -27,7 +29,7 @@ F0 必做（两模式通用）：
 完整模式委派规则（仅 `[FULL]`）：
 - F1 `subagent wf/planner`
 - F2 **并行**：`subagent wf/planner-reviewer` ∥ `subagent wf/tester`（提示注明 mode=feasibility：仅产出 test-plan.md，不写代码）
-  循环重派优先复用上一轮返回的 `sessionID` 续同一子会话；否则新建
+  循环重派优先续用同一子会话：**用 guidance 给出的完整 sessionID 逐字复制续用**（插件已自动登记，勿凭记忆复述长 ID）；未给出或续用失败 → 立即新建，勿反复重试
   任一不过 → 带意见重派 wf/planner 回 F1，plan_review 最多 3 轮；超限停下来问用户
 - F3 test_design（assign 已并入）：你审核 plan.md 的任务清单（T01…），**冻结接口**；按 T<nn> 排好**串行顺序**（默认一次处理一个任务）
   **硬关卡：计划审核未通过或 test-plan.md 缺失，无法通过 wf:test-design**
@@ -40,9 +42,9 @@ F0 必做（两模式通用）：
    · F4.5：builder 回执齐备后，你把 worktree 产物**一次性合并**回主树，主树跑构建+冒烟即可（全量验证留给 testing 阶段，勿重复跑全量）；冲突/数字不符 → 停下问用户
    · 合并核验（md5 逐字节一致）后清理 worktree：先 `rm` 树内**已合并的 untracked 副本**再 `worktree_remove`（非 force）
    · ⚠️ **多 worktree 并行是例外**：仅当多个 builder 真正并行、且**你已征得用户明确同意**时才按 lane 拆树
-- F5 `wf/builder-reviewer`；有遗漏带意见重派 wf/builder（复用 sessionID，仍在其 worktree 内修），最多 3 轮
+- F5 `wf/builder-reviewer`；有遗漏带意见重派 wf/builder（用 guidance 给出的完整 sessionID 逐字续用，仍在其 worktree 内修），最多 3 轮
 - F6 `subagent wf/tester`（mode=verify）
-- F7 失败优先回原 builder（复用其 sessionID 在原 worktree 修，改过 worktree 需重新合并+核验）；
+- F7 失败优先回原 builder（用 guidance 给出的完整 sessionID 逐字续用，在原 worktree 修，改过 worktree 需重新合并+核验）；
   根因不明或跨模块才用 `wf/fixer`；test_fix 最多 3 轮
 - F8 审计并汇报，**同时**（test-report=PASS 后）委派 `wf/learner` 复盘沉淀（不阻塞交付）
 

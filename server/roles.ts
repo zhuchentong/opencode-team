@@ -5,6 +5,8 @@
 // 安全：opt-in（options.syncRoles）+ 写前备份 + 版本标记区分托管/用户自有 + 无标记不覆盖 + hash 同跳过。
 // 结构事实（阶段链）从 shared/phases.ts 动态生成——流转语义变更自动传播到角色内容，根治漂移。
 // 注意：不调用 guidance()（它是状态依赖的每任务运行时指引，形状不符静态角色 system）。
+// M16-r39 T12：missing 自动创建——roles/fm/<name>.md 宿主 frontmatter 逐字快照 + renderRole body；
+// 已存在文件的 fm 绝不触碰（write/unmanaged/skip 语义不变）。
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -56,13 +58,19 @@ export function renderRole(name: RoleName): string {
   return `${roleMarker(name)}\n${roleBody(name)}`;
 }
 
+// M16-r39 T12：宿主 frontmatter 逐字快照（roles/fm/<name>.md，--- 块含尾换行；无 model 字段）。
+// 仅用于 missing 自动创建；已存在文件的 fm 绝不触碰。leader 快照源=宿主 agents/workflow.md。
+export function roleFrontmatter(name: RoleName): string {
+  return fs.readFileSync(path.join(ROLES_DIR, "fm", `${name}.md`), "utf8");
+}
+
 // 解析托管标记行 → {version, hash}；非标记 → null
 export function parseMarker(line: string): { version: string; hash: string } | null {
   const m = /^<!-- wf-workflow:managed version=(\S+) hash=([0-9a-f]{12}) -->$/.exec(line.trim());
   return m ? { version: m[1], hash: m[2] } : null;
 }
 
-export type SyncAction = "skip" | "write" | "unmanaged" | "missing";
+export type SyncAction = "skip" | "write" | "unmanaged" | "missing" | "create";
 
 // 同步决策（纯函数）：给定宿主现有 body 与最新渲染全文 → 动作。
 // 关键：hash 须对「现有 body 去掉标记行后的实际内容」重算，再与渲染内容 hash 比——
@@ -87,12 +95,19 @@ function splitFrontmatter(content: string): { fm: string; body: string } {
 export interface SyncReport { name: string; action: SyncAction; detail?: string }
 
 // 文件同步（fs 副作用，可用临时目录测试）：对每个角色按 syncDecision 处理。
-// write 时保留 frontmatter、写前备份（.bak-<ts>）、body=渲染全文。missing 不自动创建（保守）。
+// write 时保留 frontmatter、写前备份（.bak-<ts>）、body=渲染全文。
+// M16-r39 T12：missing 自动创建（fm 快照+渲染 body，action=create）——旧「保守不创建」翻转；
+// 已存在文件语义不变（write/unmanaged/skip，fm 绝不触碰）。
 export function syncRoles(rolesDir: string, opts: { backup?: boolean } = {}): SyncReport[] {
   const report: SyncReport[] = [];
   for (const name of ROLE_NAMES) {
     const file = roleHostFile(rolesDir, name);
-    if (!fs.existsSync(file)) { report.push({ name, action: "missing" }); continue; }
+    if (!fs.existsSync(file)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, roleFrontmatter(name) + renderRole(name));
+      report.push({ name, action: "create" });
+      continue;
+    }
     const content = fs.readFileSync(file, "utf8");
     const { fm, body } = splitFrontmatter(content);
     const rendered = renderRole(name);

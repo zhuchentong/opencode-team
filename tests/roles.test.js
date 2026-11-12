@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  ROLE_NAMES, renderRole, roleMarker, parseMarker, syncDecision, syncRoles, roleSyncStatus,
+  ROLE_NAMES, renderRole, roleMarker, parseMarker, syncDecision, syncRoles, roleSyncStatus, roleFrontmatter,
 } from "../server/roles.ts";
 import { PHASE_ORDER } from "../shared/phases.ts";
 import { VERSION } from "../server/lib.ts";
@@ -78,7 +78,7 @@ test("syncRoles：临时目录文件同步——保 frontmatter、写前备份�
     fs.writeFileSync(path.join(dir, "planner.md"), fm + staleBody);
     // tester：无标记（用户自有）→ 不覆盖
     fs.writeFileSync(path.join(dir, "tester.md"), fm + "用户自定义 tester 内容");
-    // builder：文件缺失 → missing（不自动创建）
+    // builder：文件缺失 → create（M16-r39 T12：missing 自动创建，fm 快照+渲染 body）
     // leader（M16-r38）：目标=上级 workflow.md，陈旧托管 → write（锚定新路径）
     const staleLeader = renderRole("leader").replace("你是 leader", "你是旧版 leader");
     fs.writeFileSync(path.join(base, "workflow.md"), fm + staleLeader);
@@ -109,7 +109,7 @@ test("syncRoles：临时目录文件同步——保 frontmatter、写前备份�
     const byName = Object.fromEntries(report.map((r) => [r.name, r.action]));
     assert.equal(byName.planner, "write");
     assert.equal(byName.tester, "unmanaged");
-    assert.equal(byName.builder, "missing");
+    assert.equal(byName.builder, "create", "M16-r39 T12：missing 自动创建");
     assert.equal(byName.leader, "write");
 
     // 幂等：再跑一次 planner/leader 应 skip（hash 已一致）
@@ -117,6 +117,59 @@ test("syncRoles：临时目录文件同步——保 frontmatter、写前备份�
     const byName2 = Object.fromEntries(report2.map((r) => [r.name, r.action]));
     assert.equal(byName2.planner, "skip", "hash 一致应跳过，避免无谓热载");
     assert.equal(byName2.leader, "skip", "leader hash 一致应跳过");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ── T12（M16-r39）：missing 角色自动创建（roles/fm/ 宿主 frontmatter 快照 + renderRole body）──
+test("T12 missing→create：文件=fm+renderRole、body 首行标记、fm 逐字一致且无 model；幂等二次 skip", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-roles-create-"));
+  const dir = path.join(base, "wf"); // 有意不预建 dir——验证 missing 分支 mkdirSync recursive
+  try {
+    const report = syncRoles(dir, { backup: true });
+    const byName = Object.fromEntries(report.map((r) => [r.name, r.action]));
+    for (const name of ROLE_NAMES) assert.equal(byName[name], "create", `${name} missing→create`);
+    // leader 落 base/workflow.md（primary），不写 dir/leader.md
+    assert.ok(fs.existsSync(path.join(base, "workflow.md")), "leader 落上级 workflow.md");
+    assert.ok(!fs.existsSync(path.join(dir, "leader.md")), "不写 rolesDir/leader.md");
+    for (const name of ROLE_NAMES) {
+      const file = name === "leader" ? path.join(base, "workflow.md") : path.join(dir, `${name}.md`);
+      const content = fs.readFileSync(file, "utf8");
+      const fm = roleFrontmatter(name);
+      assert.ok(fm.startsWith("---\n") && fm.includes("\n---"), `${name} fm 为 --- 块`);
+      assert.ok(!/^\s*model:/m.test(fm), `${name} fm 无 model（宿主快照同源）`);
+      assert.equal(content, fm + renderRole(name), `${name} 文件=fm+renderRole 逐字`);
+      assert.ok(content.slice(fm.length).startsWith(roleMarker(name)), `${name} body 首行=托管标记`);
+    }
+    // 幂等：二次 syncRoles 全 skip（hash 已一致，避免无谓热载）
+    const report2 = syncRoles(dir, { backup: true });
+    for (const r of report2) assert.equal(r.action, "skip", `${r.name} 幂等 skip`);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("T12 create 不触碰已存在文件：unmanaged 不覆盖、write 保留既有 fm（不用快照替换）", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-roles-keep-"));
+  const dir = path.join(base, "wf");
+  fs.mkdirSync(dir);
+  try {
+    const userFm = "---\ndescription: 用户自有\nmode: subagent\nmodel: custom/model-x\n---\n";
+    fs.writeFileSync(path.join(dir, "tester.md"), userFm + "用户内容"); // unmanaged
+    const staleFm = "---\ndescription: managed-stale\nmode: subagent\n---\n";
+    fs.writeFileSync(path.join(dir, "planner.md"), staleFm + renderRole("planner").replace("你是计划者", "旧版"));
+    const report = syncRoles(dir, { backup: true });
+    const byName = Object.fromEntries(report.map((r) => [r.name, r.action]));
+    assert.equal(byName.tester, "unmanaged");
+    assert.equal(byName.planner, "write");
+    assert.equal(byName.builder, "create");
+    // unmanaged 逐字不覆盖（含用户自有 model 字段）
+    assert.equal(fs.readFileSync(path.join(dir, "tester.md"), "utf8"), userFm + "用户内容");
+    // write 保留既有 fm（绝不替换为 roles/fm 快照）
+    const planner = fs.readFileSync(path.join(dir, "planner.md"), "utf8");
+    assert.ok(planner.startsWith(staleFm), "write 保留既有 fm");
+    assert.ok(!planner.includes("description: 计划者"), "不得用 roles/fm 快照替换既有 fm");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

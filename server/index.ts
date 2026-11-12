@@ -27,7 +27,12 @@ export default {
     const { debugDirFor, probeOnce, logToolsOnce } = createObserver(ctx, opt);
 
     const allowMarkers = [...DEFAULT_ALLOW_MARKERS, ...(Array.isArray(opt.allowMarkers) ? opt.allowMarkers : [])];
-    const allowRes = [...DEFAULT_ALLOW_RES, ...(Array.isArray(opt.allowRegexps) ? opt.allowRegexps.map((s: string) => new RegExp(s)) : [])];
+    // M16-r39 T10：allowRegexps 逐条 try/catch——非法正则跳过（旧实现一条非法即 setup 崩溃），合法并入 allowRes
+    const extraRes: RegExp[] = [];
+    for (const s of (Array.isArray(opt.allowRegexps) ? opt.allowRegexps : [])) {
+      try { extraRes.push(new RegExp(String(s))); } catch { /* 非法正则跳过，不阻塞插件加载 */ }
+    }
+    const allowRes = [...DEFAULT_ALLOW_RES, ...extraRes];
     const isAllowed = makeAllowChecker(allowMarkers, allowRes);
     // P2：options.limits 实例覆盖循环上限（仅接受正整数，非法值忽略）
     const LIMS: Record<string, number> = { ...LIMITS };
@@ -60,7 +65,9 @@ export default {
     const roleReg = registerRoleSync(ctx, opt);
 
     // ── /wf:* 命令与 transition/inject 编排、P2 双轨输出（见 commands.ts）──
-    const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
+    const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated,
+      emitReport: async (sid: string, text: string, at: string) => { await emitReport(sid, text, at); }, // T06：bridge 返回通道形状，deps 契约 Promise<void>（组装层适配）
+      WfDef, rpcErr,
       putReport, removeState, dumpStates, runner });
 
     return () => {

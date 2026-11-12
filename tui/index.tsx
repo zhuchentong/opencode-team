@@ -22,8 +22,9 @@ import * as ot from "@opentui/solid";
 const { createElement, insert, setProp } = ot as any; // 低层原语（宿主注入运行时实例，P0 同款）
 import { Wf } from "../shared/rpc.ts";
 import { STAGE_ORDER, FOLD, CANON, DAILY_STAGE_ORDER } from "../shared/phases.ts";
+import { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本归一（server/TUI 同源）
 
-const TUI_BUILD = "M16-r37-table";
+const TUI_BUILD = VERSION;
 const ROWS = 20;
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -187,7 +188,7 @@ const isImportant = (text: string) => /⚠️|❌|FAIL|illegal/i.test(text);
 export default Plugin.define({
   id: "wf-workflow-tui",
   setup(context: any) {
-    const compact = context?.options?.compact === true;
+    const compact = context?.options?.compact === true || process.env.WF_COMPACT === "1"; // M16-r39 T11：env 开关（options 不传达 TUI 的主路径）
     // REPO 兜底：location 缺失时由模块 URL 反推仓库根（P3a 疑点：探针可能写错位置）
     const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", import.meta.url).pathname).replace(/\/$/, "");
     const LOADED_AT = new Date().toISOString();
