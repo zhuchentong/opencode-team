@@ -104,9 +104,10 @@ test("M16-r33 patch：未命中/歧义/目标不存在/双缺/双给 → 报错�
   assert.match(noFile.content, /❌/);
   assert.match(noFile.content, /不存在/);
   assert.ok(!fs.existsSync(fileOf("patch-err", "plan.md")));
-  // 双缺
+  // 双缺=M16-r47 起为 register 模式：目标不存在 → ❌ 含期望路径（原「须提供 content 或 patch」报错分支已让位）
   const neither = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(neither.content, /❌/);
+  assert.match(neither.content, /register 目标不存在/);
   // 双给
   const both = await tool(m).execute({ kind: "plan", content: "x", patch: [{ old: "a", new: "b" }] }, { sessionID: sid, agent: "wf/planner" });
   assert.match(both.content, /❌/);
@@ -216,5 +217,52 @@ test("M16-r33 tier：S 级预算收紧——6KB plan 在 S 级告警、M 级不�
   assert.ok(!/超瘦身预算/.test(wM.content), "M 级 6KB 在预算内不告警");
   // S 级 guidance 渲染 S 预算 + 从简指引
   assert.match(rS, /\[S\]\/\[M\]\/\[L\]|体量/, "intake guidance 应含体量分级指引");
+  dispose?.();
+});
+
+// ── M16-r47（A+B）：patch 模糊回退——转录微差从「失败→全量重写」降为「直接命中」──────
+test("M16-r47 fuzzy：exact 命中仍 mode=patch；引号/破折号变体回退命中并打 mode=patch-fuzzy", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_f1";
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "fuzzy-demo" } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
+  // 盘上：弯引号 + 破折号（模型转录常写成直引号/连字符）
+  await tool(m).execute({ kind: "plan", content: "他说\u201C保留\u201D——风险与\u2018未知\u2019项\n其余内容\n" }, { sessionID: sid, agent: "wf/planner" });
+  const exact = await tool(m).execute({ kind: "plan", patch: [{ old: "其余内容", new: "其他内容" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(exact.content, /已写入/);
+  const stX = stOf(sid);
+  assert.equal(String(stX.log.filter((e) => e.cmd === "tool:wf_write_artifact").at(-1).note), "plan.md mode=patch", "exact 命中不打 fuzzy");
+  // 转录微差：old 用直引号/连字符（严格未命中 → 1:1 归一回退命中）
+  const typo = await tool(m).execute({ kind: "plan", patch: [{ old: '他说"保留"--风险', new: "他说「调整」-风险" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(typo.content, /已写入/, "typo 归一后应命中");
+  assert.match(read("fuzzy-demo", "plan.md"), /他说「调整」-风险/, "命中区间应正确替换（含原文弯引号段）");
+  const stF = stOf(sid);
+  assert.match(String(stF.log.filter((e) => e.cmd === "tool:wf_write_artifact").at(-1).note), /mode=patch-fuzzy/, "fuzzy 命中审计打标");
+  dispose?.();
+});
+
+test("M16-r47 fuzzy：行尾空白回退命中；归一后歧义报错不落盘；三阶段全 miss 仍报错", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_f2";
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "fuzzy-ws" } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
+  // 盘上行尾有不可见空白，模型转录省略
+  await tool(m).execute({ kind: "plan", content: "第一行   \n第二行\t\n尾部\n" }, { sessionID: sid, agent: "wf/planner" });
+  const ws = await tool(m).execute({ kind: "plan", patch: [{ old: "第一行\n第二行", new: "首行改\n次行改" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(ws.content, /已写入/, "行尾空白剥离后应命中");
+  const after = read("fuzzy-ws", "plan.md");
+  assert.match(after, /首行改\n次行改/);
+  assert.match(after, /尾部/, "替换不应吞掉后续内容");
+  // 归一后歧义：盘上 em/en dash 各一，归一后同串
+  await tool(m).execute({ kind: "plan", content: "a\u2014b 与 a\u2013b\n" }, { sessionID: sid, agent: "wf/planner" });
+  const amb = await tool(m).execute({ kind: "plan", patch: [{ old: "a-b", new: "x" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(amb.content, /❌/);
+  assert.match(amb.content, /歧义/);
+  assert.equal(read("fuzzy-ws", "plan.md"), "a\u2014b 与 a\u2013b\n", "歧义不落盘");
+  // 三阶段全 miss
+  const miss = await tool(m).execute({ kind: "plan", patch: [{ old: "完全无关的段落内容", new: "x" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(miss.content, /未命中/);
   dispose?.();
 });

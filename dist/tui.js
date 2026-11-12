@@ -180,7 +180,7 @@ var DAILY_STAGE_ORDER = [
 	"done"
 ];
 // shared/version.ts
-var VERSION = "M16-r45";
+var VERSION = "M16-r47";
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
 var TUI_BUILD = VERSION;

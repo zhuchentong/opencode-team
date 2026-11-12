@@ -8,7 +8,7 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, isDaily, trackRoleSession, type WfState } from "./lib.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, isDaily, trackRoleSession, type WfState } from "./lib.ts";
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -32,15 +32,17 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
         "把 wf 工作流产物写入 <项目>/.workflow/<slug>/。kind 决定文件名：" +
         Object.keys(KIND_FILES).join(" | ") +
         "。循环类产物（plan-review/build-review）自动按当前轮次编号。" +
-        "首写用 content（完整内容）；修订已有产物用 patch=[{old,new}]（精确唯一匹配、顺序应用，只输出变更段，勿全量重写）——content 与 patch 二选一。",
+        "三种模式（互斥）：① content=完整内容首写；② patch=[{old,new}] 增量修订（old 逐字摘录、唯一匹配、按序应用；严格未命中自动回退引号/破折号/nbsp 变体与行尾空白容忍的模糊匹配）；" +
+        "③ 不带 content 与 patch = 注册（register）：产物已由原生 write/edit 落盘时，只读盘记账+告警+指路——入参极小、几乎不会流中断失败，重试不重新生成内容。" +
+        "大产物（>2KB）推荐分段：首段原生 write、后续 edit 追加（每段≤2KB），失败先 read 尾部断点续写，全部落盘后才 register（结论行在首段，提前 register 会以截断内容过关卡）。",
       input: {
         type: "object",
         properties: {
           kind: { type: "string", enum: Object.keys(KIND_FILES), description: "产物类型" },
-          content: { type: "string", description: "完整文件内容（首写用；与 patch 二选一）" },
+          content: { type: "string", description: "完整文件内容（首写用；与 patch 二选一；两者皆缺=注册已落盘产物）" },
           patch: {
             type: "array",
-            description: "增量修订（修订已有产物用；与 content 二选一）：old 逐字摘录原文、唯一匹配，按序应用",
+            description: "增量修订（修订已有产物用；与 content 二选一）：old 逐字摘录原文、唯一匹配，按序应用；严格未命中自动模糊回退（引号/破折号变体、行尾空白）",
             items: {
               type: "object",
               properties: {
@@ -66,42 +68,58 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
           const kind = String(args?.kind ?? "");
           const mk = KIND_FILES[kind];
           if (!mk) return { content: `❌ 未知 kind=${kind}（可用：${Object.keys(KIND_FILES).join(" | ")}）` };
-          // M16-r33 P1a：content（首写）与 patch（增量修订）二选一
+          // M16-r33 P1a：content（首写）与 patch（增量修订）互斥；M16-r47：两者皆缺=注册已落盘产物
           const hasContent = typeof args?.content === "string";
           const patch = Array.isArray(args?.patch) ? args.patch : null;
-          if (hasContent && patch) return { content: "❌ content 与 patch 互斥：首写用 content，修订已有产物用 patch。" };
-          if (!hasContent && !patch) return { content: "❌ 须提供 content（首写完整内容）或 patch（增量修订 [{old,new}]）之一。" };
+          if (hasContent && patch) return { content: "❌ content 与 patch 互斥：首写用 content，修订已有产物用 patch，两者皆缺=注册已落盘产物。" };
           const initial = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
           if (!initial?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
           // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
           const dir = await resolveProjectDir(initial, context?.sessionID);
           const file = mk(initial); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
           const target = `${dir}/.workflow/${initial.slug}/${file}`;
-          fs.mkdirSync(`${dir}/.workflow/${initial.slug}`, { recursive: true });
-          // M16-r33 P1a：patch 模式——读磁盘原文，顺序应用（每条 old 对当前内容唯一精确匹配）；
-          // 未命中/歧义/目标不存在 → 报错不落盘。修订只输出变更段，省全量重写的生成耗时。
+          // M16-r33 P1a：patch 模式——读磁盘原文，顺序应用（M16-r47：严格未命中自动模糊回退——
+          // 引号/破折号/nbsp 1:1 变体 + 行尾空白容忍，见 lib.fuzzyFind）；未命中/歧义/目标不存在 →
+          // 报错不落盘。修订只输出变更段，省全量重写的生成耗时。
+          // M16-r47 register 模式：content/patch 皆缺 → 产物已由原生 write/edit 落盘，只读盘记账。
           let finalContent: string;
-          let mode: "write" | "patch";
+          let mode: "write" | "patch" | "patch-fuzzy" | "register";
           if (patch) {
-            if (!fs.existsSync(target)) return { content: `❌ patch 目标不存在：${target}（首写必须用 content）。` };
+            if (!fs.existsSync(target)) return { content: `❌ patch 目标不存在：${target}（首写用 content；产物已原生落盘则不带 content 注册）。` };
             let cur = fs.readFileSync(target, "utf8");
+            let fuzzy = false;
             for (let i = 0; i < patch.length; i++) {
               const old = String(patch[i]?.old ?? "");
               const nw = String(patch[i]?.new ?? "");
               if (old === nw) continue; // 幂等跳过
               if (!old) return { content: `❌ patch[${i}].old 为空（须逐字摘录原文片段）。` };
-              const first = cur.indexOf(old);
-              if (first < 0) return { content: `❌ patch[${i}] 未命中：old 须逐字摘录产物原文（修订前先 read 产物），本次未落盘。` };
-              if (cur.indexOf(old, first + 1) >= 0) return { content: `❌ patch[${i}] 歧义：old 在产物中出现多次，请补充上下文使其唯一，本次未落盘。` };
-              cur = cur.slice(0, first) + nw + cur.slice(first + old.length);
+              const fm = fuzzyFind(cur, old);
+              if (fm.status === "notfound") return { content: `❌ patch[${i}] 未命中：old 须逐字摘录产物原文（修订前先 read 产物；自动回退仅容忍引号/破折号/nbsp 变体与行尾空白），本次未落盘。` };
+              if (fm.status === "ambiguous") return { content: `❌ patch[${i}] 歧义：old 在产物中出现多次（含归一后），请补充上下文使其唯一，本次未落盘。` };
+              if (fm.via !== "exact") fuzzy = true;
+              cur = cur.slice(0, fm.start) + nw + cur.slice(fm.end);
             }
             finalContent = cur;
-            mode = "patch";
-          } else {
+            mode = fuzzy ? "patch-fuzzy" : "patch";
+          } else if (hasContent) {
             finalContent = args.content;
             mode = "write";
+          } else {
+            if (!fs.existsSync(target)) return { content: `❌ register 目标不存在：${target}（${kind} 的期望文件名）。先把内容写到该路径（大产物分段 ≤2KB/段）再注册；或首写直接带 content。` };
+            finalContent = fs.readFileSync(target, "utf8");
+            if (!finalContent.length) return { content: `❌ 产物为空（0 字节）：${target}——疑似截断残留，拒绝注册（补写内容后重试）。` };
+            const diskBytes = fs.statSync(target).size;
+            // M16-r47 plan 幂等守卫：盘上 bytes 与记账一致 → no-op 早退，不清 review 记账——
+            // register 调用廉价，误调/重放不得放大「修订即清」锐边（bytes 弱比较，碰撞局限见 HOST-CONTRACT）
+            if (kind === "plan" && initial.artifacts?.[file]?.bytes === diskBytes) {
+              return { content: `✅ [${VERSION}] ${target} 已注册且内容未变化（${diskBytes} bytes）：记账不重放（review 结论/test-plan/方案确认记账保留）。` };
+            }
+            mode = "register";
           }
-          fs.writeFileSync(target, finalContent.endsWith("\n") ? finalContent : `${finalContent}\n`);
+          if (mode !== "register") {
+            fs.mkdirSync(`${dir}/.workflow/${initial.slug}`, { recursive: true });
+            fs.writeFileSync(target, finalContent.endsWith("\n") ? finalContent : `${finalContent}\n`);
+          }
           const bytes = fs.statSync(target).size;
           // M16-r33：verdict 从**结果全文**解析（patch 模式入参无 content，必须读结果，否则 done 关卡误拦）
           // M16-r34：plan-review 也解析 verdict（日常模式 M/L 独立验证结论，wf:build 关卡校验）
@@ -120,7 +138,7 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
             // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡；
             // M16-r44：方案确认记账同点作废（plan 内容变更=旧确认失效的最强锚点）
             if (kind === "plan") { delete row.planReviewVerdict; delete row.testPlanWritten; delete row.planConfirmedAt; }
-            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "patch" ? `${file} mode=patch` : file });
+            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}` });
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
           // load(1)=初始 st、load(n)=resolveState 最新快照（无 slug→null=gone，行被并发清除）
@@ -133,15 +151,16 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
             apply: (row) => { mark(row); return null; },
             save,
           });
+          const verb = mode === "register" ? "已注册" : "已写入";
           if (!res.ok) {
             if (res.reason === "gone") {
-              return { content: `✅ 已写入 ${target}（${bytes} bytes）；⚠️ 状态行已被并发清除（reset？），记账跳过——产物已落盘，重开任务后可用 /wf:diagnose 对账` };
+              return { content: `✅ ${verb} ${target}（${bytes} bytes）；⚠️ 状态行已被并发清除（reset？），记账跳过——产物已落盘，重开任务后可用 /wf:diagnose 对账` };
             }
-            return { content: `✅ 已写入 ${target}（${bytes} bytes）；❌ 状态记账保存失败（${res.reason}），产物对账不一致（/wf:diagnose 可核对），请重试写入。` };
+            return { content: `✅ ${verb} ${target}（${bytes} bytes）；❌ 状态记账保存失败（${res.reason}），产物对账不一致（/wf:diagnose 可核对），请重试${mode === "register" ? "注册" : "写入"}（无需重写内容）。` };
           }
           const st = res.st;
           await emitUpdated(st);
-          let note = `✅ [${VERSION}] 已写入 ${target}（${bytes} bytes）`;
+          let note = `✅ [${VERSION}] ${verb} ${target}（${bytes} bytes）`;
           // M16-r29：阶段纪律——产物错位告警（不阻断，落盘/记账照常）
           const phaseWarn = artifactPhaseWarning(kind, st.phase);
           if (phaseWarn) note += `\n${phaseWarn}`;

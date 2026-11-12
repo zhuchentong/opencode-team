@@ -239,7 +239,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           await logBlock(st, String(input?.tool), p); // P1：阻断记账
           throw new Error(
             `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
-            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。${nextHint(st, st.phase)}`
+            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/（产物已原生落盘则不带 content=注册补记账）。${nextHint(st, st.phase)}`
           );
         }
       }

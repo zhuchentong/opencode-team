@@ -3,7 +3,7 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LIMITS, isDaily, budgetFor, SID_ALIAS_USAGE, type Limits, type WfState } from "./lib.ts";
+import { LIMITS, isDaily, budgetFor, KIND_FILES, SID_ALIAS_USAGE, type Limits, type WfState } from "./lib.ts";
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -30,7 +30,15 @@ export function guidance(phase: string | null | undefined, st: WfState, limits: 
 
 // M16-r33 P1b：写入者契约——子代理自写产物（leader 代写=双倍生成：回复一遍+tool 入参一遍），
 // 修订用 patch 只输出变更段。真机取证：todolist leader 代写 3 产物；implant 子代理自写只付一次。
-const WRITE_CONTRACT = "写入契约：产物由子代理自行调用 wf_write_artifact 落盘，leader 禁止代写（双倍生成成本）；回执只带摘要+路径+证据，勿回传全文。修订先读产物原文，用 patch 只输出变更段（old 逐字摘录）。plan 修订会清 review 结论与 test-plan 记账，修订后须重新 wf:review（full 模式另须 wf:test-design）。";
+// M16-r47（A+B）：真机取证 tui-sidebar-elapsed——慢模型×大 payload 单次 tool call 流式窗口过长，
+// ECONNRESET 截断后 harness retry 全量重生成（恶性循环）。契约升级为「小产物单次 content；
+// 大产物分段原生写 + 微小 register 记账」：每段流窗口短、断了只丢一段、续写不重生成。
+const WRITE_CONTRACT = "写入契约：产物由子代理自行落盘（leader 禁止代写——双倍生成成本）；回执只带摘要+路径+证据，勿回传全文。小产物（≤2KB）直接 wf_write_artifact(kind=…, content) 单次写。大产物（>2KB）分段：首段原生 write 到委派指定的产物路径，后续段用 edit 追加（old=文末唯一锚点，每段≤2KB——缩短单次流式窗口防中断截断）；调用失败先 read 产物尾部从断点续写，禁全量重写；**全部段落落盘后**才 wf_write_artifact(kind=…)（不带 content=注册记账）——结论行在首段，提前注册会以截断内容过关卡。修订先读产物原文，优先原生 edit 或 wf_write_artifact patch 只输出变更段（old 逐字摘录，严格未命中自动模糊回退）。plan 修订会清 review 结论与 test-plan 记账，修订后须重新 wf:review（full 模式另须 wf:test-design）。";
+// M16-r47：委派 prompt 渲染产物 canonical 目标路径——子代理写前即知确切文件名（含轮次编号产物），
+// 消灭「写错路径→注册报错→重写」浪费（与 KIND_FILES 同源计算，register 以 state 解析为准）。
+function artifactPathLine(st: WfState, kind: string): string {
+  return `产物目标路径：.workflow/${st.slug || "<slug>"}/${KIND_FILES[kind](st)}`;
+}
 // M16-r33 P2：双通道预算注入——phase guidance 渲染当前级预算（leader 自看），委派 prompt 也须携带（子代理看）
 function budgetLine(st: WfState, kinds: string[]): string {
   const tier = st.size === "S" ? "S" : "M";
@@ -58,7 +66,7 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 // ── M16-r34：日常模式指引——忠实用户 5 步习惯，tier 只改委派与否 ──────────────────
 // S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
 // M/L=planner 拆 T<nn> 功能点 + reviewer 独立五维验证 + builder 逐点 TDD + tester 独立核对。
-const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
+const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
 function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...limits };
   const s = st.slug || "(未定)";
@@ -77,7 +85,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `【wf 工作流｜planning·日常模式】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
-        : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。`,
+        : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。${artifactPathLine(st, "plan")}`,
       ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
@@ -89,7 +97,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         `【wf 工作流｜review·日常模式】slug=${s}`,
         `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
         S ? `S 级：leader 按五维（可行性/完整性/正确性/风险/交叉验证）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
-          : `委派 wf/planner-reviewer 独立五维验证 plan.md（可行性/完整性/正确性/风险/交叉验证）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。`,
+          : `委派 wf/planner-reviewer 独立五维验证 plan.md（可行性/完整性/正确性/风险/交叉验证）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "plan-review")}`,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`,
           `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`]),
         budgetLine(st, S ? ["plan"] : ["plan-review"]),
@@ -119,7 +127,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
     case "testing": return [
       `【wf 工作流｜testing·日常模式】slug=${s}`,
       S ? `S 级：leader 跑全量测试自核对，wf_write_artifact(kind=test-report) 自写，首行 **结论**: PASS|FAIL，PASS 附真实证据（命令+输出）。`
-        : `委派 wf/tester(mode=verify) 独立核对 → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。`,
+        : `委派 wf/tester(mode=verify) 独立核对 → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
       ...(S ? [] : [WRITE_CONTRACT]),
       budgetLine(st, ["test-report"]),
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")（回 building 返工，test_fix≤${L.test_fix}）`,
@@ -128,7 +136,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `【wf 工作流｜done·日常模式】slug=${s}`,
       S ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`
         : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。`]),
+      ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
       budgetLine(st, ["lessons"]),
     ].join("\n");
     default: return `【wf 工作流·日常模式】阶段 ${phase}`;
@@ -150,7 +158,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "planning": return [
       `【wf 工作流｜planning】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
-      `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。`,
+      `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。${artifactPathLine(st, "plan")}`,
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       WRITE_CONTRACT,
@@ -164,8 +172,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
         `【wf 工作流｜review】slug=${s}`,
         `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
         `并发委派（同一轮内各 subagent 用 background=true 同时发出，两路完成通知到齐后再裁决，勿逐个前台等待）：`,
-        `  a) wf/planner-reviewer（五角度，审 plan.md → wf_write_artifact(kind=plan-review)）；`,
-        `  b) wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，不写任何代码文件)。`,
+        `  a) wf/planner-reviewer（五角度，审 plan.md → wf_write_artifact(kind=plan-review)，${artifactPathLine(st, "plan-review")}）；`,
+        `  b) wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，${artifactPathLine(st, "test-plan")}，不写任何代码文件)。`,
         `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`,
         `委派契约：prompt 只带 plan.md 路径与任务行摘录，声明子代理禁止全仓扫描（只读产物点名文件）。`,
         WRITE_CONTRACT,
@@ -204,7 +212,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     ].join("\n");
     case "build_review": return [
       `【wf 工作流｜build_review】slug=${s}`,
-      `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）。`,
+      `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）→ wf_write_artifact(kind=build-review)。${artifactPathLine(st, "build-review")}`,
       `分级审查：初检聚焦完成度+关键风险，直接出完整报告；命中升级触发（改动跨 ≥3 模块/触及安全敏感路径/critical-major 无法就地确认/用户要求）才 Full 全量，报告注明触发；r≥2 把上轮 findings 当未验证线索逐条确认，勿重新推导。`,
       WRITE_CONTRACT,
       budgetLine(st, ["build-review"]),
@@ -214,7 +222,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     ].join("\n");
     case "testing": return [
       `【wf 工作流｜testing】slug=${s}`,
-      `委派 wf/tester(mode=verify) → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。`,
+      `委派 wf/tester(mode=verify) → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
       WRITE_CONTRACT,
       budgetLine(st, ["test-report"]),
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")`,
@@ -231,7 +239,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
       WRITE_CONTRACT,
       budgetLine(st, ["lessons"]),
-      `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。`,
+      `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
     ].join("\n");
     default: return `【wf 工作流】阶段 ${phase}`;
   }

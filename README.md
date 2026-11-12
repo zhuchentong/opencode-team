@@ -12,7 +12,7 @@
 - **循环上限**：plan_review / build_review / test_fix 各 3 轮，「进入即计数」，超限拒绝并要求上报用户
 - **越权阻断**：planning/review 阶段服务端 `execute.before` hook 拒绝 `edit/write/patch` 与 shell 重定向/写删命令改**项目内**业务文件（`.workflow/`、`.learnings/`、测试文件除外；M16-r28：项目外路径不构成越权，放行），阻断记账进审计轨迹
 - **抗 compaction 注入**：阶段 guidance 写入 session instructions entry（每次组装系统提示从存储重新渲染），消息历史压缩不丢阶段约束
-- **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；test-report 输出按 verdict 指路下一步；slug 支持 Unicode（中文任务名原样保留）
+- **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；三模式（互斥）：content 首写 / patch 增量修订（严格未命中自动模糊回退）/ 两者皆缺=注册已原生落盘的产物（大产物分段写+微小注册，抗慢模型流中断）；test-report 输出按 verdict 指路下一步；slug 支持 Unicode（中文任务名原样保留）
 - **命令输出双轨**（宿主 2.2.6 契约 `execute(): Promise<void>` 返回值不显示）：**主轨**（TUI）return 键拦截 → RPC `exec` → 即时 toast，⚠️/❌/FAIL 附 `attention.notify` 系统级通知（终端后台可感知）；**降级轨**（Web/Desktop/无 TUI）`session.wait` + `prompt(resume:false)` 注入会话（不唤醒模型；context/compaction/generate hook 剥离报告消息，不污染模型上下文）
 - **可观测**：RPC + TUI 侧边栏（阶段/轮次/关卡实时刷新，事件推送 + 重连重拉 + 5s 轮询对账三通道）、`/wf:status` 审计轨迹、`/wf:diagnose` 诊断取证、`/wf:debug` 状态落盘
 - **自动激活**（superpowers 式）：用户消息命中工作流意图且会话无状态 → 注入一次性 `/wf:intake` 提示，不自动开任务
@@ -69,7 +69,7 @@ server/state.ts         状态层：bun:sqlite 单库 .workflow/wf.db（WAL；ta
 server/rpc-bridge.ts    RPC 桥：Wf.state/list/exec（state 附 lastReport）+ updated/report 事件
 server/commands.ts      /wf:* 命令：10 流转表驱动 + 6 辅助；publishOutput（reports 表+事件）+
                         injectReport（降级轨 wait→prompt resume:false）+ hook 剥离报告消息
-server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账+verdict 指路公告
+server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账+verdict 指路公告；三模式 content/patch/register（M16-r47，fuzzy 匹配纯函数在 lib.ts）
 server/guard-hook.ts    execute.before 越权阻断（含 shell 门控）+ subagent 续接自愈（r41）
                         + question 方案确认观察记账（r44）；拒绝消息附下一步命令指引
 server/hint.ts          自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示

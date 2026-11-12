@@ -125,13 +125,13 @@ const CONFIRM_GATE_MSG =
 export const GATES: Record<string, (st: WfState) => string | null> = {
   "wf:test-design": (st) =>
     st.testPlanWritten ? null :
-      "❌ 双通道关卡未过：tester(feasibility) 尚未产出 test-plan.md。请回到 review 阶段委派 wf/tester(mode=feasibility)，用 wf_write_artifact(kind=test-plan) 写入后，再推进 /wf:test-design（leader 调用 wf_command(name=\"wf:test-design\")，用户手敲亦可）。",
+      "❌ 双通道关卡未过：tester(feasibility) 尚未产出 test-plan.md。请回到 review 阶段委派 wf/tester(mode=feasibility)，用 wf_write_artifact(kind=test-plan) 写入后，再推进 /wf:test-design（leader 调用 wf_command(name=\"wf:test-design\")，用户手敲亦可）。若 test-plan.md 已由子代理原生 write/edit 落盘未记账，直接 wf_write_artifact(kind=test-plan)（不带 content=注册）补记账即可。",
   // M16-r44：方案确认关卡（full 模式；daily 用 GATES_DAILY["wf:build"] 同源校验）
   "wf:build": (st) => (st.planConfirmedAt ? null : CONFIRM_GATE_MSG),
   "wf:done": (st) =>
     st.testReportVerdict === "PASS" ? null :
       `❌ 验收关卡未过：test-report.md 结论为「${st.testReportVerdict ?? "未产出"}」（要求 PASS）。` +
-      `FAIL → 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲）；由 wf/tester 用 wf_write_artifact(kind=test-report) 更新报告（首行 **结论**: PASS）。`,
+      `FAIL → 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲）；由 wf/tester 用 wf_write_artifact(kind=test-report) 更新报告（首行 **结论**: PASS）；报告若已原生落盘未记账，wf_write_artifact(kind=test-report)（不带 content=注册）补记账。`,
 };
 
 // ── M16-r34：日常模式（daily）——自动化用户 5 步习惯 plan→verify→修订→执行→核对 ──────────
@@ -159,7 +159,7 @@ export const GATES_DAILY: Record<string, (st: WfState) => string | null> = {
       st.size === "S" ? null :
         st.planReviewVerdict === "PASS" ? null :
           `❌ 验证关卡未过：plan-review 结论为「${st.planReviewVerdict ?? "未产出"}」（要求 PASS）。` +
-          `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；FAIL → wf:plan 带意见修订后再验。`,
+          `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；报告若已原生落盘未记账，wf_write_artifact(kind=plan-review)（不带 content=注册）补记账；FAIL → wf:plan 带意见修订后再验。`,
   "wf:done": GATES["wf:done"],
 };
 // mode 选择：存量无 mode → full（兼容）；daily 用子表。所有流转/关卡/指引/下一步提示同源此判定。
@@ -250,6 +250,70 @@ export function parseVerdict(content: unknown): "PASS" | "FAIL" | "UNKNOWN" {
 }
 export function hasStrictVerdictLine(content: unknown): boolean {
   return /^\*\*结论\*\*[:：]/m.test(String(content ?? ""));
+}
+
+// ── M16-r47（A+B 方案）：patch 模糊匹配——三级回退，对齐宿主 edit 语义 ──────────
+// 真机取证（tui-sidebar-elapsed r45）：planner-reviewer 大 payload 流中断（ECONNRESET）后
+// 全量重生成再失败；严格 indexOf 的「未命中→重写全文」放大同类浪费。fuzzy 把转录微差
+// （弯引号/破折号/nbsp、行尾空白）从「失败重试」降为「直接命中」。
+// 阶段①：exact indexOf；阶段②：1:1 字符归一（弯引号/破折号/nbsp→ASCII，全为单
+// UTF-16 unit 保长度→索引直接回映原文）；阶段③：逐行尾空白剥离后匹配，idxMap 回映。
+// 每阶段歧义（多次命中）即报——宁可报错也不误替换。纯函数，bun test 直测。
+const FUZZY_MAP: Record<string, string> = {
+  "\u2018": "'", "\u2019": "'", "\u201C": '"', "\u201D": '"',
+  "\u2013": "-", "\u2014": "-", "\u2212": "-", "\u00A0": " ",
+};
+const FUZZY_CHARS = /[\u2018\u2019\u201C\u201D\u2013\u2014\u2212\u00A0]/g;
+export function normalizeFuzzy(s: string): string {
+  return s.replace(FUZZY_CHARS, (c) => FUZZY_MAP[c] ?? c);
+}
+function allHits(hay: string, needle: string): number[] {
+  const out: number[] = [];
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + 1)) out.push(i);
+  return out;
+}
+// 逐行剥离尾空白（[ \t]+$）：返回剥离文本 + 位置映射表（stripped 索引→原文索引；
+// \n 映射到其原文位置，故替换区间天然吞掉行尾空白）。末位哨兵=原文长度。
+function stripTrailingWs(s: string): [string, number[]] {
+  const lines = s.split("\n");
+  const kept: string[] = [];
+  const map: number[] = [];
+  let pos = 0;
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const t = line.replace(/[ \t]+$/, "");
+    for (let k = 0; k < t.length; k++) map.push(pos + k);
+    if (li < lines.length - 1) map.push(pos + line.length); // \n 原位
+    kept.push(t);
+    pos += line.length + 1;
+  }
+  map.push(s.length);
+  return [kept.join("\n"), map];
+}
+export type FuzzyMatch =
+  | { status: "ok"; start: number; end: number; via: "exact" | "typo" | "ws" }
+  | { status: "ambiguous" }
+  | { status: "notfound" };
+export function fuzzyFind(cur: string, old: string): FuzzyMatch {
+  let hits = allHits(cur, old);
+  if (hits.length === 1) return { status: "ok", start: hits[0], end: hits[0] + old.length, via: "exact" };
+  if (hits.length > 1) return { status: "ambiguous" };
+  // 阶段②：仅当归一实际改变操作数时有意义（未变=与阶段①同结果，天然 0 命中）
+  const nCur = normalizeFuzzy(cur);
+  const nOld = normalizeFuzzy(old);
+  if (nCur !== cur || nOld !== old) {
+    hits = allHits(nCur, nOld);
+    if (hits.length === 1) return { status: "ok", start: hits[0], end: hits[0] + nOld.length, via: "typo" };
+    if (hits.length > 1) return { status: "ambiguous" };
+  }
+  // 阶段③：双向剥行尾空白后匹配，idxMap 回映原文索引
+  const [sCur, map] = stripTrailingWs(cur);
+  const [sOld] = stripTrailingWs(old);
+  if (!sOld) return { status: "notfound" }; // old 剥后为空（纯空白）不可匹配
+  hits = allHits(sCur, sOld);
+  if (hits.length === 1) return { status: "ok", start: map[hits[0]], end: map[hits[0] + sOld.length], via: "ws" };
+  if (hits.length > 1) return { status: "ambiguous" };
+  return { status: "notfound" };
 }
 
 // T01：Unicode 字母/数字全保留（\p{L}\p{N}）——中文 slug 不再折叠为空回退 untitled；
@@ -634,7 +698,7 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   const missing = recorded.filter((f) => !onDisk.includes(f));
   const untracked = onDisk.filter((f) => !recorded.includes(f) && known.has(f));
   if (missing.length) out.push(`  ⚠️ 记账但磁盘缺失：${missing.join(", ")}`);
-  if (untracked.length) out.push(`  ⚠️ 磁盘有但未记账：${untracked.join(", ")}`);
+  if (untracked.length) out.push(`  ⚠️ 磁盘有但未记账：${untracked.join(", ")}（产物若经原生 write/edit 落盘，用 wf_write_artifact(kind=…) 不带 content 注册补记账即可）`);
   if (!missing.length && !untracked.length) out.push(`  ✅ 产物对账一致（${recorded.length} 项）`);
 
   // 5) 注入/观测通道异常
