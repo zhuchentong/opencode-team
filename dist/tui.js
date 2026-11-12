@@ -137,20 +137,6 @@ var PHASE_ORDER = [
 	"fixing",
 	"done"
 ];
-var STAGE_LABEL = {
-	intake: "intake",
-	planning: "planning",
-	review: "review ∥ 可行性",
-	assign: "assign→test_design",
-	test_design: "test_design（红）",
-	building: "building",
-	reconcile: "building+合并",
-	build_review: "build_review",
-	testing: "testing",
-	fixing: "fixing",
-	done: "done ∥ 复盘",
-	retrospect: "done ∥ 复盘"
-};
 var FOLD = {
 	reconcile: "building",
 	retrospect: "done"
@@ -171,11 +157,48 @@ var DAILY_STAGE_ORDER = [
 ];
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
-var TUI_BUILD = "M16-r35-sidebar";
+var TUI_BUILD = "M16-r37-table";
 var ROWS = 20;
 var str = (v) => v === null || v === void 0 ? "" : String(v);
 var errMsg = (e) => String(e?.message ?? e);
 var sanitize = (s) => String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ";
+var dispW = (s) => {
+	let w = 0;
+	for (const ch of String(s ?? "")) {
+		const c = ch.codePointAt(0) ?? 0;
+		w += c >= 11904 && c <= 40959 || c >= 65280 && c <= 65376 || c >= 44032 && c <= 55215 ? 2 : 1;
+	}
+	return w;
+};
+var padE = (s, w) => s + " ".repeat(Math.max(0, w - dispW(s)));
+var padS = (s, w) => " ".repeat(Math.max(0, w - dispW(s))) + s;
+var fit = (s, w) => {
+	let out = "";
+	let acc = 0;
+	for (const ch of String(s ?? "")) {
+		const cw = dispW(ch);
+		if (acc + cw > w) break;
+		out += ch;
+		acc += cw;
+	}
+	return padE(out, w);
+};
+var ZH = {
+	intake: "需求录入",
+	planning: "计划",
+	review: "计划审核",
+	test_design: "测试设计",
+	building: "执行",
+	reconcile: "合并",
+	build_review: "执行审核",
+	testing: "测试",
+	fixing: "修复",
+	done: "交付",
+	retrospect: "交付",
+	assign: "测试设计"
+};
+var zhOf = (phase) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
+var mark = (ok) => ok ? "✓" : "✗";
 function textEl(s, fg) {
 	const t = createElement("text");
 	try {
@@ -199,12 +222,12 @@ var stageOf = (phase, order = STAGE_ORDER) => {
 };
 var listLine = (x) => {
 	const r = x?.rounds ?? {};
-	return `${str(x?.slug || "(未定)")} · ${str(x?.phase ?? "?")} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
+	return `${fit(str(x?.slug || "(未定)"), 14)} ${fit(zhOf(x?.phase), 8)} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
 };
 var buildRows = (s, err, oth, othScope, T) => {
 	const t = Array.from({ length: ROWS }, () => " ");
 	const c = Array.from({ length: ROWS }, () => T.text.muted);
-	t[0] = "── wf ──────────────";
+	t[0] = "── Workflow ────────";
 	t[19] = "──────────────────────";
 	if (err) {
 		t[1] = `wf 错误: ${err}`;
@@ -241,7 +264,6 @@ var buildRows = (s, err, oth, othScope, T) => {
 	const i = stageOf(s.phase, order);
 	const total = order.length;
 	const isDone = s.phase === "done" || s.phase === "retrospect";
-	const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
 	const planV = r.plan_review ?? 0;
 	const buildV = r.build_review ?? 0;
 	const fixV = r.test_fix ?? 0;
@@ -255,61 +277,52 @@ var buildRows = (s, err, oth, othScope, T) => {
 	const pv = s.planReviewVerdict;
 	t[1] = daily ? `  ${str(s.slug || "(未定)")} [daily·${size}]` : `  ${str(s.slug || "(未定)")}`;
 	c[1] = T.text.base;
-	t[2] = `  F${i} ${label}`;
+	t[2] = `  ${bar} ${done}/${total} · F${i} ${zhOf(s.phase)}`;
 	c[2] = T.text.action.primary;
-	t[3] = `  ${bar} ${done}/${total}`;
-	c[3] = T.text.action.primary;
-	t[4] = " ";
-	c[4] = T.text.base;
-	t[5] = "── 轮次 ────────────";
-	t[6] = `      plan  ${planV}/3`;
-	c[6] = planV >= 3 ? T.text.feedback.error : T.text.base;
-	if (daily) {
-		t[7] = "      build —（日常无）";
-		c[7] = T.text.muted;
-	} else {
-		t[7] = `      build ${buildV}/3`;
-		c[7] = buildV >= 3 ? T.text.feedback.error : T.text.base;
+	t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}`;
+	c[4] = T.text.muted;
+	t[5] = " " + "─".repeat(23);
+	c[5] = T.text.muted;
+	const roundOf = (stage) => {
+		if (stage === "review") return `${planV}/3`;
+		if (stage === "build_review") return `${buildV}/3`;
+		if (stage === "fixing" || daily && stage === "testing") return `${fixV}/3`;
+		return "·";
+	};
+	const capOf = (stage) => stage === "review" && planV >= 3 || stage === "build_review" && buildV >= 3 || (stage === "fixing" || daily && stage === "testing") && fixV >= 3;
+	for (let k = 0; k < total; k++) {
+		const stage = order[k];
+		const st = isDone || k < i ? "完成" : k === i ? "进行" : "待办";
+		const row = 6 + k;
+		t[row] = ` ${String(k + 1).padStart(2, "0")} ${padE(ZH[stage] ?? stage, 8)}  ${st}  ${padS(roundOf(stage), 4)}`;
+		c[row] = capOf(stage) ? T.text.feedback.error : k === i && !isDone ? T.text.action.primary : isDone || k < i ? T.text.base : T.text.muted;
 	}
-	t[8] = `      fix   ${fixV}/3`;
-	c[8] = fixV >= 3 ? T.text.feedback.error : T.text.base;
-	t[9] = " ";
-	c[9] = T.text.base;
-	t[10] = "── 关卡 ────────────";
-	if (daily) {
-		if (size === "S") {
-			t[11] = "      verify 自检（S）";
-			c[11] = T.text.muted;
-		} else {
-			t[11] = `      verify ${pv ? str(pv) : "—"}`;
-			c[11] = pv === "PASS" ? T.text.feedback.success : pv === "FAIL" ? T.text.feedback.error : T.text.muted;
-		}
-	} else {
-		t[11] = `      test-plan ${s.testPlanWritten ? "✓" : "✗"}`;
-		c[11] = s.testPlanWritten ? T.text.feedback.success : T.text.muted;
+	let k = 6 + total;
+	if (18 - k > 3) {
+		t[k] = " ";
+		c[k] = T.text.base;
+		k++;
 	}
-	t[12] = `      report    ${verdict ? str(verdict) : "—"}`;
-	c[12] = verdict === "PASS" ? T.text.feedback.success : verdict === "FAIL" ? T.text.feedback.error : T.text.muted;
-	t[13] = " ";
-	c[13] = T.text.base;
-	t[14] = "── 产物 ────────────";
-	t[15] = `      plan.md ${arts["plan.md"] ? "✓" : "✗"}`;
-	c[15] = arts["plan.md"] ? T.text.feedback.success : T.text.muted;
+	const vTxt = verdict ? str(verdict) : "—";
 	if (daily) {
-		if (size === "S") {
-			t[16] = "      plan-review —（S 免）";
-			c[16] = T.text.muted;
-		} else {
-			t[16] = `      plan-review ${hasPlanReview ? "✓" : "✗"}`;
-			c[16] = hasPlanReview ? T.text.feedback.success : T.text.muted;
-		}
+		const g = size === "S" ? "verify 自检(S)" : `verify ${pv ? str(pv) : "—"}`;
+		const fail = pv === "FAIL" || verdict === "FAIL";
+		const pass = verdict === "PASS" || size !== "S" && pv === "PASS";
+		t[k] = `  关卡 ${g} · report ${vTxt}`;
+		c[k] = fail ? T.text.feedback.error : pass ? T.text.feedback.success : T.text.muted;
 	} else {
-		t[16] = `      test-plan.md ${arts["test-plan.md"] ? "✓" : "✗"}`;
-		c[16] = arts["test-plan.md"] ? T.text.feedback.success : T.text.muted;
+		t[k] = `  关卡 test-plan ${s.testPlanWritten ? "✓" : "✗"} · report ${vTxt}`;
+		c[k] = verdict === "FAIL" ? T.text.feedback.error : verdict === "PASS" ? T.text.feedback.success : T.text.muted;
 	}
-	t[17] = `      test-report.md ${arts["test-report.md"] ? "✓" : "✗"}`;
-	c[17] = arts["test-report.md"] ? T.text.feedback.success : T.text.muted;
-	t[18] = `      其他产物 ${extraCount} 项`;
+	k++;
+	const a1 = daily ? size === "S" ? "plan-review —(S免)" : `plan-review ${mark(hasPlanReview)}` : `test-plan.md ${mark(!!arts["test-plan.md"])}`;
+	t[k] = `  产物 plan.md ${mark(!!arts["plan.md"])} · ${a1}`;
+	c[k] = T.text.base;
+	k++;
+	t[k] = `       test-report.md ${mark(!!arts["test-report.md"])} · 其他 ${extraCount} 项`;
+	c[k] = T.text.base;
+	t[18] = "  /wf:status 查看状态";
+	c[18] = T.text.muted;
 	return {
 		t,
 		c
@@ -598,7 +611,7 @@ var tui_default = Plugin.define({
 							const s = data?.st;
 							if (!s?.active) return textEl(str(data?.err ? `wf 错误: ${data.err}` : "  wf: 无活动任务"), T.text.muted);
 							const rr = s.rounds ?? {};
-							const label = STAGE_LABEL[s.phase] ?? str(s.phase ?? "?");
+							const label = zhOf(s.phase);
 							return textEl(`▶ ${s.mode === "daily" ? `[daily·${str(s.size || "M")}] ` : ""}${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
 						}
 						const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
@@ -670,4 +683,4 @@ var tui_default = Plugin.define({
 		};
 	}
 });
-export { buildRows, tui_default as default };
+export { buildRows, tui_default as default, dispW, listLine };

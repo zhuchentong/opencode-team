@@ -1,6 +1,6 @@
 # wf-workflow — OpenCode 工作流插件
 
-8 角色 9 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核∥可行性 → 测试设计(含分配) → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*`）内容自 M16-r31 起由本插件托管（仓库 `roles/` 单一来源 + 文件同步，宿主留 frontmatter/permissions），本插件负责流程管控（M16-r28：assign 并入 test_design；M16-r29：阶段纪律告警；M16-r30：冷启动自动 intake；M16-r31：角色内容插件托管——插件更新自动同步 agent 内容，根治版本漂移；M16-r32：产物瘦身预算——压生成与下游审核耗时；M16-r33：增量修订与体量分级——wf_write_artifact patch 模式 + 写入者统一 + S/M/L 预算；M16-r34：日常模式——自动化用户 5 步习惯 plan→verify→执行→核对，新任务默认 daily 流（S 级 leader 串行零 sub-agent，M/L 独立验证+功能点），完整 9 阶段流降级为 [FULL] 显式选项；M16-r35：侧边栏模式感知——daily 6 格连续进度+徽标+verify 关卡，存量视图逐字不变；M16-r36：工作流硬性限定 wf/leader——开任务/推进服务端强制仅 leader，非 leader 拒绝+审计，只读诊断豁免）。
+8 角色 9 阶段开发工作流的**状态机与关卡层**：把「规划 → 审核∥可行性 → 测试设计(含分配) → TDD 执行 → 合并 → 执行审核 → 测试 → 修复 → 复盘」变成带硬约束的流转，越权改码被服务端阻断，产物与审计轨迹可诊断。角色（`wf/*`）内容自 M16-r31 起由本插件托管（仓库 `roles/` 单一来源 + 文件同步，宿主留 frontmatter/permissions），本插件负责流程管控（M16-r28：assign 并入 test_design；M16-r29：阶段纪律告警；M16-r30：冷启动自动 intake；M16-r31：角色内容插件托管——插件更新自动同步 agent 内容，根治版本漂移；M16-r32：产物瘦身预算——压生成与下游审核耗时；M16-r33：增量修订与体量分级——wf_write_artifact patch 模式 + 写入者统一 + S/M/L 预算；M16-r34：日常模式——自动化用户 5 步习惯 plan→verify→执行→核对，新任务默认 daily 流（S 级 leader 串行零 sub-agent，M/L 独立验证+功能点），完整 9 阶段流降级为 [FULL] 显式选项；M16-r35：侧边栏模式感知——daily 6 格连续进度+徽标+verify 关卡，存量视图逐字不变；M16-r36：工作流硬性限定 wf/leader——开任务/推进服务端强制仅 leader，非 leader 拒绝+审计，只读诊断豁免；M16-r37：侧边栏表格化——阶段列表改等宽对齐表格（序号+中文阶段名+状态+轮次列，当前行高亮），显示宽度工具按 CJK=2 cell 补位；M16-r38：leader 更名 workflow——显示名由 agent ID 派生（titlecase），wf/leader→workflow 显示 Workflow，isLeader 双 ID 兼容防热载自拒，侧边栏标题 ── Workflow ──）。
 
 > 架构形态：P0-P6 重设计（2026-11）后的版本——状态层 SQLite、命令双轨输出、TUI 流派 A 渲染、vite/oxlint 工具链。设计依据与宿主契约证据见文末「宿主契约备忘」。
 
@@ -73,8 +73,8 @@ shared/rpc.ts           RPC 契约（Rpc.define；server/TUI 各进程 import �
 tui/index.tsx           TUI 源码（流派 A：slot render 恒定容器 + 唯一 insert(accessor) 换树；return 键拦截主轨；
                         数据三通道=事件+server.connected 重拉+5s 轮询；fingerprint 无变化不发信号）
 dist/tui.js             TUI 发布产物（vite lib 构建，solid/@opentui/@opencode/node:fs 全 external 共享宿主运行时）
-tui-tests/              本地渲染 harness（真实 @opentui/solid testRender + 虚拟模块自举，46 断言含
-                        流派 A 静态守卫/去重/拦截面/通知层）：bun tui-tests/tui-render.harness.ts
+tui-tests/              本地渲染 harness（真实 @opentui/solid testRender + 虚拟模块自举，87 断言含
+                        流派 A 静态守卫/去重/拦截面/通知层/表格对齐纯函数+真渲染复核）：bun tui-tests/tui-render.harness.ts
 types/opencode-plugin.d.ts  宿主虚拟模块声明（@opencode/plugin/rpc|tui）
 scripts/tui-restart.sh      完全重启 TUI 进程（宿主对 TUI 插件模块路径级缓存，/reload 不重读）
 ```
@@ -107,7 +107,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 插件改动生效方式：**TUI 改动需 `bun run build` + 完全重启 TUI 进程**（宿主对 TUI 插件模块路径级缓存，`/reload` 不重读——用 `./scripts/tui-restart.sh`）；server 改动 watcher 按内容指纹热载即效；仅改 `opencode.jsonc` 配置可 `/reload`。首轮真机跑一遍：
 
-1. 开 session → 侧边栏显示 `── wf ──` 20 行面板且**不崩**；`/wf:intake probe-test` 回车 → toast 弹出 guidance + 面板变 F0 intake + 系统提示出现 `<context key="wf.phase">` 块
+1. 开 session → 侧边栏显示 `── Workflow ──` 20 行面板且**不崩**；`/wf:intake probe-test` 回车 → toast 弹出 guidance + 面板变 F0 intake + 系统提示出现 `<context key="wf.phase">` 块
 2. `/wf:ping` 回车 → 即时 toast「wf 角色：7/7 已注册」（主轨：回车拦截 → RPC exec）
 3. 输入 `/wf` 从下拉菜单**选择** `/wf:status` → 输出作为消息注入会话 inbox（降级轨，不唤醒模型；TUI 里可见于 /inbox）
 4. 终端切到后台再触发一次命令 → 系统级通知弹出（attention.notify；仅 ⚠️/❌/FAIL 类重要信号）
@@ -142,7 +142,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 ```sh
 bun install
 bun run build    # vite 构建 dist/tui.js（TUI 源码改动后必须）
-bun run check    # 门禁五合一：build → bun test(94) → tsc --noEmit → oxlint → harness(46)
+bun run check    # 门禁五合一：build → bun test(152) → tsc --noEmit → oxlint → harness(87)
 bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 ```
 
@@ -175,7 +175,9 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 - M16-r35 侧边栏模式感知（r34 后 daily 任务在 9 格旧视图跳格、test-plan 恒假 ✗、verify 关卡不可见）：RPC `state` 投影与 `stateSchema` 增 `mode/size/planReviewVerdict`（nullable，rpc-drift 守卫同步）；`shared/phases.ts` 增 `DAILY_STAGE_ORDER`（6 阶段，phases.test.js 守卫与 FLOWS_DAILY 可达集一致）；`buildRows` 双视图——daily 按 6 格连续进度+`[daily·S/M/L]` 徽标+verify 关卡（M/L 显 planReviewVerdict、S 显自检）+plan-review 产物（S 显免），**mode 缺失（存量）/full 走 9 格旧视图逐字不变**（harness P11 回归锚锁定）。**边界**：渲染结构仍冻结（流派 A/ROWS=20/唯一 insert，P4 静态守卫）——仅改 buildRows 文案/颜色与数据面；`buildRows` 导出供 harness 纯函数直测（绕开 testRender 信号→换树盲区）；**改 TUI 须 `bun run build`+dist/tui.js 入库+`./scripts/tui-restart.sh` 完全重启**（路径级永久缓存，与 r29-r34 纯 server 不同）；compact 单行模式同步加徽标但 options 不传达 TUI 仍不可用
 - hook 内部异常 fail-open（不阻断），关卡异常（含 `GATE_ERR`）才拦截
 - 降级轨消息注入会话历史（context/compaction/generate hook 剥离仅护模型面，用户面保留可读）
+- M16-r37 侧边栏表格化（用户诉求「类似表格更整齐的显示」）：`buildRows` 活动任务视图改等宽对齐阶段表格——表头 `# 阶段 状态 轮次` + 细线 + 阶段行（daily 6 行/full 9 行，序号 01.. + 中文阶段名 TUI 本地 ZH 映射 + 状态 完成/进行/待办 + 轮次右对齐 x/3）；列几何 24 cell（状态词偏移恒 14），`dispW/padE/padS/fit` 按 CJK=2 cell 补位，**对齐列只用 CJK+ASCII**（●○▶✓✗— 等歧义宽度字符逐出表格列）；行色 完成=base/进行=primary 整行高亮/待办=muted，轮次≥3 该行 error；轮次归属 计划审核=plan/执行审核=build(full)/修复=fix(full)/测试=fix(daily)；尾段压缩为 关卡+产物×2 三行（cursor 动态适配 20 行容量）+ 恒 t18 提示行 `/wf:status`；其他任务列表 `listLine` 同步列对齐（slug fit14+阶段 fit8）。harness P11 语义重锚（模式语义不变量保留）+ 新增 P12 静态树 captureCharFrame 真渲染复核列对齐（OpenTUI 自身宽度计算背书 dispW）。**边界**：渲染结构仍冻结（流派 A/ROWS=20/唯一 insert，P4 静态守卫全过）；shared/phases.ts/server/RPC 零改动；full≡存量 JSON 相等回归锚保留；**生效须 `bun run build`+`./scripts/tui-restart.sh`**（路径级永久缓存）
 - M16-r36 工作流硬性限定 wf/leader（翻案旧「非 wf 子代理可自开任务」边界）：`commands.add()` guarded 单一强制点覆盖三入口（聊天命令/wf_command/TUI exec 同调 byName），变更类（intake+9 流转+lane 含 ls）仅 `agent==="wf/leader"`，agent 经 `a.agent ?? session.get().agent` 解析（Session.Info.agent 经 OpenAPI 实证），不可确认 fail-closed；只读/清理豁免集 `READONLY_CMDS={status,diagnose,ping,reset}`；拒绝落审计 `agent-rejected:<agent>`（有行才落盘，守 T02）；hint 注入前同样限 leader（chat hook 真机触发形状未验证，探针默认关，防御性收紧）；`opt.leaderOnly=false` 回退旧行为。**边界**：artifact/guard 不动（本就仅 wf/* + 自有行受管辖，委托链保留）；任务会话中途切非 leader→推进被拒但已注入 guidance 文本仍可见（entry 按会话键，动作硬阻断即可接受）；guarded 服务端逻辑热载即在在途会话生效（反例验收无需新会话），description/hint 文案变更须新会话
+- M16-r38 leader 更名 workflow + 侧边栏标题 Workflow（用户诉求「Wf/Leader → WorkFlow」）：宿主 TUI 显示名 = `titlecase(agent.id)`（`Locale.titlecase` 只大写不降级，**非** `name` 字段——config 无显示名字段、插件改 `name` 不影响 composer），故改显示名必须改 agent ID。leader ID `wf/leader`→`workflow`（显示 `Workflow`），宿主文件 `agents/wf/leader.md`→`agents/workflow.md`（ID 由相对 agents/ 路径派生）。**向后兼容**：`isLeader()` 双 ID 同权（`workflow` 主名 + `wf/leader` 过渡别名）——本插件从仓库热载，改名瞬间在途 wf/leader 会话不得被自拒；`leaderOnlyReject`/`resolveState`/`hint`/`command-tool` 子会话闸统一走 `isLeader`，拒绝文案指向 workflow。**roles 同步**：`roleHostFile` leader 特判落 rolesDir 上级 `workflow.md`（模板仍 roles/leader.md，内部角色名不变），其余 7 角色仍在 agents/wf/；旧 wf/leader.md 置 hidden 保留过渡（不删）。**侧边栏**：`buildRows` t[0] `── wf ──`→`── Workflow ──`（20 cell 同宽），harness P5 断言同步。**边界**：WF_ROLES/pingReport 逻辑不变（workflow 不在 wf/ 前缀天然不计，wf/leader 兼容别名若注册归额外）；其余 wf/leader mock 测试因兼容别名零改动；**生效须 `bun run build`+`./scripts/tui-restart.sh`+新会话选 Workflow**（当前 wf/leader 会话热载后仍可用，切新会话才见新名）
 - `transition` 在 save 连续冲突（3 次）失败时回滚 entry 指引（T09），但 reports 槽/事件通道的时间戳不回滚——用户以 `/wf:status` 为准
 
 ## 设计借鉴对照

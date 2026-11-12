@@ -184,7 +184,7 @@ export async function registerCommands(ctx: any, deps: any) {
     const add = (def: any) => {
       const base = def.execute;
       // M16-r36：单一强制点——聊天命令/wf_command/TUI exec 三入口同调 byName，guarded 一处覆盖。
-      // 变更类仅 wf/leader（agent 经 a.agent ?? session.get 解析）；拒绝落审计 agent-rejected（有行才落盘，守 T02）。
+      // 变更类仅 leader（workflow，兼容 wf/leader；agent 经 a.agent ?? session.get 解析）；拒绝落审计 agent-rejected（有行才落盘，守 T02）。
       const guarded = async (a: any) => {
         if (ctx?.options?.leaderOnly !== false) {
           const agent = await resolveAgent(a, ctx.session.get);

@@ -91,7 +91,7 @@ export interface SyncReport { name: string; action: SyncAction; detail?: string 
 export function syncRoles(rolesDir: string, opts: { backup?: boolean } = {}): SyncReport[] {
   const report: SyncReport[] = [];
   for (const name of ROLE_NAMES) {
-    const file = path.join(rolesDir, `${name}.md`);
+    const file = roleHostFile(rolesDir, name);
     if (!fs.existsSync(file)) { report.push({ name, action: "missing" }); continue; }
     const content = fs.readFileSync(file, "utf8");
     const { fm, body } = splitFrontmatter(content);
@@ -114,7 +114,7 @@ export type RoleStatus = "managed" | "stale" | "unmanaged" | "missing";
 export function roleSyncStatus(rolesDir: string): { name: string; status: RoleStatus }[] {
   const out: { name: string; status: RoleStatus }[] = [];
   for (const name of ROLE_NAMES) {
-    const file = path.join(rolesDir, `${name}.md`);
+    const file = roleHostFile(rolesDir, name);
     if (!fs.existsSync(file)) { out.push({ name, status: "missing" }); continue; }
     const { body } = splitFrontmatter(fs.readFileSync(file, "utf8"));
     const { action } = syncDecision(body, renderRole(name));
@@ -128,6 +128,14 @@ export function resolveRolesDir(opt: any): string {
   if (opt?.rolesDir) return String(opt.rolesDir);
   const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
   return path.join(base, "opencode", "agents", "wf");
+}
+
+// M16-r38：leader 宿主 agent ID=workflow（顶层 agents/workflow.md），其余 7 角色在 agents/wf/ 下。
+// agent ID 由文件相对 agents/ 的路径派生：agents/workflow.md→workflow、agents/wf/<name>.md→wf/<name>。
+// rolesDir 即 agents/wf；leader 目标取其上级目录的 workflow.md（模板仍 roles/leader.md，内部角色名不变）。
+export function roleHostFile(rolesDir: string, name: RoleName): string {
+  if (name === "leader") return path.join(rolesDir, "..", "workflow.md");
+  return path.join(rolesDir, `${name}.md`);
 }
 
 // setup 接线（fail-soft）：opt.syncRoles 开启时同步角色文件；异常不阻塞插件加载。

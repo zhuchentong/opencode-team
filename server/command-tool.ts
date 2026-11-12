@@ -8,8 +8,8 @@
 //  - 无行 → 仅 wf:intake 可开任务，且限主会话；
 //  - 无行非 intake → 拒绝（子会话不得代 leader 推进）。
 // 子会话判定（真机 sessProbe 实证 2026-11-10：2.2.6 session.get 返回无 parentID、有 agent）：
-// agent 以 wf/ 开头且非 wf/leader = 子代理会话。
-import { FLOWS } from "./lib.ts";
+// agent 以 wf/ 开头且非 leader = 子代理会话（M16-r38：leader=workflow，兼容 wf/leader）。
+import { FLOWS, isLeader } from "./lib.ts";
 
 const FLOW_NAMES = Object.keys(FLOWS); // 10 个流转命令（wf:intake…wf:done；M16-r28 assign 并入 test-design）
 
@@ -19,7 +19,7 @@ export function registerCommandTool(ctx: any, deps: any) {
     draft.add({
       name: "wf_command",
       description:
-        "推进 wf 工作流状态机（等价用户手敲 /wf:*，**服务端强制仅 wf/leader**：非 leader agent 调用将被拒绝；wf/* 子会话调用会被拒绝）。" +
+        "推进 wf 工作流状态机（等价用户手敲 /wf:*，**服务端强制仅 leader（workflow）**：非 leader agent 调用将被拒绝；wf/* 子会话调用会被拒绝）。" +
         "冷启动铁律（仅 leader 主会话）：本会话无活动任务且用户给出开发任务时，第一步立即调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（slug 从需求提炼，kebab-case），勿等用户手敲 /wf:intake；需求不足以提炼 slug 时先澄清再 intake；普通问答/咨询不开任务。" +
         "name 形如 \"wf:plan\"；prompt = 命令参数（wf:intake 传 slug，wf:lane 传 \"set T01 ses_xxx\"，其余留空）。" +
         "返回该阶段 guidance / 命令输出文本。关卡与循环上限由服务端强制。",
@@ -53,7 +53,7 @@ export function registerCommandTool(ctx: any, deps: any) {
               return { content: `❌ 本会话无活动任务${FLOW_NAMES.includes(name) ? "且不得跨任务推进" : ""}：流转需先由 leader 在主会话调用 wf_command(name="wf:intake", prompt="<slug>") 开任务（或用户手敲 /wf:intake <slug>）。子会话请把结论回报 leader，不得代为推进；查看状态（status/diagnose）请在 leader 主会话执行。` };
             } else {
               const agent = String(context?.agent ?? "");
-              if (agent.startsWith("wf/") && agent !== "wf/leader") {
+              if (agent.startsWith("wf/") && !isLeader(agent)) {
                 return { content: `❌ 子会话（agent=${agent}）不得开新任务/推进状态机。请把结论回报 leader，由 leader 调用 wf_command。` };
               }
             }

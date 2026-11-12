@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r36";
+export const VERSION = "M16-r38";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -259,16 +259,23 @@ export const promptText = (p: unknown): string => {
   return "";
 };
 
-// ── M16-r36：工作流硬性限定 wf/leader（服务端强制，非提示词约定）────────
+// ── M16-r36：工作流硬性限定 leader（服务端强制，非提示词约定）────────
+// M16-r38：leader 主名 workflow（宿主 TUI 显示 titlecase(id)=Workflow）；wf/leader 保留为过渡
+// 兼容别名——本插件从仓库热载，改名瞬间在途 wf/leader 会话不得被自拒（双 ID 同权）。
+export const LEADER_AGENT = "workflow";
+export const LEADER_ALIASES = ["workflow", "wf/leader"];
+export function isLeader(agent: string): boolean {
+  return LEADER_ALIASES.includes(agent);
+}
 // 只读/清理豁免集：任何 agent 可用（用户自助诊断/清理不受限）。
 export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset"]);
-// 判定：豁免集放行；其余仅 wf/leader；agent 不可确认 → 变更类 fail-closed（符合硬限定意图）。
+// 判定：豁免集放行；其余仅 leader（workflow，兼容 wf/leader）；agent 不可确认 → 变更类 fail-closed。
 // lane 整体 leader-only（含 ls，有意收紧：lane 属任务内部细节）。返回拒绝文案或 null（放行）。
 export function leaderOnlyReject(agent: string, cmd: string): string | null {
   if (READONLY_CMDS.has(cmd)) return null;
-  if (agent === "wf/leader") return null;
-  if (!agent) return `❌ 无法确认 agent 身份，工作流变更仅限 wf/leader：请在 wf/leader 会话执行（查看状态可用 /wf:status）。`;
-  return `❌ 工作流仅限 wf/leader（当前 agent=${agent}）。请切换到 wf/leader 会话执行；查看状态可用 /wf:status。`;
+  if (isLeader(agent)) return null;
+  if (!agent) return `❌ 无法确认 agent 身份，工作流变更仅限 ${LEADER_AGENT}：请在 ${LEADER_AGENT} 会话执行（查看状态可用 /wf:status）。`;
+  return `❌ 工作流仅限 ${LEADER_AGENT}（当前 agent=${agent}）。请切换到 ${LEADER_AGENT} 会话执行；查看状态可用 /wf:status。`;
 }
 
 // ── 流转校验+应用（P0-b 提取自 transition 闭包，行为与 M16 一致）────
@@ -615,8 +622,8 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
     model: a?.model?.providerID ? `${a.model.providerID}/${a.model.id ?? "?"}` : null,
   }));
   const found = norm.filter((n) => n.name.startsWith("wf/"));
-  // 计数只算 WF_ROLES 交集：primary（wf/leader）等 wf/ 前缀但不属 7 角色的归"额外"
-  //（真机实证：registry 含 7 subagent + wf/leader primary → 原实现计成 8/7）
+  // 计数只算 WF_ROLES 交集：leader 主名 workflow 不在 wf/ 前缀内天然不计；兼容别名 wf/leader
+  // 若仍注册则归"额外"（真机实证：registry 含 7 subagent + leader primary → 原实现曾计成 8/7）
   const matched = found.filter((f) => WF_ROLES.includes(f.name));
   const missing = WF_ROLES.filter((r) => !matched.some((f) => f.name === r));
   const extra = found.filter((f) => !WF_ROLES.includes(f.name)).map((f) => f.name);

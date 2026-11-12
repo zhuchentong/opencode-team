@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
-import { type FlowLogEntry } from "./lib.ts";
+import { type FlowLogEntry, isLeader } from "./lib.ts";
 
 // instructions.entry 的 key（非存储键——P1 不动 entry 通道）
 export const ENTRY_KEY = "wf.phase";
@@ -145,7 +145,9 @@ export function createStore(ctx: any) {
   const resolveState = async (sessionID: string, agent?: string): Promise<any> => {
     const own = await load(sessionID);
     if (own) return own;
-    if (!String(agent ?? "").startsWith("wf/")) return null; // 仅 wf/* agent 受项目管辖；普通会话不受影响
+    const a = String(agent ?? "");
+    // 仅 wf/* agent 与 leader（workflow，兼容 wf/leader）受项目管辖；普通会话不受影响（M16-r38）
+    if (!a.startsWith("wf/") && !isLeader(a)) return null;
     try {
       const s = await ctx.session.get({ sessionID });
       const pid = s?.projectID;

@@ -13,6 +13,8 @@
 //   P7 data.listen 兜底通道 + sessionID|at 去重 + 60s 新鲜度门
 //   P8 轮询对账：updated 事件触发 refresh → state.lastReport → toast + 同 at 去重
 //   P9 return 键拦截主轨：非 /wf: 同步 false 透传；命中 → 清空编辑器 → RPC exec → toast
+//   P11 表格化 buildRows 纯函数直测（模式语义 + 列对齐 + 轮次归属 + 尾部关卡/产物）
+//   P12 表格真渲染复核：静态树 captureCharFrame，OpenTUI 自身宽度计算验证列对齐
 //
 // 已知限制（保真度盲区）：testRender 帧循环不推进 renderEffect 更新提交——
 // 信号→换树的端到端断言在本地不可靠，由 P0 真机探针 + 静态守卫代劳。
@@ -40,7 +42,11 @@ if (!fs.existsSync(mockDir)) {
 
 // 虚拟模块解析依赖上面的占位包，须动态 import（静态 import 会提升到自举之前）
 // @ts-ignore bun 原生支持 .tsx
-const { default: mod, buildRows } = await import("../tui/index.tsx");
+const ns: any = await import("../tui/index.tsx");
+const { default: mod, buildRows } = ns;
+// M16-r37：表格化辅助（红阶段占位兜底，实现后走真实导出；兜底按 ASCII 宽度必红不崩）
+const dispW: (s: string) => number = ns.dispW ?? ((s: string) => String(s ?? "").length);
+const listLine: (x: any) => string = ns.listLine ?? ((x: any) => String(x?.slug ?? ""));
 const { testRender } = await import("@opentui/solid");
 
 const errors: string[] = [];
@@ -150,7 +156,7 @@ console.log(`插件 id: ${t.id}`);
       !!node && typeof node === "object" && !Array.isArray(node) && typeof node !== "function");
     const frame = setup.captureCharFrame();
     ok("P5 侧边栏挂载渲染不崩", true);
-    ok("P5 帧含 wf 分隔线", frame.includes("── wf"), JSON.stringify(frame.slice(0, 80)));
+    ok("P5 帧含 Workflow 分隔线", frame.includes("── Workflow"), JSON.stringify(frame.slice(0, 80)));
     await setup.dispose();
   } catch (e: any) {
     ok("P5 侧边栏挂载渲染不崩", false, e?.message);
@@ -313,36 +319,102 @@ console.log(`插件 id: ${t.id}`);
   }
 }
 
-// ── P11：M16-r35 侧边栏模式感知——buildRows 纯函数直测（绕开 testRender 信号→换树盲区）──
+// ── P11: M16-r37 侧边栏表格化——buildRows 纯函数直测（绕开 testRender 信号→换树盲区）──
+// 布局锚：t0 头线/t1 slug/t2 进度/t4 表头/t5 细线/t6.. 阶段行（daily 6→6..11，full 9→6..14）；
+// 尾段 cursor=6+n（剩余>3 行先插空行）→ 关卡/产物1/产物2；t18 提示行/t19 尾线。
+// 列几何：1+2+1+8+2+4+2+4=24 cell；状态词起始偏移恒 14；轮次右对齐 4 cell。
 {
   const T = theme;
   const base = { active: true, slug: "todo", rounds: {}, artifacts: {}, testPlanWritten: false, testReportVerdict: null };
-  // daily S：徽标 + 6 格连续进度 + 无 test-plan 假 ✗ + verify 自检 + plan-review 免
+  const statusAt = (row: string) => { const m = /(完成|进行|待办)/.exec(row); return m ? dispW(row.slice(0, m.index)) : -1; };
+  // daily S：徽标 + 6 行表格 + 对齐 + 模式语义
   const s = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
   ok("P11 daily S slug 行带 [daily·S] 徽标", s.t[1].includes("[daily·S]"), s.t[1]);
-  ok("P11 daily building=F3 连续索引", s.t[2].includes("F3"), s.t[2]);
-  ok("P11 daily 进度 3/6（非 4/9 跳格）", s.t[3].includes("3/6") && s.t[3].includes("●●●○○○"), s.t[3]);
+  ok("P11 daily building=F3 进度 3/6", s.t[2].includes("F3") && s.t[2].includes("3/6") && s.t[2].includes("●●●○○○"), s.t[2]);
+  ok("P11 表头含 阶段/状态/轮次", s.t[4].includes("阶段") && s.t[4].includes("状态") && s.t[4].includes("轮次"), s.t[4]);
+  const rows6 = s.t.slice(6, 12);
+  ok("P11 daily 6 阶段行序号连续", rows6.every((r: string, k: number) => r.startsWith(` 0${k + 1} `)), JSON.stringify(rows6));
+  ok("P11 daily 中文阶段名", rows6[0].includes("需求录入") && rows6[3].includes("执行") && rows6[5].includes("交付"), JSON.stringify(rows6));
+  ok("P11 状态派生 完成/进行/待办", rows6[0].includes("完成") && rows6[3].includes("进行") && rows6[4].includes("待办"), JSON.stringify(rows6));
+  ok("P11 阶段行状态列对齐（偏移=14）", rows6.every((r: string) => statusAt(r) === 14), JSON.stringify(rows6.map(statusAt)));
+  ok("P11 阶段行等宽 24 cell（轮次右对齐）", rows6.every((r: string) => dispW(r) === 24), JSON.stringify(rows6.map(dispW)));
+  ok("P11 进行行整行蓝高亮", s.c[9] === T.text.action.primary, s.c[9]);
+  ok("P11 计划审核行挂 plan 轮次", s.t[8].includes("0/3"), s.t[8]);
+  ok("P11 daily 测试行挂 fix 轮次", s.t[10].includes("0/3"), s.t[10]);
   ok("P11 daily 无 test-plan 假缺失", !s.t.some((r: string) => r.includes("test-plan")), JSON.stringify(s.t));
-  ok("P11 daily S verify 显示自检", s.t[11].includes("自检"), s.t[11]);
-  ok("P11 daily S plan-review 显示免", s.t[16].includes("免"), s.t[16]);
-  ok("P11 daily build 轮次置灰占位", s.t[7].includes("—"), s.t[7]);
+  ok("P11 daily S verify 显示自检", s.t[13].includes("自检"), s.t[13]);
+  ok("P11 daily S plan-review 显示免", s.t[14].includes("免"), s.t[14]);
+  ok("P11 其他产物计数行", s.t[15].includes("0 项"), s.t[15]);
+  ok("P11 提示行 /wf:status", s.t[18].includes("/wf:status"), s.t[18]);
   // daily M：verify 关卡随 planReviewVerdict + plan-review 产物显式 + 其他产物不重复计数
   const m = buildRows({ ...base, mode: "daily", size: "M", phase: "review", planReviewVerdict: "PASS", artifacts: { "plan.md": { at: "x" }, "plan-review-r1.md": { at: "x" } } }, null, [], "", T);
-  ok("P11 daily M verify PASS 可见", m.t[11].includes("verify") && m.t[11].includes("PASS"), m.t[11]);
-  ok("P11 daily M plan-review ✓", m.t[16].includes("plan-review") && m.t[16].includes("✓"), m.t[16]);
-  ok("P11 daily M plan-review 不计入其他产物", m.t[18].includes("0 项"), m.t[18]);
-  ok("P11 daily M verify PASS 绿色", m.c[11] === T.text.feedback.success);
-  // daily done：6/6 满格
+  ok("P11 daily M verify PASS 可见", m.t[13].includes("verify") && m.t[13].includes("PASS"), m.t[13]);
+  ok("P11 daily M verify PASS 绿色", m.c[13] === T.text.feedback.success, m.c[13]);
+  ok("P11 daily M plan-review ✓", m.t[14].includes("plan-review") && m.t[14].includes("✓"), m.t[14]);
+  ok("P11 daily M plan-review 不计入其他产物", m.t[15].includes("0 项"), m.t[15]);
+  // daily done：满格 + 全行完成
   const d = buildRows({ ...base, mode: "daily", size: "S", phase: "done" }, null, [], "", T);
-  ok("P11 daily done 6/6 满格", d.t[3].includes("6/6"), d.t[3]);
-  // 存量回归锚：无 mode（旧任务）/full → 9 格旧视图逐字不变
+  ok("P11 daily done 6/6 满格", d.t[2].includes("6/6"), d.t[2]);
+  ok("P11 daily done 全行完成", d.t.slice(6, 12).every((r: string) => r.includes("完成")), JSON.stringify(d.t.slice(6, 12)));
+  // 轮次上限红警
+  const cap = buildRows({ ...base, mode: "daily", size: "S", phase: "testing", rounds: { test_fix: 3 } }, null, [], "", T);
+  ok("P11 轮次≥3 该行红色", cap.c[10] === T.text.feedback.error && cap.t[10].includes("3/3"), cap.t[10]);
+  // 存量回归锚：无 mode（旧任务）/full → 9 行表格语义不变（行号重锚）
   const legacy = buildRows({ ...base, phase: "building" }, null, [], "", T);
-  ok("P11 存量 building 仍 4/9", legacy.t[3].includes("4/9"), legacy.t[3]);
-  ok("P11 存量 test-plan 关卡仍在", legacy.t[11].includes("test-plan"), legacy.t[11]);
+  ok("P11 存量 building 仍 4/9", legacy.t[2].includes("4/9"), legacy.t[2]);
+  const rows9 = legacy.t.slice(6, 15);
+  ok("P11 存量 9 阶段行序号连续", rows9.every((r: string, k: number) => r.startsWith(` 0${k + 1} `)), JSON.stringify(rows9));
+  ok("P11 存量阶段行同样对齐", rows9.every((r: string) => statusAt(r) === 14 && dispW(r) === 24), JSON.stringify(rows9.map(statusAt)));
+  ok("P11 存量执行审核行挂 build 轮次", legacy.t[11].includes("执行审核") && legacy.t[11].includes("0/3"), legacy.t[11]);
+  ok("P11 存量修复行挂 fix 轮次", legacy.t[13].includes("修复") && legacy.t[13].includes("0/3"), legacy.t[13]);
+  ok("P11 存量 test-plan 关卡仍在", legacy.t[15].includes("test-plan"), legacy.t[15]);
   ok("P11 存量 test-plan.md 产物行仍在", legacy.t[16].includes("test-plan.md"), legacy.t[16]);
   ok("P11 存量 slug 行无徽标", !legacy.t[1].includes("["), legacy.t[1]);
   const full = buildRows({ ...base, mode: "full", phase: "building" }, null, [], "", T);
   ok("P11 full 与存量视图逐字一致", JSON.stringify(full) === JSON.stringify(legacy));
+  // 其他任务列表对齐 + 错误/无任务/非活跃视图
+  const l1 = listLine({ slug: "a", phase: "planning", rounds: {} });
+  const l2 = listLine({ slug: "very-long-slug-xx", phase: "build_review", rounds: { plan_review: 1 } });
+  const phAt = (ln: string, zh: string) => dispW(ln.slice(0, ln.indexOf(zh)));
+  ok("P11 其他任务列表列对齐（slug 截断+阶段列偏移恒定）", l1.includes("计划") && l2.includes("执行审核") && phAt(l1, "计划") === phAt(l2, "执行审核"), JSON.stringify([l1, l2]));
+  const e = buildRows(null, "boom", [], "", T);
+  ok("P11 错误视图红色", e.t[1].includes("boom") && e.c[1] === T.text.feedback.error, e.t[1]);
+  const n = buildRows(null, null, [], "", T);
+  ok("P11 无状态视图不崩", n.t[1].includes("wf"), n.t[1]);
+  const inactive = buildRows({ active: false }, null, [l1], "本项目", T);
+  ok("P11 其他任务视图呈现", inactive.t[1].includes("本项目") && inactive.t[2].includes(l1), inactive.t[2]);
+}
+
+// ── P12: 表格真渲染复核——静态树（零信号）captureCharFrame，OpenTUI 自身宽度计算验证列对齐 ──
+{
+  const ot2: any = await import("@opentui/solid");
+  const s = buildRows({ active: true, slug: "todo", mode: "daily", size: "S", phase: "building", rounds: {}, artifacts: {}, testPlanWritten: false, testReportVerdict: null }, null, [], "", theme);
+  try {
+    const setup = await ot2.testRender(() => {
+      const b = ot2.createElement("box");
+      ot2.setProp(b, "width", "100%");
+      ot2.setProp(b, "flexDirection", "column");
+      for (let i = 0; i < s.t.length; i++) {
+        const tx = ot2.createElement("text");
+        ot2.setProp(tx, "truncate", true);
+        ot2.insert(tx, [s.t[i]]);
+        ot2.insert(b, tx);
+      }
+      return b;
+    }, { width: 50, height: 24 });
+    await setup.flush();
+    const frame: string = setup.captureCharFrame();
+    ok("P12 帧含表头与阶段行", frame.includes("阶段") && frame.includes("需求录入") && frame.includes("交付"), JSON.stringify(frame.slice(0, 120)));
+    const stAt = (ln: string) => { const m = /(完成|进行|待办)/.exec(ln); return m ? dispW(ln.slice(0, m.index)) : -1; };
+    const stageLines = frame.split("\n").filter((ln: string) => /0[1-6] /.test(ln) && /(完成|进行|待办)/.test(ln));
+    ok("P12 真渲染 6 阶段行齐全", stageLines.length === 6, `n=${stageLines.length}`);
+    ok("P12 真渲染状态列对齐（偏移=14）", stageLines.every((ln: string) => stAt(ln) === 14), JSON.stringify(stageLines.map(stAt)));
+    ok("P12 真渲染行宽 24 cell（trimEnd 后）", stageLines.every((ln: string) => dispW(ln.trimEnd()) === 24), JSON.stringify(stageLines.map((ln: string) => dispW(ln.trimEnd()))));
+    ok("P12 帧含轮次与提示行", frame.includes("0/3") && frame.includes("/wf:status"));
+    await setup.dispose();
+  } catch (e: any) {
+    ok("P12 表格真渲染不崩", false, e?.message);
+  }
 }
 
 console.log("（清理 setup 定时器与订阅）");

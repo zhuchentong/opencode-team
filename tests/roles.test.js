@@ -67,7 +67,10 @@ test("syncDecision：hash 同→skip；hash 异→write；无标记→unmanaged�
 });
 
 test("syncRoles：临时目录文件同步——保 frontmatter、写前备份、hash 跳过、无标记不覆盖", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-roles-"));
+  // M16-r38：rolesDir=agents/wf（7 subagent）；leader 目标在上级 agents/workflow.md（ID=workflow）。
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-roles-"));
+  const dir = path.join(base, "wf");
+  fs.mkdirSync(dir);
   try {
     const fm = '---\ndescription: 测试角色\nmode: subagent\npermissions:\n  - { action: edit, resource: "*", effect: deny }\n---\n';
     // planner：已托管但陈旧 → 应 write + 备份 + 保 frontmatter
@@ -76,6 +79,9 @@ test("syncRoles：临时目录文件同步——保 frontmatter、写前备份�
     // tester：无标记（用户自有）→ 不覆盖
     fs.writeFileSync(path.join(dir, "tester.md"), fm + "用户自定义 tester 内容");
     // builder：文件缺失 → missing（不自动创建）
+    // leader（M16-r38）：目标=上级 workflow.md，陈旧托管 → write（锚定新路径）
+    const staleLeader = renderRole("leader").replace("你是 leader", "你是旧版 leader");
+    fs.writeFileSync(path.join(base, "workflow.md"), fm + staleLeader);
 
     const report = syncRoles(dir, { backup: true });
 
@@ -93,27 +99,38 @@ test("syncRoles：临时目录文件同步——保 frontmatter、写前备份�
     const tester = fs.readFileSync(path.join(dir, "tester.md"), "utf8");
     assert.ok(tester.includes("用户自定义 tester 内容"), "无标记文件不得覆盖");
 
+    // leader 落在上级 workflow.md（而非 dir/leader.md）且被更新
+    const leader = fs.readFileSync(path.join(base, "workflow.md"), "utf8");
+    assert.ok(leader.startsWith(fm), "leader frontmatter 保留");
+    assert.ok(leader.includes("你是 leader") && !leader.includes("你是旧版 leader"), "leader body 更新");
+    assert.ok(!fs.existsSync(path.join(dir, "leader.md")), "leader 不再写 rolesDir/leader.md");
+
     // 报告结构
     const byName = Object.fromEntries(report.map((r) => [r.name, r.action]));
     assert.equal(byName.planner, "write");
     assert.equal(byName.tester, "unmanaged");
     assert.equal(byName.builder, "missing");
+    assert.equal(byName.leader, "write");
 
-    // 幂等：再跑一次 planner 应 skip（hash 已一致）
+    // 幂等：再跑一次 planner/leader 应 skip（hash 已一致）
     const report2 = syncRoles(dir, { backup: true });
     const byName2 = Object.fromEntries(report2.map((r) => [r.name, r.action]));
     assert.equal(byName2.planner, "skip", "hash 一致应跳过，避免无谓热载");
+    assert.equal(byName2.leader, "skip", "leader hash 一致应跳过");
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
   }
 });
 
 test("roleSyncStatus：managed/stale/unmanaged/missing 四态判定（漂移守卫）", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-rolestatus-"));
+  // M16-r38：leader 目标=rolesDir 上级 workflow.md；其余在 rolesDir 下。
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-rolestatus-"));
+  const dir = path.join(base, "wf");
+  fs.mkdirSync(dir);
   try {
     const fm = "---\ndescription: x\nmode: subagent\n---\n";
-    // leader：最新托管 → managed
-    fs.writeFileSync(path.join(dir, "leader.md"), fm + renderRole("leader"));
+    // leader：最新托管 → managed（落在上级 workflow.md）
+    fs.writeFileSync(path.join(base, "workflow.md"), fm + renderRole("leader"));
     // planner：托管但陈旧 → stale
     fs.writeFileSync(path.join(dir, "planner.md"), fm + renderRole("planner").replace("你是计划者", "旧版"));
     // tester：无标记 → unmanaged
@@ -125,7 +142,7 @@ test("roleSyncStatus：managed/stale/unmanaged/missing 四态判定（漂移守�
     assert.equal(st.tester, "unmanaged");
     assert.equal(st.builder, "missing");
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
   }
 });
 
