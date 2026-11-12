@@ -56,6 +56,9 @@ export interface WfState {
   //   edit 时插件自动捕获其 sessionID，guidance 重委派点渲染完整 ID 供 leader 逐字续用——
   //   修「leader 凭记忆复述长随机 ses_ ID 被截断→重试→冷启动」。仅服务默认单会话形态；多 builder 并行走 lanes。
   roleSessions?: Record<string, { sessionID: string; at: string }>;
+  // M16-r43：档位跟随上次记录的会话基座（Session.Info.model 的 providerID/id）——切模型检测依据，
+  //   变化时审计 tier-model-switch 并清空 roleSessions（旧子会话=旧模型，防混模型续用）。
+  tierBase?: { providerID: string; id: string; variant?: string; at: string };
   artifacts?: Record<string, { at?: string; bytes?: number }>;
   log?: FlowLogEntry[];
   // M16-r39 T01：log 单调序号（logAdd 递增）——save 按序号差增量追 events，

@@ -18,6 +18,11 @@ import { guidance, entryValue } from "./guidance.ts"; // M16-r39 T08：guidance 
 import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
+import {
+  TIER_MAP, TIER_TRIGGERS, TIER_ROLES, syncTierAgents, readTierAgents,
+  type ModelRef,
+} from "./model-tier.ts"; // M16-r43：动态档位跟随
+import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
@@ -195,6 +200,62 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
   };
   // exec 通道（TUI 主轨经 RPC）：按名调度原编排 + publish，不注入聊天（本地渲染返回值）。
   const byName: Record<string, (a: any) => Promise<unknown>> = {};
+  const fsIo = {
+    mkdir: (p: string) => mkdir(p, { recursive: true }),
+    readFile: (p: string) => fsReadFile(p, "utf8"),
+    writeFile: (p: string, c: string) => fsWriteFile(p, c, "utf8"),
+  };
+
+  // ── M16-r43：动态档位跟随 ──────────────────────────────────────────────
+  // 流转/intake 成功后：读会话所选模型（Session.Info.model = Model.Ref）+ 该模型可用 variants
+  // （ctx.model.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
+  // 项目级 agent 文件（.opencode/agents/wf/<role>.md）。基座变化 → 审计 tier-model-switch +
+  // 清空 roleSessions（旧子会话=旧模型，防混模型续用）+ 返回提示句（guarded 附加到返回文本）。
+  // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认关（opt-in）。
+  const tierCheck = async (cmd: string, a: any): Promise<string> => {
+    if (ctx?.options?.tierAgents !== true) return "";
+    if (!TIER_TRIGGERS.has(cmd)) return "";
+    const sid = String(a?.sessionID ?? "");
+    const st = await load(sid);
+    if (!st || !st.slug) return ""; // 无活动任务（含 reset 后）→ 整段跳过
+    const sess = await ctx.session.get({ sessionID: sid }).catch(() => null);
+    const ref = sess?.model as ModelRef | undefined;
+    if (!ref?.id || !ref?.providerID) return "";
+    let variantIds: string[] = [];
+    try {
+      const ml = await ctx.model?.list?.();
+      const arr: any[] = Array.isArray(ml) ? ml : (ml?.data ?? ml?.models ?? []);
+      const hit = arr.find((m: any) => m?.id === ref.id && m?.providerID === ref.providerID)
+        ?? arr.find((m: any) => m?.id === ref.id);
+      variantIds = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
+    } catch { /* 空集 → resolveTierRef 返回 null → 跳写 */ }
+    const tiers = { ...TIER_MAP, ...ctx?.options?.tiers };
+    const dir = await resolveProjectDir(st, sid);
+    const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
+    const at = new Date().toISOString();
+    const notes: string[] = [];
+    // 切模型检测：基座变化 → 审计 + 清空 roleSessions（仅首次登记 tier-init，不清会话）
+    const prev = st.tierBase;
+    if (!prev || prev.providerID !== ref.providerID || prev.id !== ref.id) {
+      st.tierBase = { providerID: ref.providerID, id: ref.id, variant: ref.variant, at };
+      const baseKey = `${ref.providerID}/${ref.id}`;
+      if (prev) {
+        st.roleSessions = {};
+        notes.push(`🧠 档位跟随：基座模型切换为 ${baseKey}，流程角色项目级档位已重写；旧子会话为旧模型（${prev.providerID}/${prev.id}），重委派一律新建——勿凭记忆续接旧 sessionID。`);
+      }
+      notes.push(`__AUDIT__tier-model-switch:${baseKey}${prev ? `（原 ${prev.providerID}/${prev.id}）` : ""}`);
+    }
+    const actions = rows.filter((r) => !r.startsWith("tier-keep"));
+    if (actions.length) notes.push(`__AUDIT__${actions.join(" ")}`);
+    if (notes.length) {
+      for (const n of notes) {
+        if (n.startsWith("__AUDIT__")) logAdd(st, { at, cmd, from: st.phase, to: st.phase, ok: true, note: n.slice(9) });
+      }
+      await save(st);
+    }
+    return notes.filter((n) => !n.startsWith("__AUDIT__")).join("\n");
+  };
+
   if (runner) {
     runner.run = async (name: string, a: any) => {
       const base = byName[name];
@@ -230,7 +291,14 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
             return rej;
           }
         }
-        return base(a);
+        const out = await base(a);
+        // M16-r43：动态档位跟随——流转/intake 成功后校验会话基座模型并同步项目级档位文件。
+        // fail-open：任何异常不阻断流转（与 r29 告警不阻断同模式）；options.tierAgents 默认关。
+        try {
+          const note = await tierCheck(def.name, a);
+          if (note && typeof out === "string") return `${out}\n${note}`;
+        } catch { /* fail-open（审计在 tierCheck 内部 best-effort） */ }
+        return out;
       };
       byName[def.name] = guarded;
       editor.add({
@@ -312,7 +380,16 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
           if (!ctx.agent?.list) return `wf 角色：宿主未提供 ctx.agent API（v2.2.6 实测以 agent-probe 为准）；可用 @<角色> 手动验证`;
           const res = await ctx.agent.list();
           await probeOnce(a?.sessionID, "agent-probe", { shape: Array.isArray(res) ? "array" : Object.keys(res ?? {}) });
-          return pingReport(res) + roleGuardText(ctx?.options);
+          let tierLine = "";
+          // M16-r43：档位跟随生效视图——读项目级派生文件（/api/agent 序列化不含 model，读文件为准）
+          try {
+            const sid = String(a?.sessionID ?? "");
+            const st = await load(sid);
+            const dir = await resolveProjectDir(st, sid);
+            const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
+            if (rows.length) tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
+          } catch { /* 无任务/无文件 → 不展示 */ }
+          return pingReport(res) + roleGuardText(ctx?.options) + tierLine;
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }

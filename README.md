@@ -67,6 +67,7 @@ server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ �
 server/guard-hook.ts    execute.before 越权阻断（含 shell 门控；拒绝消息附下一步命令指引）
 server/hint.ts          自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示
 server/observe.ts       观测通道：debugDirFor/probeOnce（WF_DEBUG=1 或 options.probe 开启，默认关）
+server/model-tier.ts    动态档位跟随（M16-r43）：TIER_MAP/降级链/项目级派生文件读写（纯函数+IO 分离）
 server/lib.ts           纯逻辑+领域类型单一来源：FLOWS/GATES/KIND_FILES/evaluateTransition/…（bun test 覆盖）
 shared/phases.ts        阶段定义单一来源（server/tui 共用，含 STAGE_ORDER 直接导出）
 shared/rpc.ts           RPC 契约（Rpc.define；server/TUI 各进程 import 同一源文件，tests 快照守卫防漂移）
@@ -93,6 +94,8 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | `allowRegexps` | `[]` | 追加放行正则（字符串形式） |
 | `limits` | — | 覆盖循环上限，如 `{ "plan_review": 2 }`（仅正整数生效，guidance/状态/诊断同步显示） |
 | `hint` | `true` | 自动激活：用户消息命中工作流意图关键词且会话无 wf 状态时，注入一次性 `/wf:intake` 提示 |
+| `tierAgents` | `false` | 动态档位跟随（M16-r43）：流转时读会话所选模型，按 `tiers` 为各流程角色写项目级 `.opencode/agents/wf/<role>.md`。**前置：基座模型须在宿主 opencode.jsonc 声明 variants（body 直注 `reasoning_effort`——openai-compatible 包不转发 settings.reasoningEffort，真机抓包实证）** |
+| `tiers` | TIER_MAP | 档位映射覆盖（默认 planner/planner-reviewer/tester/builder-reviewer/fixer=`high`，builder/learner=`off`） |
 
 ## 项目级角色定制（overrides）
 
@@ -113,22 +116,26 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 4. 终端切到后台再触发一次命令 → 系统级通知弹出（attention.notify；仅 ⚠️/❌/FAIL 类重要信号）
 5. （调试期可选）`WF_DEBUG=1 ./scripts/tui-restart.sh` → 探针写 `.workflow/_debug/tui-refresh.log`（loaded/slot-render/build/recv 序列）
 
-## 角色模型路由（待选型）
+## 角色档位跟随（M16-r43 动态路由）
 
-7 个 `wf/*` 角色由 OpenCode agents（`~/.config/opencode/agents/wf/`）定义。按 omo-slim 的「质量/速度/成本」路由思路，结合本机可用模型的**建议对照表**（未启用，选定后可在 agents 前置配 `model`，或后续由插件 `options.agentModels` 落地）：
+`options.tierAgents: true` 启用后：流转时读会话所选模型（`Session.Info.model` = Model.Ref），按档位映射为各流程角色写**项目级** `.opencode/agents/wf/<role>.md`（`model: <基座>#<档位>`；frontmatter 仅 mode+model，空 body 保留全局角色提示词——P3 探针实证），宿主热载即效。**切模型即全角色跟随**（5h 用量上限场景：glm 到顶切 qwen，下一次 `wf_command` 后新委派自动用新基座对应档位）；基座变化审计 `tier-model-switch` 并清空 roleSessions，提示句附加到命令文本（旧子会话=旧模型，重委派一律新建）。
 
-| 角色 | 职责 | 选型思路 | 本机候选 |
-|---|---|---|---|
-| leader（当前会话） | 编排/调度/裁决 | 最强推理 | `glm-5.3-flash (high/max)` |
-| wf/planner | 需求分析与任务分解 | 强规划 | `glm-5.3-flash (high)` |
-| wf/planner-reviewer | 计划五角度审查 | 强推理 | `glm-5.3-flash (high)` |
-| wf/tester | 可行性/红测试/验收 | 可靠编码+测试素养 | `mimo-v2.6-pro` |
-| wf/builder | worktree 内 TDD 执行 | 快而稳的执行模型 | `qwen3.8-flash` / `mimo-v2.6-flash` |
-| wf/builder-reviewer | 完成度/质量审核 | 强推理 | `glm-5.3-flash (high)` |
-| wf/fixer | 跨 lane 修复 | 强调试 | `glm-5.3-flash (max)` |
-| wf/learner | 复盘沉淀 | 便宜快速 | `mimo-v2.6-flash` / `qwen3.8-flash` |
+- **默认档位映射**（`options.tiers` 覆盖）：planner/planner-reviewer/tester/builder-reviewer/fixer=`high`，builder/learner=`off`；workflow（primary）天然跟随会话模型，不接线
+- **降级链**：请求档不在基座 variants 集合 → 强度序（off<low<medium<high<xhigh<max）向下取最近；无更低 → 继承会话默认档；**variants 为空 → 跳写**（纯继承，少 7 个派生文件）
+- **variants 声明是宿主配置前置义务**（插件不创建）：tu-coding 网关抓包实证——`settings.reasoningEffort` **不转发**（openai-compatible 包），必须 variant **body 直注** `reasoning_effort`；GLM/qwen 四档（off=none/low/high/max）已真机验证
+- **档位生效视图**：`/api/agent` 序列化不含 model 键——读项目级派生文件（`wf:ping` 附加行）或委派后子会话的 `Session.Info.model`
 
-`/wf:ping` 可随时查看各角色当前注册状态与生效模型。
+```jsonc
+// 宿主 opencode.jsonc 变体声明样例（tu-coding 网关实测写法）
+"providers": {
+  "tu-coding": { "models": { "glm-5.3-flash": { "variants": [
+    { "id": "off",  "body": { "reasoning_effort": "none" } },
+    { "id": "low",  "body": { "reasoning_effort": "low" } },
+    { "id": "high", "body": { "reasoning_effort": "high" } },
+    { "id": "max",  "body": { "reasoning_effort": "max" } } ] } } }
+}
+// 插件 options：{ "tierAgents": true, "tiers": { "wf/builder": "off" } }
+```
 
 > **写法陷阱（借鉴 my-opencode-deepseek-config 真机实证，DeepSeek 场景验证）**：agent frontmatter 的 `options.*` 装不下 provider 设置（如 `reasoningEffort` 无效——`options` 只落到 `request.body`），思考档位须在**模型层**声明；headless `opencode run` 不读 `agent.model`（主会话按全局 `model` 解析）；子会话/命令绑定的一次性调用按 `agent.model` 解析。将来启用 `options.agentModels` 落地本表时，须先真机核验 GLM 的对应参数面再写 frontmatter。
 
@@ -202,6 +209,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 - M16-r40 会话复用可靠化 A 层（真机实证：leader 凭记忆复述长 ses_ ID→截断→宿主拒→反复重试→冷启动，慢）：`WfState.roleSessions`（角色→{sessionID,at}，intake 重置清空防跨任务复用）；`trackRoleSession` 纯函数（仅 wf/* 非 leader + `/^ses_[A-Za-z0-9]+$/` 形状，同 ID 去重免 save 抖动）；登记双通道——artifact-tool.mark 搭 withStateRetry save 便车（planner/reviewer/tester/builder-reviewer/learner）+ guard-hook edit 分支（builder/fixer 只改码不写产物）；guidance 7 重委派点渲染完整 ID「逐字复制到 subagent sessionID 参数勿截断」；wf:status 显示 roleSessions。**边界**：登记时机=子会话首次调插件工具/编辑（非派发即捕获）；每角色单值 last-write-wins（多 lane 仅存最近）；渲染为软约束 leader 仍可能截断→r41 B 层兜底
 - M16-r41 会话复用可靠化 B 层（续接自愈守卫，借鉴 omo-slim「不靠模型抄对 ID」+ terminal-gate 思想）：guard-hook 在 edit/shell 过滤**前**加 subagent/task 分支（仅 `isLeader` 双别名）——省略 sessionID(新建)/ID 正确/无登记/**全形状非前缀不符(多 lane)**→放行；**形状非法 OR 登记 ID 真前缀**（截断）→ throw 附完整 ID 一次性纠正（`GATE_ERR` 穿透 fail-open，S1）+ 审计 `session:correct` + 附子会话存活状态（session.get time.busy/idle：运行中警示勿续用防静默分叉 / 已完成可安全续用）。guidance reuseLine + leader.md 补「仅续用已完成子会话」。**探针实证**：hook 确对 subagent 触发（非静默 no-op）；session.get 有 time.busy/idle 无 parentID。**边界**：每角色单值→仅纠正真前缀/非法形状，全形状不符放行交宿主归属校验（多 lane 安全）；存活附注 best-effort（取不到 time 不附注不报错）；**改参自愈/execute.after 机械捕获经评估暂缓**（改参 v1 失效 v2 未证实风险高、throw 已一次收敛；A 层捕获已可靠、execute.after 注册会覆盖测试 mock 的 before hook）
 - M16-r42 借鉴引入批（源：znlgis/my-opencode-deepseek-config，omo-slim 同源实践）：**两级审查**——planner-reviewer/builder-reviewer 角色模板加初检 Abbreviated（默认直接出完整报告，干净结果不升级）+ 升级触发清单（计划域：架构冲突/粒度不可执行/关键风险漏识别；执行域：跨≥3模块/安全敏感路径/critical-major 无法就地确认/用户要求）+ r≥2 前轮 findings 按未验证线索确认销项；guidance review/build_review 各渲染一行分级提示。**拒绝契约**——planner/tester/builder/fixer 模板各加「不处理→指路」。**guidance 易变区纪律**——`entryValue` head 行殿后、标题去轮次改尾部「轮次：第 r/N 轮」行、reuseLines 移尾（daily r≥2 条件保留）；done=DONE_ENTRY 在前 head 殿后。**intake 澄清纪律**——daily/full 两分支加「一次一问、多选优先、歧义收敛；没听懂→一句话重述」。**文档**——新增 docs/UPGRADE.md（不变量/基线表/宿主核对点/验收命令）；README 加配置变更点速查表+模型路由写法陷阱注记。**边界**：审查分级为 prompt 级软契约不落 state（`/wf:status` 无分级记录，观测走 review/build-review 产物正文）；roles 改动生效须 `syncRoles=true`（本机已开）+ `/wf:ping` 查漂移；learner/leader 模板未重复加拒绝契约（已固化，精简优先于新增）
+- M16-r43 动态档位跟随（5h 用量上限场景：切基座模型后流程角色档位自动跟随）：`server/model-tier.ts`（TIER_MAP/强度序降级/派生文件内容/读写分离）+ guarded 单一强制点接 `tierCheck`（流转+入口触发，只读集豁免；`options.tierAgents` 默认关）+ `WfState.tierBase` 切模型检测（变化→审计 `tier-model-switch` + 清 roleSessions + 提示句附加命令文本）+ `wf:ping` 档位生效行。**探针实证**：`Session.Info.model`=Model.Ref{id,providerID,variant?}；`GET /api/model` 含 variants；项目级 `.opencode/agents/wf/probe.md` → ID `wf/probe`、空 body 保留全局 system/description、frontmatter model#variant 端到端生效（子会话 model.variant=off）；tu-coding `settings.reasoningEffort` **不转发**（抓包：variant body 直注 `reasoning_effort` 进请求体）——宿主 variants 已改 body 直注（GLM/Qwen off/low/high/max、qwen4 low/medium/xhigh）。**边界**：`ctx.model.list` 形状未实证（fail-soft 空集→跳写）；无标记项目文件不覆盖（unmanaged 告警）；同项目多会话并发选不同模型后写赢；写失败 fail-open 不阻断流转；deepseek 网关无渠道未声明；派生文件 body 必须空（非空替换全局 system）；切模型后凭记忆续接旧子会话守卫不拦（无登记→放行），靠提示句软约束
 - `transition` 在 save 连续冲突（3 次）失败时回滚 entry 指引（T09），但 reports 槽/事件通道的时间戳不回滚——用户以 `/wf:status` 为准
 
 ## 设计借鉴对照
@@ -218,6 +226,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 | omo-slim 项目级自定义 | `.workflow/overrides/` 约定 | ✅ 采纳 |
 | omo-slim 续接不靠模型抄 ID + terminal-gate | roleSessions 自动登记 + guidance 渲染完整 ID（A 层 r40）+ subagent 截断自愈守卫 + 存活附注（B 层 r41） | ✅ 采纳（task_revive 本体 v2 已废弃不借；父归属宿主原生已校验，不借 adoption/lease/job-board） |
 | znlgis/my-opencode-deepseek-config（omo-slim 同源纯配置实践） | 两级审查+升级触发+线索确认（roles + guidance）；角色拒绝契约；guidance 易变区纪律（易变殿后）；docs/UPGRADE.md 升级核对流程 | ✅ 采纳（M16-r42）；thinking tiers / skill 名册预算 / 权限基线属宿主层，不引入 |
+| 同上·thinking tiers（静态模型层档位） | M16-r43 动态档位跟随：会话所选基座 + TIER_MAP 派生项目级 agents（variants body 直注 reasoning_effort） | ✅ 变体采纳（5h 上限切模型场景驱动；档位词汇同源 off/low/high/max；非 DeepSeek 静态钉死） |
 | Council 共识 / marketplace / multiplexer | — | ❌ 不照搬（场景/宿主不符） |
 
 ## 许可
