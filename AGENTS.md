@@ -22,6 +22,7 @@
 - `tui/index.tsx`：流派 A 低层原语渲染，**禁 JSX**（harness 静态守卫全文件禁 `<box`/`<text`）；slot render 顶层零响应式、唯一动态点是容器内一条 `insert(accessor)`。此结构真机崩溃形态见 README「宿主契约备忘」，勿"顺手重构"。
 - `server/index.ts` 仅按依赖序组装接线，逻辑都在各模块内。
 - `server/model-tier.ts` 动态档位跟随（M16-r43）：TIER_MAP/强度序降级/项目级派生文件（纯函数+IO 分离，bun test 直测）。
+- `server/skills.ts` skill 托管同步（M16-r45）：仓库 `skills/session-lookup/SKILL.md` 单一来源，setup 同步到宿主全局 `~/.config/opencode/skills/`（默认开启 `syncSkills`，显式 false 关闭；备份/尾行托管标记/hash 跳过同 roles 模式）。
 - 完整「想改什么 → 改哪个文件」映射见 README「配置变更点速查」表；升级宿主/改流程语义先过 `docs/UPGRADE.md`。
 
 ## 宿主联动 gotchas（2.2.6 真机实证）

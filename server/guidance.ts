@@ -3,7 +3,7 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LIMITS, isDaily, budgetFor, type Limits, type WfState } from "./lib.ts";
+import { LIMITS, isDaily, budgetFor, SID_ALIAS_USAGE, type Limits, type WfState } from "./lib.ts";
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -48,7 +48,8 @@ function leanLine(st: WfState): string | null {
 function reuseLine(st: WfState, agent: string): string | null {
   const sid = st.roleSessions?.[agent]?.sessionID;
   if (!sid) return null;
-  return `续用 ${agent} 子会话：sessionID=${sid}（仅续用已完成的子会话；把本 ID 逐字复制到 subagent 的 sessionID 参数，勿凭记忆复述或截断；续用失败立即新建，勿反复重试）。`;
+  // M16-r45：别名优先（零转录）——完整 ID 保留渲染作后备（guidance/entry 抗 compaction 语义不变）
+  return `续用 ${agent} 子会话：subagent 传 ${SID_ALIAS_USAGE} 即续用登记会话（完整 ID=${sid} 亦可逐字复制；仅续用已完成的子会话；续用失败立即新建，勿反复重试）。`;
 }
 function reuseLines(st: WfState, ...agents: string[]): string[] {
   return agents.map((a) => reuseLine(st, a)).filter((x): x is string => x !== null);

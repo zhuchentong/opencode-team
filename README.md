@@ -157,6 +157,8 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | RPC 契约 | `shared/rpc.ts` | 改形状必须同步 `tests/rpc-drift.test.js` 快照 |
 | TUI 渲染 / 侧边栏 | `tui/index.tsx` → `bun run build` | dist/tui.js 入库；结构冻结见 harness P4 |
 | 角色行为 / 分级审查触发 / 拒绝契约 | `roles/*.md` | syncRoles 同步宿主；改后 `/wf:ping` 查漂移 |
+| session-lookup skill 内容 | `skills/session-lookup/SKILL.md` | syncSkills（默认开启）同步宿主全局 skills 目录；改后需 `/reload` 或新会话生效 |
+| 续接别名语法 / 近似截断阈值 | `server/lib.ts`（resolveSidAlias / isNearTruncation） | guidance/leader.md/SKILL.md 文案同源靠测试内容锚 |
 | 产物预算 | `server/lib.ts`（ARTIFACT_BUDGET_KB / _S_KB） | guidance 双通道渲染 |
 | 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |

@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import {
   VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
   evaluateTransition, promptText, diagnoseReport, pingReport,
+  SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
   type WfState,
 } from "./lib.ts";
 import { guidance, entryValue } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
@@ -397,34 +398,61 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
     });
     add({
       name: "wf:lane",
-      description: `登记/查看 lane：set <Tnn> <子会话ID> [worktree] / rm <Tnn> / 默认 ls（${VERSION}）`,
+      description: `登记/查看 lane：set <Tnn> <子会话ID|@别名> [worktree] / rm <Tnn> / 默认 ls（${VERSION}）`,
       execute: async (a: any) => {
         const t = promptText(a.prompt).trim().split(/\s+/);
         const op = (t[0] ?? "ls").toLowerCase();
+        const id = String(t[1] ?? "");
+        const wt = String(t[3] ?? "");
+        const st0 = await load(a.sessionID); // lane 挂在 leader 会话自持状态上
+        if (!st0) return "❌ 本会话无活动任务。lane 登记需先 /wf:intake <slug>。";
+        // M16-r45：set 的别名/前缀/存在性解析前置（applyOp 须同步可重放）——基于本次快照解析出最终 sid，
+        // stale-rev 重放以解析结果为准；解析含宿主存在性校验，截断/失真 ID 在写入口即拒（防坏 ID 入库）。
+        let sid = "";
+        let setNote = "";
+        if (op === "set") {
+          if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(id)) return `❌ lane ID 非法：「${id}」（用 T01 这类：字母数字开头，≤32 字符，仅 A-Za-z0-9._-）`;
+          const raw = String(t[2] ?? "");
+          if (!raw) return "❌ 用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径]";
+          if (raw === SID_ALIAS_AUTO || raw.startsWith("@")) {
+            const res = resolveSidAlias(raw, { roleSessions: st0.roleSessions, lanes: st0.lanes });
+            if (!res.ok) return `❌ 别名解析失败：${res.reason}${res.candidates?.length ? `（可用：${res.candidates.join(", ")}）` : ""}`;
+            sid = res.sid;
+            setNote = `｜别名 ${raw} → ${sid}`;
+          } else {
+            const known = [...new Set([
+              ...Object.values(st0.roleSessions ?? {}).map((v) => v?.sessionID).filter(Boolean),
+              ...Object.values(st0.lanes ?? {}).map((v) => v?.sessionID).filter(Boolean),
+            ] as string[])];
+            const comp = completeSidPrefix(raw, known);
+            if (comp.kind === "ambiguous") return `❌ 子会话 ID 前缀不唯一（${(comp.candidates ?? []).join(", ")}）——请用完整 ID 或加长前缀；lane 未变更。`;
+            sid = comp.kind === "completed" ? (comp.sid as string) : raw;
+            if (comp.kind === "completed") setNote = `｜前缀补全 ${raw} → ${sid}`;
+            // 宿主存在性校验（fail-open：宿主 API 不可用时不拦截，交由续接时的归属校验兜底）
+            if (typeof ctx?.session?.get === "function") {
+              const sess = await ctx.session.get({ sessionID: sid }).catch(() => null);
+              if (!sess) return `❌ 子会话不存在：「${sid}」（截断/已清库？重取完整 ID 或用 @别名）；lane 未变更。`;
+            }
+          }
+        }
         // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm（≤3 次），
         // 返回错误串=操作不成立，null=已写入 st.lanes
         const applyOp = (st: WfState): string | null => {
           st.lanes = st.lanes ?? {};
           if (op === "set") {
-            const id = String(t[1] ?? "");
-            const sid = String(t[2] ?? "");
-            const wt = String(t[3] ?? "");
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(id)) return `❌ lane ID 非法：「${id}」（用 T01 这类：字母数字开头，≤32 字符，仅 A-Za-z0-9._-）`;
-            if (!/^ses_[A-Za-z0-9]+/.test(sid)) return `❌ 子会话 ID 非法：「${sid}」（应形如 ses_xxx，来自 subagent 返回值）`;
+            if (!/^ses_[A-Za-z0-9]+$/.test(sid)) return `❌ 子会话 ID 非法：「${sid}」（应形如 ses_xxx，来自 subagent 返回值/@别名）`;
             st.lanes[id] = { sessionID: sid, worktree: wt || null, at: new Date().toISOString() };
             return null;
           }
-          const id = String(t[1] ?? "");
           if (!(id in st.lanes)) return `❌ 没有 lane「${id}」。当前：${Object.keys(st.lanes).join(", ") || "(空)"}`;
           delete st.lanes[id];
           return null;
         };
-        const st0 = await load(a.sessionID); // lane 挂在 leader 会话自持状态上
-        if (!st0) return "❌ 本会话无活动任务。lane 登记需先 /wf:intake <slug>。";
         if (op !== "set" && op !== "rm") { // ls（默认）只读，不落盘
           const lanes = st0.lanes ?? {};
           const ks = Object.keys(lanes);
-          if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID> [worktree路径]";
+          if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径]";
           return ks.map((k: string) => {
             const v = lanes[k];
             return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}（${String(v.at ?? "").slice(0, 19)}）`;
@@ -442,7 +470,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
           return `❌ 状态保存失败（${res.reason}），lane 变更未生效，请重试。`;
         }
         await emitUpdated(res.st);
-        return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}`;
+        return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}${setNote}`;
       },
     });
     add({

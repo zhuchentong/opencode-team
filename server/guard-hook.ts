@@ -10,7 +10,7 @@
 // P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
 import * as fs from "node:fs";
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, trackRoleSession, isLeader } from "./lib.ts";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
 // probe 4：session.get 返回形状摘要（模块级纯函数，避免每次调用重建；供一次性取证）
@@ -32,6 +32,7 @@ export function registerGuardHook(ctx: any, deps: any) {
   // M16-r41 B 层：subagent 形状探针一次性开关（ERR-002 先探形状再使用；existsSync 自禁用，非 P6 常态探针）
   let subagentProbed = false;
   let sessionGetProbed = false;
+  let rewriteProbed = false; // M16-r45：别名改写生效性取证一次性开关（真机核对 exec-rewrite-probe.json）
   // M16-r44：question 入参形状一次性探针（方案确认记账的形状取证；同 subagent-probe 模式）
   let questionProbed = false;
 
@@ -98,15 +99,49 @@ export function registerGuardHook(ctx: any, deps: any) {
         const target = String(args.agent ?? "");
         const passedRaw = args.sessionID;
         if (passedRaw == null || String(passedRaw) === "") return; // 省略 sessionID=新建，不干预
+        const passed = String(passedRaw);
+
+        // ── M16-r45 A：别名续接——"auto"/"@Tnn"/"@wf/xx" 服务端解析改写，零转录（消灭复述失真源）──
+        // 解析失败 loud-fail（勿静默新建：leader 的续用意图会丢）；改写入参 args 引用宿主将执行的对象。
+        if (passed === SID_ALIAS_AUTO || passed.startsWith("@")) {
+          const res = resolveSidAlias(passed, { role: target, roleSessions: st.roleSessions, lanes: st.lanes });
+          if (!res.ok) {
+            logAdd(st, { at: new Date().toISOString(), cmd: "session:alias", tool: toolName, detail: `${target}: ${passed} ✗ ${res.reason}`, from: st.phase, to: st.phase, ok: false, note: "alias-rejected" });
+            try { await save(st); } catch { /* 取证 best-effort */ }
+            throw new Error(`${GATE_ERR} 别名续接失败：${res.reason}${res.candidates?.length ? `（可用：${res.candidates.join(", ")}）` : ""}`);
+          }
+          // 一次性取证：记录改写尝试与形状——真机核对该文件 + 后续 subagent 是否命中改写后 sessionID
+          if (!rewriteProbed) {
+            rewriteProbed = true;
+            try {
+              let dir = process.cwd();
+              try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+              const dbg = `${dir}/.workflow/_debug`;
+              if (!fs.existsSync(`${dbg}/exec-rewrite-probe.json`)) {
+                fs.mkdirSync(dbg, { recursive: true });
+                fs.writeFileSync(`${dbg}/exec-rewrite-probe.json`, JSON.stringify({
+                  at: new Date().toISOString(), tool: toolName, target, passed,
+                  resolved: res.sid, via: res.via, argKeys: Object.keys(args),
+                  note: "验证宿主是否尊重 execute.before 的 input.input 就地改写（若不尊重→别名降级为 throw 纠正）",
+                }, null, 2));
+              }
+            } catch { /* 探针 best-effort */ }
+          }
+          logAdd(st, { at: new Date().toISOString(), cmd: "session:alias", tool: toolName, detail: `${target}: ${passed} → ${res.sid}（${res.via}）`, from: st.phase, to: st.phase, ok: true, note: "aliased" });
+          try { await save(st); } catch { /* 取证 best-effort */ }
+          args.sessionID = res.sid; // 就地改写
+          return;
+        }
+
         const tracked = st.roleSessions?.[target]?.sessionID;
         if (!tracked) return; // 该角色无登记，不干预
-        const passed = String(passedRaw);
         if (passed === tracked) return; // ID 正确，放行
         const shapeOk = /^ses_[A-Za-z0-9]+$/.test(passed);
         const isPrefix = tracked.startsWith(passed); // passed≠tracked 且非空 → startsWith 即真前缀
-        if (shapeOk && !isPrefix) return; // 全形状非前缀不符→宿主归属校验（多 lane/幻觉兜底）
-        // 形状非法 OR 真前缀截断 → 一次性纠正：附完整 ID（GATE_ERR 标记确保穿透 fail-open，S1）
-        logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: "corrected" });
+        const fuzzy = shapeOk && !isPrefix && isNearTruncation(passed, tracked); // M16-r45：中间/尾部错位复述
+        if (shapeOk && !isPrefix && !fuzzy) return; // 全形状非前缀非近似→宿主归属校验（多 lane/幻觉兜底）
+        // 形状非法 OR 真前缀截断 OR 近似截断 → 一次性纠正：附完整 ID（GATE_ERR 标记确保穿透 fail-open，S1）
+        logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: fuzzy ? "corrected-fuzzy" : "corrected" });
         try { await save(st); } catch { /* 取证 best-effort，不影响纠正 */ }
         // probe 4 增强：session.get 返回 time.busy/idle（无 parentID，归属由宿主原生校验）→ 纠正时附存活状态，
         //   防「续用运行中子会话→静默分叉」。best-effort：取不到 time 则不附注（不影响纠正本身）。
@@ -119,7 +154,7 @@ export function registerGuardHook(ctx: any, deps: any) {
             : " 该子会话已完成，可安全续用。";
         } catch { /* 存活取证 best-effort */ }
         throw new Error(
-          `${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」截断/非法。请逐字改用完整 ID 重试一次：sessionID=${tracked}（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。${liveNote}`
+          `${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」截断/非法${fuzzy ? "（近似匹配命中登记会话）" : ""}。请改用别名续接：${SID_ALIAS_USAGE}，或逐字改用完整 ID 重试一次：sessionID=${tracked}（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。${liveNote}`
         );
       }
       // ── M16-r44：方案确认交互观察（L2 硬关卡记账）────────────────────

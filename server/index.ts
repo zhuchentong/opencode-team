@@ -13,6 +13,7 @@ import { registerGuardHook } from "./guard-hook.ts";
 import { registerHint } from "./hint.ts";
 import { registerCommands } from "./commands.ts";
 import { registerRoleSync } from "./roles.ts"; // M16-r31：角色内容插件托管（B1 文件同步）
+import { registerSkillSync } from "./skills.ts"; // M16-r45：session-lookup skill 托管同步（默认开启）
 
 export default {
   id: "wf-workflow",
@@ -64,6 +65,9 @@ export default {
     // ── M16-r31：角色内容插件托管（opt-in syncRoles，fail-soft，见 roles.ts）──
     const roleReg = registerRoleSync(ctx, opt);
 
+    // ── M16-r45：session-lookup skill 托管同步（默认开启 syncSkills !== false，fail-soft，见 skills.ts）──
+    const skillReg = registerSkillSync(ctx, opt);
+
     // ── /wf:* 命令与 transition/inject 编排、P2 双轨输出（见 commands.ts）──
     const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated,
       emitReport: async (sid: string, text: string, at: string) => { await emitReport(sid, text, at); }, // T06：bridge 返回通道形状，deps 契约 Promise<void>（组装层适配）
@@ -71,7 +75,7 @@ export default {
       putReport, removeState, dumpStates, runner });
 
     return () => {
-      for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg, roleReg]) { try { r?.dispose?.(); } catch { } }
+      for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg, roleReg, skillReg]) { try { r?.dispose?.(); } catch { } }
       closeStore();
     };
   },
