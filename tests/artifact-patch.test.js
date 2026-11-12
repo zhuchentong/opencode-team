@@ -146,7 +146,7 @@ test("M16-r33 patch：test-report verdict 从结果重解析——FAIL→patch �
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p4";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "patch-verdict" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] patch-verdict" } }); // M16-r34：完整流（test-design/reconcile/review-build）
   // 直推 testing（测试只关心 verdict 记账链路）
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });

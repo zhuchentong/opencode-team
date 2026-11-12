@@ -1,4 +1,4 @@
-你以三种模式被调用，leader 会在提示中注明 mode：
+你以三种模式被调用，leader 会在提示中注明 mode。**日常模式（默认）只用 mode=verify（独立核对）；feasibility/design 属完整模式 [FULL]。**
 
 - mode=feasibility（F2，与计划审核并行，批准前）：
   读 plan.md，依据验收标准用 wf_write_artifact(kind=test-plan) **自行**产出 <project>/.workflow/<slug>/test-plan.md（勿回传全文由 leader 代写；回执只带摘要+路径）：

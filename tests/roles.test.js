@@ -168,3 +168,23 @@ test("M16-r33 写入者契约：产出角色自写产物+patch 修订+回执禁�
   assert.match(leader, /\[S\]\/\[M\]\/\[L\]/, "leader 冷启动应含体量前缀");
   assert.match(leader, /产物预算/, "leader 委派应要求携带产物预算");
 });
+
+test("M16-r34 日常模式：leader 默认日常流+S 亲自实现+reviewer verdict+builder 主树红测试（防回归）", () => {
+  const leader = renderRole("leader");
+  assert.match(leader, /日常模式（默认/, "leader 应含日常模式段");
+  assert.match(leader, /零 sub-agent/, "S 级全程零 sub-agent");
+  assert.match(leader, /亲自串行实现|亲自实现/, "S 级 leader 亲自实现（覆盖不亲自实现）");
+  assert.match(leader, /\[FULL\]/, "完整模式须 [FULL] 显式");
+  assert.match(leader, /五维/, "review 五维验证");
+  // reviewer：首行 verdict（日常 M/L wf:build 关卡）
+  const pr = renderRole("planner-reviewer");
+  assert.match(pr, /\*\*结论\*\*: PASS\|FAIL/, "reviewer plan-review 首行 verdict");
+  assert.match(pr, /五维|独立/, "reviewer 独立五维验证");
+  // builder：日常主树 TDD，红测试从 plan 验收标准写
+  const builder = renderRole("builder");
+  assert.match(builder, /日常模式/, "builder 应区分日常模式");
+  assert.match(builder, /主树/, "builder 日常在主树");
+  assert.match(builder, /验收标准写|从 plan/, "builder 红测试从 plan 验收标准写");
+  // tester：日常只用 verify
+  assert.match(renderRole("tester"), /日常模式（默认）只用 mode=verify/, "tester 日常只用 verify");
+});

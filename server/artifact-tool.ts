@@ -93,13 +93,15 @@ export function registerArtifactTool(ctx: any, deps: any) {
           fs.writeFileSync(target, finalContent.endsWith("\n") ? finalContent : `${finalContent}\n`);
           const bytes = fs.statSync(target).size;
           // M16-r33：verdict 从**结果全文**解析（patch 模式入参无 content，必须读结果，否则 done 关卡误拦）
-          const verdict = kind === "test-report" ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
+          // M16-r34：plan-review 也解析 verdict（日常模式 M/L 独立验证结论，wf:build 关卡校验）
+          const verdict = (kind === "test-report" || kind === "plan-review") ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
           const mark = (row: any) => {
             row.artifacts = row.artifacts ?? {};
             row.artifacts[file] = { at: new Date().toISOString(), bytes };
             if (kind === "test-plan") row.testPlanWritten = true;
             if (kind === "test-report") row.testReportVerdict = verdict;
+            if (kind === "plan-review") row.planReviewVerdict = verdict; // M16-r34：日常 M/L 验证关卡记账
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "patch" ? `${file} mode=patch` : file });
           };
           mark(st);
@@ -126,14 +128,20 @@ export function registerArtifactTool(ctx: any, deps: any) {
           // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）；M16-r33：按任务体量分级
           const sizeWarn = artifactSizeWarning(kind, bytes, st.size);
           if (sizeWarn) note += `\n${sizeWarn}`;
-          if (kind === "test-report" && !hasStrictVerdictLine(finalContent)) {
-            note += `\n⚠️ test-report 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 /wf:done 会被关卡拦截）`;
+          if ((kind === "test-report" || kind === "plan-review") && !hasStrictVerdictLine(finalContent)) {
+            note += `\n⚠️ ${kind} 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 ${kind === "test-report" ? "/wf:done" : "日常模式 /wf:build"} 会被关卡拦截）`;
           }
           // P4 公告：verdict 指路（与 GATES["wf:done"] 拒绝文案同语义，agent 在 tool output 直接看到）
           if (kind === "test-report") {
             note += st.testReportVerdict === "PASS"
               ? `\n→ 验收 PASS：请 leader 调用 wf_command(name="wf:done") 推进（验收关卡放行；用户手敲亦可）`
               : `\n→ 验收 ${st.testReportVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲；UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
+          }
+          // M16-r34：plan-review verdict 指路（日常模式 M/L 独立验证 → wf:build 关卡）
+          if (kind === "plan-review") {
+            note += st.planReviewVerdict === "PASS"
+              ? `\n→ 验证 PASS：请 leader 调用 wf_command(name="wf:build") 推进（日常模式验证关卡放行）`
+              : `\n→ 验证 ${st.planReviewVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 wf:plan 带意见修订后再验（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
           }
           return { content: note };
         } catch (e) {

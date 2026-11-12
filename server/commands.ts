@@ -10,7 +10,7 @@
 // LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）。
 import * as fs from "node:fs";
 import {
-  VERSION, FLOWS, NEXT, BLOCKING_PHASES,
+  VERSION, BLOCKING_PHASES, flowFor, nextFor,
   evaluateTransition, guidance, promptText, entryValue, diagnoseReport, pingReport,
 } from "./lib.ts";
 import { ENTRY_KEY, HINT_KEY, logAdd } from "./state.ts";
@@ -68,7 +68,6 @@ export async function registerCommands(ctx: any, deps: any) {
   //  - inject 保持在 save 前（entryErr 需随本次 save 持久化）；emitUpdated 移到 save 成功
   //    之后（不向 TUI 广播未落库的状态）。
   const transition = async (sessionID: string, cmd: string, text?: string) => {
-    const flow = FLOWS[cmd];
     for (let attempt = 1; ; attempt++) {
       const loaded = await load(sessionID);
       // T09：评估/改写只作用于克隆——loaded 恒为「DB 现势」快照，save 最终失败的 entry 回滚
@@ -91,6 +90,8 @@ export async function registerCommands(ctx: any, deps: any) {
         return r.msg;
       }
 
+      // M16-r34：mode 选择流转表（daily 子表 vs full）；evaluateTransition 已放行 → flow 必存在
+      const flow = flowFor(st, cmd)!;
       st.phase = flow.to;
       st.updatedAt = at;
       // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
@@ -221,12 +222,12 @@ export async function registerCommands(ctx: any, deps: any) {
         const r = st.rounds ?? {};
         return [
           `wf 工作流(${VERSION})状态｜session=${st.sessionID}`,
-          `slug=${st.slug || "(未定)"}  phase=${st.phase}`,
+          `slug=${st.slug || "(未定)"}  phase=${st.phase}  mode=${st.mode ?? "full"}  size=${st.size ?? "M"}`,
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
-          `gates: testPlan=${st.testPlanWritten ? "✅" : "❌"}  testReport=${st.testReportVerdict ?? "-"}`,
+          `gates: testPlan=${st.testPlanWritten ? "✅" : "❌"}  testReport=${st.testReportVerdict ?? "-"}  planReview=${st.planReviewVerdict ?? "-"}`,
           `lanes: ${JSON.stringify(st.lanes ?? {})}`,
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
-          `下一步: ${NEXT[st.phase] ?? "/wf:intake"}`,
+          `下一步: ${nextFor(st, st.phase)}`,
           `最近流转:`,
           ...(st.log ?? []).slice(-8).map((e: any) =>
             `  ${e.at.slice(11, 19)} ${e.cmd} ${e.from ?? "∅"}→${e.to}${e.ok ? "" : `（${e.note}）`}`),

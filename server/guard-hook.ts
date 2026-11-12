@@ -9,12 +9,12 @@
 // shell 门并入下方 tool hook 的 tool=="shell" 分支（tool hook 携带会话身份）。
 // P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, NEXT } from "./lib.ts";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor } from "./lib.ts";
 import { logAdd } from "./state.ts";
 
-// P4：下一步提示（NEXT 表与流转指引同源，防文案漂移）；T06：模型侧经 wf_command 推进
-// （模块级纯函数：只捕获模块 import 的 NEXT，不依赖 registerGuardHook 闭包）
-const nextHint = (phase: string) => `当前阶段「${phase}」下一步：${NEXT[phase] ?? "见工作流指引"}（leader 调用 wf_command(name=…) 推进，用户手敲亦可）。`;
+// P4：下一步提示（NEXT/NEXT_DAILY 表与流转指引同源，防文案漂移）；T06：模型侧经 wf_command 推进
+// M16-r34：mode 感知（daily 用 NEXT_DAILY）；模块级纯函数，只捕获模块 import，不依赖闭包
+const nextHint = (st: any, phase: string) => `当前阶段「${phase}」下一步：${nextFor(st, phase)}（leader 调用 wf_command(name=…) 推进，用户手敲亦可）。`;
 
 export function registerGuardHook(ctx: any, deps: any) {
   const { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir } = deps;
@@ -48,7 +48,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           if (base && abs.startsWith(`${base}/`) && !isAllowed(abs)) {
             await logBlock(st, toolName, tRaw); // P1：阻断记账，供 /wf:diagnose 取证
             throw new Error(
-              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。${nextHint(st.phase)}`
+              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。${nextHint(st, st.phase)}`
             );
           }
         }
@@ -71,7 +71,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           await logBlock(st, String(input?.tool), p); // P1：阻断记账
           throw new Error(
             `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
-            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。${nextHint(st.phase)}`
+            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/。${nextHint(st, st.phase)}`
           );
         }
       }

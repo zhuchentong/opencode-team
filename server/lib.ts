@@ -7,7 +7,7 @@
 //   artifact 行删文案分路 / slugify 码点截断 / 已知边界文档。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
 
-export const VERSION = "M16-r33";
+export const VERSION = "M16-r34";
 
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
@@ -35,6 +35,11 @@ export interface WfState {
   phase?: string | null;
   // M16-r33 P2：任务体量分级（intake 前缀 [S]/[M]/[L] 声明，缺省 M）——驱动产物预算与从简指引
   size?: string;
+  // M16-r34：流程模式（daily=日常 5 步习惯流，新 intake 默认；full=完整 9 阶段，[FULL] 显式）。
+  //   存量无 mode 字段 → full（兼容在途任务）。daily 内 size 决定委派与否（S=leader 串行零 sub-agent）。
+  mode?: string;
+  // M16-r34：日常模式 M/L 独立验证结论（plan-review 首行 **结论** 解析记账），wf:build 关卡校验
+  planReviewVerdict?: string;
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -94,6 +99,38 @@ export const GATES: Record<string, (st: WfState) => string | null> = {
       `❌ 验收关卡未过：test-report.md 结论为「${st.testReportVerdict ?? "未产出"}」（要求 PASS）。` +
       `FAIL → 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲）；由 wf/tester 用 wf_write_artifact(kind=test-report) 更新报告（首行 **结论**: PASS）。`,
 };
+
+// ── M16-r34：日常模式（daily）——自动化用户 5 步习惯 plan→verify→修订→执行→核对 ──────────
+// 一条流全 tier（S/M/L），tier 只改委派与否（guidance 分支）；砍 test_design/reconcile/build_review/fixing。
+// 完整 FLOWS 不动（full 模式/存量在途任务用），daily 用本子表。FAIL 返工复用 wf:fix（改指 building）+ test_fix 计数。
+export const FLOWS_DAILY: Record<string, FlowDef> = {
+  "wf:intake": { to: "intake",   from: ["*"],                          counter: null },
+  "wf:plan":   { to: "planning", from: ["intake", "planning", "review"], counter: null },
+  "wf:review": { to: "review",   from: ["planning", "review"],         counter: "plan_review" },
+  "wf:build":  { to: "building", from: ["review"],                     counter: null },
+  // 返工触发器：daily 无 fixing 阶段，wf:fix 改指 building（复用 test_fix≤3，零新计数逻辑）
+  "wf:fix":    { to: "building", from: ["testing"],                    counter: "test_fix" },
+  "wf:test":   { to: "testing",  from: ["building", "testing"],        counter: null },
+  "wf:done":   { to: "done",     from: ["testing"],                    counter: null },
+};
+export const NEXT_DAILY: Record<string, string> = {
+  intake: "/wf:plan", planning: "/wf:review", review: "/wf:build（M/L 须 plan-review 结论 PASS）",
+  building: "/wf:test", testing: "PASS→/wf:done，FAIL→/wf:fix（回 building 返工）", done: "（终态）",
+};
+export const GATES_DAILY: Record<string, (st: WfState) => string | null> = {
+  // M/L 独立验证硬关卡：plan-review 结论须 PASS（S 自验自律，跳过）
+  "wf:build": (st) =>
+    st.size === "S" ? null :
+      st.planReviewVerdict === "PASS" ? null :
+        `❌ 验证关卡未过：plan-review 结论为「${st.planReviewVerdict ?? "未产出"}」（要求 PASS）。` +
+        `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；FAIL → wf:plan 带意见修订后再验。`,
+  "wf:done": GATES["wf:done"],
+};
+// mode 选择：存量无 mode → full（兼容）；daily 用子表。所有流转/关卡/指引/下一步提示同源此判定。
+export function isDaily(st: WfState): boolean { return (st.mode ?? "full") === "daily"; }
+export function flowFor(st: WfState, cmd: string): FlowDef | undefined { return (isDaily(st) ? FLOWS_DAILY : FLOWS)[cmd]; }
+export function gateFor(st: WfState, cmd: string): ((st: WfState) => string | null) | undefined { return (isDaily(st) ? GATES_DAILY : GATES)[cmd]; }
+export function nextFor(st: WfState, phase: string | null | undefined): string { return (isDaily(st) ? NEXT_DAILY : NEXT)[phase ?? ""] ?? "/wf:intake"; }
 
 // ── M4：越权路径提取 ────────────────────────────────────────────────
 export function extractPaths(tool: string, args: Record<string, unknown> | null | undefined): string[] {
@@ -230,18 +267,28 @@ export const promptText = (p: unknown): string => {
 // P2：limits 可按实例覆盖（options.limits），默认取模块 LIMITS。
 export type TransitionResult = { ok: true } | { ok: false; note: string; msg: string };
 export function evaluateTransition(cmd: string, st: WfState, text: unknown, at = new Date().toISOString(), limits: Limits = LIMITS): TransitionResult {
-  const flow = FLOWS[cmd];
+  // M16-r34：mode 选择流转表/关卡/下一步（daily 子表 vs full；存量无 mode → full 兼容）
+  const daily = isDaily(st);
+  const flow = flowFor(st, cmd);
   const from = st.phase ?? null;
+
+  // daily 子表无 test-design/reconcile/review-build → 显式拒绝（防 flow undefined 崩溃）
+  if (!flow) {
+    return {
+      ok: false, note: "unknown-command",
+      msg: `❌ ${daily ? "日常模式" : "完整模式"}无 /wf:${cmd.slice(3)} 命令。${daily ? "日常流：plan→review→build→test→done（FAIL→fix 返工）。" : ""}当前下一步：${nextFor(st, from)}`,
+    };
+  }
 
   if (!(flow.from.includes("*") || flow.from.includes(from ?? ""))) {
     return {
       ok: false, note: "illegal-transition",
-      msg: `❌ 拒绝：/wf:${cmd.slice(3)} 不能从阶段「${from ?? "无"}」进入「${flow.to}」（合法来源：${flow.from.join("/") || "无"}）。当前下一步：${NEXT[from ?? ""] ?? "/wf:intake"}`,
+      msg: `❌ 拒绝：/wf:${cmd.slice(3)} 不能从阶段「${from ?? "无"}」进入「${flow.to}」（合法来源：${flow.from.join("/") || "无"}）。当前下一步：${nextFor(st, from)}`,
     };
   }
 
   // M5：进阶关卡（在轮次计数之前拒绝，不消耗循环额度）
-  const gate = GATES[cmd];
+  const gate = gateFor(st, cmd);
   if (gate) {
     const reject = gate(st);
     if (reject) return { ok: false, note: "gate-rejected", msg: reject };
@@ -279,21 +326,30 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       st.lanes = {};
       delete st.testPlanWritten;
       delete st.testReportVerdict;
+      delete st.planReviewVerdict; // M16-r34：新任务清验证结论
     }
-    // M16-r33 P2：体量前缀 [S]/[M]/[L]（可跟在 ! 强制符后）——声明任务体量，驱动预算分级
+    // M16-r33 P2 体量前缀 [S]/[M]/[L] + M16-r34 模式前缀 [FULL]（可跟在 ! 强制符后，任意序）。
+    // 新 intake 默认 daily（日常习惯流）；[FULL] 显式完整 9 阶段流。size 缺省 M。
     let body = force ? raw.slice(1).trim() : raw;
     let size = "M";
-    const sm = body.match(/^\[([SML])\]\s*/i);
-    if (sm) { size = sm[1].toUpperCase(); body = body.slice(sm[0].length); }
+    let mode = "daily";
+    let pm;
+    while ((pm = body.match(/^\[(FULL|S|M|L)\]\s*/i))) {
+      const tok = pm[1].toUpperCase();
+      if (tok === "FULL") mode = "full"; else size = tok;
+      body = body.slice(pm[0].length);
+    }
     st.slug = slugify(body) || st.slug || "untitled";
     st.size = size;
+    st.mode = mode;
   }
 
   return { ok: true };
 }
 
 export function guidance(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
-  const base = guidanceBase(phase, st, limits);
+  // M16-r34：daily 模式用日常习惯流指引（tier 分支）；full/存量用 guidanceBase
+  const base = isDaily(st) ? guidanceDaily(phase, st, limits) : guidanceBase(phase, st, limits);
   if (Array.isArray(overrides) && overrides.length) {
     const list = overrides.map((f) => String(f).replace(/\.md$/, "")).join(", ");
     return `${base}\n📌 项目级角色定制（.workflow/overrides/）：${list}。委派同名 wf 角色时，把对应文件全文带入子任务提示词。`;
@@ -312,6 +368,80 @@ function budgetLine(st: WfState, kinds: string[]): string {
 }
 function leanLine(st: WfState): string | null {
   return st.size === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
+}
+
+// ── M16-r34：日常模式指引——忠实用户 5 步习惯，tier 只改委派与否 ──────────────────
+// S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
+// M/L=planner 拆 T<nn> 功能点 + reviewer 独立五维验证 + builder 逐点 TDD + tester 独立核对。
+const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
+function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
+  const L = { ...LIMITS, ...limits };
+  const s = st.slug || "(未定)";
+  const r: Record<string, number> = st.rounds ?? {};
+  const S = st.size === "S";
+  switch (phase) {
+    case "intake": return [
+      `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
+      `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
+      `1) 与用户澄清需求；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
+      `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
+      `完成 → wf_command(name="wf:plan")`,
+    ].join("\n");
+    case "planning": return [
+      `【wf 工作流｜planning·日常模式】slug=${s}`,
+      `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
+      S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
+        : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。`,
+      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`]),
+      budgetLine(st, ["plan"]),
+      ...(leanLine(st) ? [leanLine(st)] : []),
+      `完成 → wf_command(name="wf:review")`,
+    ].join("\n");
+    case "review": {
+      const lines = [
+        `【wf 工作流｜review·日常模式（第 ${r.plan_review}/${L.plan_review} 轮）】slug=${s}`,
+        `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
+        S ? `S 级：leader 按五维（可行性/完整性/正确性/风险/交叉验证）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
+          : `委派 wf/planner-reviewer 独立五维验证 plan.md（可行性/完整性/正确性/风险/交叉验证）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。`,
+        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`]),
+        budgetLine(st, S ? ["plan"] : ["plan-review"]),
+      ];
+      if (!S && (r.plan_review ?? 0) >= 2) {
+        lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 销项 + plan.md 修订 diff + 一致性抽查，勿全文重审。`);
+      }
+      lines.push(S
+        ? `自验通过 → wf_command(name="wf:build")；不过 → 修订 plan 后再验；超限 → 停下问用户`
+        : `FAIL → wf_command(name="wf:plan") 带意见修订再 wf:review；PASS → wf_command(name="wf:build")（关卡校验 plan-review 结论）；超限 → 停下问用户`);
+      return lines.join("\n");
+    }
+    case "building": {
+      const rework = (r.test_fix ?? 0) > 0 ? `（返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID）` : "";
+      return [
+        `【wf 工作流｜building·日常模式】slug=${s}${rework}`,
+        S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
+          : `委派 wf/builder：按 T<nn> 功能点逐点 TDD（红测试从 plan 验收标准写，先红后绿），主树串行（多 builder 并行=例外，需用户同意+worktree）。`,
+        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`]),
+        `完成（含红→绿证据）→ wf_command(name="wf:test")`,
+      ].join("\n");
+    }
+    case "testing": return [
+      `【wf 工作流｜testing·日常模式】slug=${s}`,
+      S ? `S 级：leader 跑全量测试自核对，wf_write_artifact(kind=test-report) 自写，首行 **结论**: PASS|FAIL，PASS 附真实证据（命令+输出）。`
+        : `委派 wf/tester(mode=verify) 独立核对 → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。`,
+      ...(S ? [] : [WRITE_CONTRACT]),
+      budgetLine(st, ["test-report"]),
+      `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")（回 building 返工，test_fix≤${L.test_fix}）`,
+    ].join("\n");
+    case "done": return [
+      `【wf 工作流｜done·日常模式】slug=${s}`,
+      S ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`
+        : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+      ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。`]),
+      budgetLine(st, ["lessons"]),
+    ].join("\n");
+    default: return `【wf 工作流·日常模式】阶段 ${phase}`;
+  }
 }
 
 function guidanceBase(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
@@ -545,6 +675,6 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   if (facts.rpcErr) out.push(`  ⚠️ RPC 注册失败（TUI 面板不可用）：${facts.rpcErr}`);
 
   // 6) 下一步
-  out.push(`  下一步：${NEXT[st.phase ?? ""] ?? "/wf:intake"}`);
+  out.push(`  下一步：${nextFor(st, st.phase)}`);
   return out.join("\n");
 }

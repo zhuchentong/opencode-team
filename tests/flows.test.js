@@ -26,7 +26,7 @@ test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并
   for (const cmd of steps) {
     if (cmd === "wf:test-design") st.testPlanWritten = true; // gate 前置条件
     if (cmd === "wf:done") st.testReportVerdict = "PASS"; // gate 前置条件
-    const r = advance(st, cmd, "demo-task");
+    const r = advance(st, cmd, "[FULL] demo-task"); // M16-r34：本测试验证完整 9 阶段流，显式 [FULL]
     assert.equal(r.ok, true, `${cmd} 应通过：${JSON.stringify(r)}`);
   }
   assert.equal(st.phase, "done");

@@ -91,7 +91,7 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   const dispose = await plugin.setup(m.ctx);
 
   // 1) intake：guidance 返回 + entry 注入含完整阶段指引
-  const r1 = await cmd(m, "wf:intake").execute({ sessionID: "ses_i", prompt: { text: "demo" } });
+  const r1 = await cmd(m, "wf:intake").execute({ sessionID: "ses_i", prompt: { text: "[FULL] demo" } }); // M16-r34：本测试验证完整流
   assert.match(r1, /【wf 工作流｜intake】slug=demo/);
   assert.equal(stOf(m).phase, "intake");
   assert.match(m.entries.at(-1).value, /phase=intake slug=demo/);
@@ -181,7 +181,7 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
 test("options.limits 覆盖端到端：plan_review=1 时第二轮 review 被拒", async () => {
   const m = mkCtx({ limits: { plan_review: 1 } });
   const dispose = await plugin.setup(m.ctx);
-  await cmd(m, "wf:intake").execute({ sessionID: "ses_l", prompt: { text: "lim" } });
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_l", prompt: { text: "[FULL] lim" } }); // M16-r34：完整流（review 格式断言）
   await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
   const r1 = await cmd(m, "wf:review").execute({ sessionID: "ses_l", prompt: {} });
   assert.match(r1, /review（第 1\/1 轮）/, "guidance 显示覆盖后上限");
@@ -303,7 +303,7 @@ test("T03 幽灵行不占面板：state() active:false；status/diagnose 报无�
 test("T04 stale-rev：冲突一次重试成功；持续冲突显式失败不假装推进", async () => {
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
-  await cmd(m, "wf:intake").execute({ sessionID: "ses_t4", prompt: { text: "race" } });
+  await cmd(m, "wf:intake").execute({ sessionID: "ses_t4", prompt: { text: "[FULL] race" } }); // M16-r34：完整流（planning 格式断言）
   // inject 的 entry.put 执行后按需把 DB 行 rev 外部推进（state_json 同步，等价并发写者落盘）
   let bumps = 0;
   const realPut = m.ctx.session.instructions.entry.put;
@@ -355,7 +355,7 @@ test("T05 wf_command：leader 推进生效；无行非 intake 拒绝；子会话
     /子会话/);
   assert.equal(stOf(m, "ses_sub"), undefined, "被拒不得建行（T02 同语义）");
   // 主会话 intake → 建行并返回 guidance（Unicode slug 全链路，T01）
-  const r = await tc.execute({ name: "wf:intake", prompt: "工具开任务" }, { sessionID: "ses_w5", agent: "build" });
+  const r = await tc.execute({ name: "wf:intake", prompt: "[FULL] 工具开任务" }, { sessionID: "ses_w5", agent: "build" }); // M16-r34：完整流（intake/planning 格式断言）
   assert.match(r.content, /【wf 工作流｜intake】/);
   assert.equal(stOf(m, "ses_w5").slug, "工具开任务");
   assert.equal(stOf(m, "ses_w5").phase, "intake");
