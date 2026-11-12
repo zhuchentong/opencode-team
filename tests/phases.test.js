@@ -12,6 +12,10 @@ test("BLOCKING ⊆ PHASE_ORDER", () => {
   for (const p of BLOCKING) assert.ok(PHASE_ORDER.includes(p), `BLOCKING 未知阶段 ${p}`);
 });
 
+test("M16-r44：BLOCKING 含 build_review（执行审核阶段业务写同受闸；daily 无此阶段不受影响）", () => {
+  assert.ok(BLOCKING.includes("build_review"), "build_review 应在 BLOCKING");
+});
+
 test("FLOWS 所有 to ∈ PHASE_ORDER ∪ FOLD 键（折叠态合法）", () => {
   const legal = new Set([...PHASE_ORDER, ...Object.keys(FOLD)]);
   for (const [cmd, flow] of Object.entries(FLOWS)) {

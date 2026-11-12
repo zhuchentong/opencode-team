@@ -32,6 +32,8 @@ export function registerGuardHook(ctx: any, deps: any) {
   // M16-r41 B 层：subagent 形状探针一次性开关（ERR-002 先探形状再使用；existsSync 自禁用，非 P6 常态探针）
   let subagentProbed = false;
   let sessionGetProbed = false;
+  // M16-r44：question 入参形状一次性探针（方案确认记账的形状取证；同 subagent-probe 模式）
+  let questionProbed = false;
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
   return ctx.tool.hook("execute.before", async (input: any, output: any) => {
@@ -119,6 +121,47 @@ export function registerGuardHook(ctx: any, deps: any) {
         throw new Error(
           `${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」截断/非法。请逐字改用完整 ID 重试一次：sessionID=${tracked}（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。${liveNote}`
         );
+      }
+      // ── M16-r44：方案确认交互观察（L2 硬关卡记账）────────────────────
+      // leader 在确认窗口（review/test_design）调用宿主 question 工具、且选项含锚定批准标签
+      //（「批准执行」/approve）→ 记账 st.planConfirmedAt，wf:build 关卡据此放行。
+      // 触发依据：question-cr-fix 插件生产实证 execute.before 对 question 触发且入参在 input.input
+      //（core/src/tool.ts:271/:280）。诚实边界：用户在卡片中的实际选择只回给模型，插件观测不到——
+      // 本记账保证「问过了」，不保证「答的是批准」；审计留痕供 /wf:diagnose / /wf:status 取证。
+      if (toolName === "question") {
+        // 一次性形状取证（best-effort，先于 leader 过滤——任意会话首个 question 都取证一次）
+        if (!questionProbed) {
+          questionProbed = true;
+          try {
+            let dir = process.cwd();
+            try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+            const dbg = `${dir}/.workflow/_debug`;
+            if (!fs.existsSync(`${dbg}/question-probe.json`)) {
+              fs.mkdirSync(dbg, { recursive: true });
+              fs.writeFileSync(`${dbg}/question-probe.json`, JSON.stringify({
+                at: new Date().toISOString(),
+                inputKeys: Object.keys(input ?? {}), argKeys: Object.keys(input?.input ?? {}),
+                hookAgent: input?.agent, args: input?.input ?? null,
+              }, null, 2));
+            }
+          } catch { /* 探针 best-effort */ }
+        }
+        if (!isLeader(String(input?.agent ?? ""))) return; // 仅 leader 的确认受记账
+        const stC = await resolveState(input?.sessionID, input?.agent);
+        if (!stC || !stC.slug) return; // 无活动任务不记账
+        const phC = String(stC.phase ?? "");
+        if (phC !== "review" && phC !== "test_design") return; // 确认窗口（planning 澄清问不计）
+        const qsC = Array.isArray(input?.input?.questions) ? input.input.questions : [];
+        const approvedC = qsC.some((q: any) => Array.isArray(q?.options) && q.options.some((o: any) => {
+          const label = String(o?.label ?? o ?? "").trim();
+          return label.startsWith("批准") || /^approve$/i.test(label); // 锚定：排除「不批准」
+        }));
+        if (!approvedC) return; // 无批准类选项的澄清问不记账
+        if (stC.planConfirmedAt) return; // 已记账不重复 save（防抖动）
+        stC.planConfirmedAt = new Date().toISOString();
+        logAdd(stC, { at: stC.planConfirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
+        try { await save(stC); } catch { /* 记账 best-effort，不影响工具执行 */ }
+        return;
       }
       if (!EDIT_TOOLS.has(toolName) && toolName !== "shell") return;
       const st = await resolveState(input?.sessionID, input?.agent); // M10-b：wf/* 子会话同样受阶段闸门管辖

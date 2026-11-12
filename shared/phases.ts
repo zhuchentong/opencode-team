@@ -13,7 +13,7 @@ export const STAGE_LABEL: Record<string, string> = {
 };
 export const FOLD: Record<string, string> = { reconcile: "building", retrospect: "done" };
 export const CANON: string[] = ["plan.md", "test-plan.md", "test-report.md"];
-export const BLOCKING: string[] = ["planning", "review"];
+export const BLOCKING: string[] = ["planning", "review", "build_review"]; // M16-r44：+build_review（full 模式执行审核阶段业务写同受闸；worktree 默认在项目外不受影响）
 // TUI 视图别名：进度条阶段顺序（与 PHASE_ORDER 同值）。独立导出而非依赖 import-as 重命名，
 // 规避宿主二级模块加载器对 import { X as Y } 的导出名校验问题（ERR-20261110-002）
 export const STAGE_ORDER = PHASE_ORDER;

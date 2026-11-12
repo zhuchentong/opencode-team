@@ -117,8 +117,9 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
             if (kind === "test-report") row.testReportVerdict = verdict;
             if (kind === "plan-review") row.planReviewVerdict = verdict; // M16-r34：日常 M/L 验证关卡记账
             // M16-r39 T02：plan 修订（content/patch、任何 mode）清双通道记账——
-            // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡
-            if (kind === "plan") { delete row.planReviewVerdict; delete row.testPlanWritten; }
+            // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡；
+            // M16-r44：方案确认记账同点作废（plan 内容变更=旧确认失效的最强锚点）
+            if (kind === "plan") { delete row.planReviewVerdict; delete row.testPlanWritten; delete row.planConfirmedAt; }
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "patch" ? `${file} mode=patch` : file });
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
@@ -164,7 +165,7 @@ export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
           }
           // M16-r39 T02：plan 修订清双通道记账——模式感知的重新验证指路
           if (kind === "plan") {
-            note += "\nplan 已修订：review 结论与 test-plan 记账已清，须重新 " + (isDaily(st) ? "wf:review" : "wf:review / wf:test-design");
+            note += "\nplan 已修订：review 结论、test-plan 与方案确认记账已清，须重新 " + (isDaily(st) ? "wf:review（含 question 方案确认）" : "wf:review / wf:test-design（含 question 方案确认）");
           }
           return { content: note };
         } catch (e) {

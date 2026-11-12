@@ -17,6 +17,7 @@ const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const tools = []; const cmds = []; const entries = [];
+  let hookFn = null;
   const ctx = {
     options: { probe: false },
     location: { directory: DIR },
@@ -26,11 +27,14 @@ const mkCtx = () => {
       wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
       instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
     },
-    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: () => ({ dispose() {} }) },
+    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
   };
-  return { ctx, tools, cmds, entries };
+  return { ctx, tools, cmds, entries, hook: () => hookFn };
 };
+// M16-r44：方案确认交互模拟——leader 在确认窗口调 question（选项含锚定批准标签）
+const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",
+  input: { questions: [{ question: "方案确认", header: "方案确认", options: [{ label: "批准执行" }, { label: "修改方案" }, { label: "终止任务" }] }] } }, {});
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid = "ses_d") => {
@@ -84,8 +88,12 @@ test("r34 intake：默认 daily；[FULL] 选完整流；前缀任意序；size �
 });
 
 test("r34 daily 边表流转：review→build→test→done；full-only 命令被拒", () => {
-  const st = blank({ mode: "daily", phase: "review", size: "S" });
-  assert.ok(evaluateTransition("wf:build", st, "").ok, "S 级 build 跳过 verify 关卡");
+  const st = blank({ mode: "daily", phase: "review", size: "S", planConfirmedAt: "2026-01-01T00:00:00Z" });
+  assert.ok(evaluateTransition("wf:build", st, "").ok, "S 级（已确认）build 跳过 verify 关卡");
+  const stNo = blank({ mode: "daily", phase: "review", size: "S" });
+  const rNo = evaluateTransition("wf:build", stNo, "");
+  assert.equal(rNo.ok, false, "M16-r44：S 级未确认也被方案确认关卡拒");
+  assert.match(rNo.msg, /方案确认关卡未过/);
   assert.equal(st.phase, "review"); // evaluateTransition 不改 phase（transition 改）
   const st2 = blank({ mode: "daily", phase: "building" });
   assert.ok(evaluateTransition("wf:test", st2, "").ok);
@@ -97,13 +105,16 @@ test("r34 daily 边表流转：review→build→test→done；full-only 命令�
   assert.equal(r.ok, false); assert.equal(r.note, "unknown-command");
 });
 
-test("r34 verify 关卡：M/L build 须 planReviewVerdict=PASS；S 跳过", () => {
+test("r34 verify 关卡：M/L build 须 planReviewVerdict=PASS（S 跳结论）；M16-r44 方案确认全 tier 必经", () => {
   const gate = GATES_DAILY["wf:build"];
-  assert.ok(gate(blank({ mode: "daily", size: "M" })), "M 无 verdict → 拒");
-  assert.ok(gate(blank({ mode: "daily", size: "M", planReviewVerdict: "FAIL" })), "FAIL → 拒");
-  assert.equal(gate(blank({ mode: "daily", size: "M", planReviewVerdict: "PASS" })), null, "PASS → 放行");
-  assert.equal(gate(blank({ mode: "daily", size: "S" })), null, "S 跳过（自验自律）");
-  assert.equal(gate(blank({ mode: "daily", size: "L", planReviewVerdict: "PASS" })), null);
+  assert.match(gate(blank({ mode: "daily", size: "M" })), /方案确认关卡未过/, "M 未确认 → 方案确认关卡拒");
+  assert.match(gate(blank({ mode: "daily", size: "M", planReviewVerdict: "FAIL" })), /方案确认关卡未过/, "未确认优先于结论校验");
+  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x" })), /验证关卡未过/, "已确认无 verdict → verdict 关卡拒");
+  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", planReviewVerdict: "FAIL" })), /验证关卡未过/, "FAIL → 拒");
+  assert.equal(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", planReviewVerdict: "PASS" })), null, "PASS+确认 → 放行");
+  assert.match(gate(blank({ mode: "daily", size: "S" })), /方案确认关卡未过/, "S 未确认也拒（全 tier 必经）");
+  assert.equal(gate(blank({ mode: "daily", size: "S", planConfirmedAt: "x" })), null, "S 已确认跳过结论（自验自律）");
+  assert.equal(gate(blank({ mode: "daily", size: "L", planConfirmedAt: "x", planReviewVerdict: "PASS" })), null);
 });
 
 test("r34 FAIL 返工回路：testing→wf:fix→building，test_fix 计数，≤3 上限", () => {
@@ -146,6 +157,7 @@ test("r34 全链路 S：intake→plan→review→build→test→done，leader �
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# plan\n轻量" }, { sessionID: sid, agent: "wf/leader" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
+  await confirm(m, sid); // M16-r44：build 前方案确认（S 也须确认）
   // S 自验，无 plan-review 产物也可 build
   const b = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(b, /building/); assert.equal(stOf(sid).phase, "building");
@@ -162,6 +174,9 @@ test("r34 全链路 M：plan-review verdict 关卡 + FAIL→wf:fix 返工", asyn
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# plan\nT01 功能点" }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
+  // 未确认 → 方案确认关卡拒（M16-r44）；确认后未写 plan-review → verdict 关卡拒
+  assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /方案确认关卡未过/);
+  await confirm(m, sid);
   // 未写 plan-review → build 被关卡拒
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /验证关卡未过/);

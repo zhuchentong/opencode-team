@@ -151,6 +151,9 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   assert.match(tr.content, /已写入 .*\/\.workflow\/demo\/test-plan\.md/);
   assert.ok(fs.existsSync(`${DIR}/.workflow/demo/test-plan.md`));
   await cmd(m, "wf:test-design").execute({ sessionID: "ses_i", prompt: {} });
+  // M16-r44：wf:build 关卡须方案确认（leader question 观察记账；test_design 窗口）
+  await m.hook()({ tool: "question", sessionID: "ses_i", agent: "workflow",
+    input: { questions: [{ question: "方案确认", header: "方案确认", options: [{ label: "批准执行" }, { label: "修改方案" }, { label: "终止任务" }] }] } }, {});
   for (const c of ["wf:build", "wf:reconcile", "wf:review-build", "wf:test"]) {
     await cmd(m, c).execute({ sessionID: "ses_i", prompt: {} });
   }

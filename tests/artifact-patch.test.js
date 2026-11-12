@@ -28,6 +28,7 @@ const mkCtx = () => {
   const store = new Map();
   const tools = [];
   const cmds = [];
+  let hookFn = null;
   const ctx = {
     options: { probe: false },
     location: { directory: DIR },
@@ -46,12 +47,15 @@ const mkCtx = () => {
     },
     tool: {
       transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
-      hook: () => ({ dispose() {} }),
+      hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; },
     },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
   };
-  return { ctx, tools, cmds };
+  return { ctx, tools, cmds, hook: () => hookFn };
 };
+// M16-r44：方案确认交互模拟（leader question，选项含锚定批准标签）
+const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",
+  input: { questions: [{ question: "方案确认", header: "方案确认", options: [{ label: "批准执行" }, { label: "修改方案" }, { label: "终止任务" }] }] } }, {});
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid) => {
@@ -152,6 +156,7 @@ test("M16-r33 patch：test-report verdict 从结果重解析——FAIL→patch �
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });
   await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} });
+  await confirm(m, sid); // M16-r44：wf:build 关卡须方案确认（test_design 窗口）
   await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:reconcile").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review-build").execute({ sessionID: sid, prompt: {} });

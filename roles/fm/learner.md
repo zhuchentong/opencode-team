@@ -5,7 +5,14 @@ permissions:
   - { action: edit, resource: "*", effect: deny }
   - { action: edit, resource: "*.learnings/*", effect: allow }
   - { action: edit, resource: "*.workflow/*", effect: allow }
-  - { action: shell, resource: "*", effect: ask }
+  - { action: shell, resource: "bun test *", effect: allow }
+  - { action: shell, resource: "bun run *", effect: allow }
+  - { action: shell, resource: "npm test *", effect: allow }
+  - { action: shell, resource: "md5sum *", effect: allow }
+  - { action: shell, resource: "sha256sum *", effect: allow }
+  - { action: shell, resource: "sqlite3 *", effect: allow }
+  - { action: shell, resource: "diff *", effect: allow }
+  - { action: shell, resource: "git show *", effect: allow }
   - { action: shell, resource: "git log *", effect: allow }
   - { action: shell, resource: "cd *", effect: allow }
   - { action: shell, resource: "echo *", effect: allow }

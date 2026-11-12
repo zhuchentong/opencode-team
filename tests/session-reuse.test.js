@@ -163,7 +163,10 @@ test("guard-hook：wf/builder 子会话 edit（building 非阻断阶段）→ �
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: "ses_reviewerB", agent: "wf/planner-reviewer" });
-  await cmd(m, "wf:build").execute({ sessionID: leader, prompt: {} }); // → building（非阻断；M 级过验证关卡）
+  // M16-r44：wf:build 关卡须方案确认（leader question 观察记账）
+  await m.hook()({ tool: "question", sessionID: leader, agent: "workflow",
+    input: { questions: [{ question: "方案确认", header: "方案确认", options: [{ label: "批准执行" }, { label: "修改方案" }, { label: "终止任务" }] }] } }, {});
+  await cmd(m, "wf:build").execute({ sessionID: leader, prompt: {} }); // → building（非阻断；M 级过验证关卡+确认关卡）
   // builder 子会话改业务代码：building 放行，且登记其 sessionID
   await m.hook()({ tool: "edit", sessionID: "ses_builderChild", agent: "wf/builder", input: { path: `${DIR}/src/a.ts` } }, {});
   assert.equal(stOf(leader).roleSessions["wf/builder"].sessionID, "ses_builderChild", "builder edit 自动登记");

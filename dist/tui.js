@@ -27,6 +27,7 @@ var Wf = { define: (def) => def }.define({
 					mode: { type: ["string", "null"] },
 					size: { type: ["string", "null"] },
 					planReviewVerdict: { type: ["string", "null"] },
+					planConfirmedAt: { type: ["string", "null"] },
 					artifacts: {
 						type: "object",
 						additionalProperties: true
@@ -156,7 +157,7 @@ var DAILY_STAGE_ORDER = [
 	"done"
 ];
 // shared/version.ts
-var VERSION = "M16-r39";
+var VERSION = "M16-r44";
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
 var TUI_BUILD = VERSION;

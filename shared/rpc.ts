@@ -18,6 +18,8 @@ const stateSchema = {
     mode: { type: ["string", "null"] },
     size: { type: ["string", "null"] },
     planReviewVerdict: { type: ["string", "null"] },
+    // M16-r44：方案确认记账（ISO 时间戳，null=未经 question 确认）
+    planConfirmedAt: { type: ["string", "null"] },
     artifacts: { type: "object", additionalProperties: true },
     updatedAt: { type: ["string", "null"] },
   },

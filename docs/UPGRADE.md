@@ -18,7 +18,7 @@
 
 - **流转**：full 9 阶段 `intake→planning⇄review→test_design→building→reconcile→build_review→testing⇄fixing→done`；daily 6 阶段砍 test_design/reconcile/build_review/fixing（FAIL 返工 `wf:fix.to=building` 复用 test_fix 计数）。
 - **循环上限**：plan_review / build_review / test_fix 各 3（`options.limits` 可覆盖，仅正整数）。
-- **关卡**：`wf:test-design` 须 test-plan 产出；daily/ML `wf:build` 须 planReviewVerdict=PASS；`wf:done` 须 test-report 首行 `**结论**: PASS`。
+- **关卡**：`wf:test-design` 须 test-plan 产出；daily/ML `wf:build` 须 planReviewVerdict=PASS；`wf:done` 须 test-report 首行 `**结论**: PASS`；M16-r44：全模式 `wf:build` 须方案确认记账 planConfirmedAt（leader question 交互观察，S 也须确认；plan 修订/intake 即作废）。BLOCKING（业务写闸）= planning/review/build_review。
 - **产物 kind 与预算（字节，M 级 / S 级）**：plan 15K/5K、plan-review 8K/3K、test-plan 10K/3K、build-review 8K/3K、test-report 10K/4K、lessons 6K/3K（L 用 M）。写入模式：content 全文 / patch=[{old,new}] 增量。
 - **审查分级**：planner-reviewer / builder-reviewer 两级（初检 Abbreviated 默认 → 升级触发见 `roles/*.md`）；r≥2 前轮 findings 按未验证线索确认。
 - **guidance 易变区**：`entryValue` = 静态指引 → 轮次行 → reuseLines → head 行殿后；done = DONE_ENTRY 在前、head 殿后。

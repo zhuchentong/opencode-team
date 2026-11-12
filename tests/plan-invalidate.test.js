@@ -13,6 +13,7 @@ const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const tools = []; const cmds = []; const entries = [];
+  let hookFn = null;
   const ctx = {
     options: { probe: false },
     location: { directory: DIR },
@@ -22,11 +23,14 @@ const mkCtx = () => {
       wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
       instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
     },
-    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: () => ({ dispose() {} }) },
+    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
   };
-  return { ctx, tools, cmds, entries };
+  return { ctx, tools, cmds, entries, hook: () => hookFn };
 };
+// M16-r44：方案确认交互模拟（leader question，选项含锚定批准标签）
+const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",
+  input: { questions: [{ question: "方案确认", header: "方案确认", options: [{ label: "批准执行" }, { label: "修改方案" }, { label: "终止任务" }] }] } }, {});
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid) => {
@@ -46,10 +50,14 @@ test("T02 daily M：plan-review PASS 后 patch 改 plan → 验证结论被清�
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   assert.equal(stOf(sid).planReviewVerdict, "PASS");
-  // plan 修订（patch）→ 旧 PASS 结论必须被清
+  await confirm(m, sid); // M16-r44：build 关卡须方案确认
+  assert.ok(stOf(sid).planConfirmedAt, "question 观察记账 planConfirmedAt");
+  // plan 修订（patch）→ 旧 PASS 结论必须被清；M16-r44：确认记账同点作废
   const p = await tool(m).execute({ kind: "plan", patch: [{ old: "旧方案", new: "新方案" }] }, { sessionID: sid, agent: "wf/planner" });
   assert.match(p.content, /已写入/);
   assert.equal(stOf(sid).planReviewVerdict, undefined, "plan 修订清 planReviewVerdict");
+  assert.equal(stOf(sid).planConfirmedAt, undefined, "plan 修订清 planConfirmedAt");
+  await confirm(m, sid); // 重新确认后再验 verdict 关卡
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /验证关卡未过/, "修订后旧 PASS 不得蒙混 wf:build");
   // 恢复：重新独立验证 PASS → 放行

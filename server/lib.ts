@@ -48,6 +48,9 @@ export interface WfState {
   mode?: string;
   // M16-r34：日常模式 M/L 独立验证结论（plan-review 首行 **结论** 解析记账），wf:build 关卡校验
   planReviewVerdict?: string;
+  // M16-r44：方案确认记账——leader 经 question 工具呈现含「批准执行」选项的确认卡片时由 guard-hook 记录；
+  //   plan 修订（wf:plan 推进 / wf_write_artifact kind=plan）与新任务 intake 即作废，wf:build 关卡校验
+  planConfirmedAt?: string;
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -104,6 +107,12 @@ export const NEXT: Record<string, string> = {
   testing: "PASS→/wf:done，FAIL→/wf:fix", fixing: "/wf:test", done: "（终态，含并行复盘）",
 };
 
+// M16-r44：方案确认关卡拒绝文案（full/daily 共用；blocked-append 指路契约）
+const CONFIRM_GATE_MSG =
+  "❌ 方案确认关卡未过：尚未观测到方案确认交互。请先用宿主 question 工具向用户呈现方案摘要" +
+  "（选项标签固定：批准执行/修改方案/终止任务），待用户批准后再推进 /wf:build（wf_command 或用户手敲；" +
+  "确认以 question 交互为准，手敲 /wf:build 同样须先经确认）。";
+
 // ── M5：命令级进阶关卡（返回 null=放行，字符串=拒绝理由）──────────
 // M16-r28：双通道关卡原挂 wf:assign（assign 阶段已并入 test_design），迁移至 wf:test-design 入口，
 //   语义不变：计划审核（流转合法性）之外，还须 tester 已产出 test-plan.md（M3 记账 testPlanWritten）
@@ -112,6 +121,8 @@ export const GATES: Record<string, (st: WfState) => string | null> = {
   "wf:test-design": (st) =>
     st.testPlanWritten ? null :
       "❌ 双通道关卡未过：tester(feasibility) 尚未产出 test-plan.md。请回到 review 阶段委派 wf/tester(mode=feasibility)，用 wf_write_artifact(kind=test-plan) 写入后，再推进 /wf:test-design（leader 调用 wf_command(name=\"wf:test-design\")，用户手敲亦可）。",
+  // M16-r44：方案确认关卡（full 模式；daily 用 GATES_DAILY["wf:build"] 同源校验）
+  "wf:build": (st) => (st.planConfirmedAt ? null : CONFIRM_GATE_MSG),
   "wf:done": (st) =>
     st.testReportVerdict === "PASS" ? null :
       `❌ 验收关卡未过：test-report.md 结论为「${st.testReportVerdict ?? "未产出"}」（要求 PASS）。` +
@@ -136,12 +147,14 @@ export const NEXT_DAILY: Record<string, string> = {
   building: "/wf:test", testing: "PASS→/wf:done，FAIL→/wf:fix（回 building 返工）", done: "（终态）",
 };
 export const GATES_DAILY: Record<string, (st: WfState) => string | null> = {
-  // M/L 独立验证硬关卡：plan-review 结论须 PASS（S 自验自律，跳过）
+  // M/L 独立验证硬关卡：plan-review 结论须 PASS（S 自验自律，跳过结论校验）；
+  // M16-r44：方案确认关卡全 tier 必经（S 也确认，故 S 分支只跳结论、不跳确认）
   "wf:build": (st) =>
-    st.size === "S" ? null :
-      st.planReviewVerdict === "PASS" ? null :
-        `❌ 验证关卡未过：plan-review 结论为「${st.planReviewVerdict ?? "未产出"}」（要求 PASS）。` +
-        `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；FAIL → wf:plan 带意见修订后再验。`,
+    !st.planConfirmedAt ? CONFIRM_GATE_MSG :
+      st.size === "S" ? null :
+        st.planReviewVerdict === "PASS" ? null :
+          `❌ 验证关卡未过：plan-review 结论为「${st.planReviewVerdict ?? "未产出"}」（要求 PASS）。` +
+          `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；FAIL → wf:plan 带意见修订后再验。`,
   "wf:done": GATES["wf:done"],
 };
 // mode 选择：存量无 mode → full（兼容）；daily 用子表。所有流转/关卡/指引/下一步提示同源此判定。
@@ -368,6 +381,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.testPlanWritten;
       delete st.testReportVerdict;
       delete st.planReviewVerdict; // M16-r34：新任务清验证结论
+      delete st.planConfirmedAt; // M16-r44：新任务清方案确认记账
     }
     // M16-r33 P2 体量前缀 [S]/[M]/[L] + M16-r34 模式前缀 [FULL]（可跟在 ! 强制符后，任意序）。
     // 新 intake 默认 daily（日常习惯流）；[FULL] 显式完整 9 阶段流。size 缺省 M。
@@ -384,6 +398,9 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
     st.size = size;
     st.mode = mode;
   }
+
+  // M16-r44：方案确认关卡——重开规划（wf:plan）即作废旧确认，wf:build 关卡要求重新交互确认
+  if (cmd === "wf:plan") delete st.planConfirmedAt;
 
   return { ok: true };
 }

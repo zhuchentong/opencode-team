@@ -25,6 +25,7 @@ test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并
     "wf:build", "wf:reconcile", "wf:review-build", "wf:test", "wf:done"];
   for (const cmd of steps) {
     if (cmd === "wf:test-design") st.testPlanWritten = true; // gate 前置条件
+    if (cmd === "wf:build") st.planConfirmedAt = "2026-01-01T00:00:00Z"; // M16-r44：方案确认关卡前置条件
     if (cmd === "wf:done") st.testReportVerdict = "PASS"; // gate 前置条件
     const r = advance(st, cmd, "[FULL] demo-task"); // M16-r34：本测试验证完整 9 阶段流，显式 [FULL]
     assert.equal(r.ok, true, `${cmd} 应通过：${JSON.stringify(r)}`);
@@ -107,7 +108,7 @@ test("计数器「进入即计数」：review 首入=1，重复递增，达 LIMI
 });
 
 test("计数器独立：build_review 与 test_fix 各自计数", () => {
-  const st = mkSt("test_design");
+  const st = mkSt("test_design", { planConfirmedAt: "2026-01-01T00:00:00Z" }); // M16-r44：wf:build 关卡前置
   assert.equal(advance(st, "wf:build").ok, true);
   assert.equal(advance(st, "wf:reconcile").ok, true);
   assert.equal(advance(st, "wf:review-build").ok, true);

@@ -39,6 +39,7 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
             mode: st.mode ?? null,
             size: st.size ?? null,
             planReviewVerdict: st.planReviewVerdict ?? null,
+            planConfirmedAt: st.planConfirmedAt ?? null, // M16-r44：方案确认记账
             artifacts: st.artifacts ?? {},
             updatedAt: st.updatedAt ?? null,
             lastReport,

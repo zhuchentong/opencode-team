@@ -97,8 +97,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 当未验证线索逐条确认销项 + plan.md 修订 diff + 一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(S
-        ? `自验通过 → wf_command(name="wf:build")；不过 → 修订 plan 后再验；超限 → 停下问用户`
-        : `FAIL → wf_command(name="wf:plan") 带意见修订再 wf:review；PASS → wf_command(name="wf:build")（关卡校验 plan-review 结论）；超限 → 停下问用户`);
+        ? `自验通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；wf:build 关卡校验确认记账）→ wf_command(name="wf:build")；不过 → 修订 plan 后再验；超限 → 停下问用户`
+        : `FAIL → wf_command(name="wf:plan") 带意见修订再 wf:review（plan 修订即作废确认记账）；PASS → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务）→ wf_command(name="wf:build")（关卡校验 plan-review 结论+确认记账）；超限 → 停下问用户`);
       lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
       if (!S && (r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
       return lines.join("\n");
@@ -175,7 +175,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
         lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer 的 sessionID 委派（省冷启动）；复核范围=上轮 plan-review-r${(r.plan_review ?? 1) - 1}.md 的 findings 当未验证线索逐条确认销项 + 本轮 plan.md 修订 diff 全文（防返工引入新缺陷）+ 交叉一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(
-        `任一不通过 → wf_command(name="wf:plan") 回规划并带意见委派 wf/planner，再 wf_command(name="wf:review")；双通道通过 → wf_command(name="wf:test-design")（关卡随迁：须 test-plan.md 已产出）；超限 → 停下问用户`,
+        `任一不通过 → wf_command(name="wf:plan") 回规划并带意见委派 wf/planner，再 wf_command(name="wf:review")（plan 修订即作废确认记账）；双通道通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务）→ wf_command(name="wf:test-design")（关卡随迁：须 test-plan.md 已产出）；超限 → 停下问用户`,
       );
       lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
       if ((r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
@@ -187,7 +187,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `先冻结接口，按 T<nn> 排串行执行顺序（默认一个 wf/builder 串行完成整场任务；多 builder 并行拆树=例外，需用户同意）。`,
       `委派 wf/tester(mode=design)：按已冻结接口在主树测试目录写会失败的验收/集成测试（红），作为执行 worktree 的 TDD 锚点。`,
       `委派契约：prompt 只带 test-plan.md/plan.md 接口签名段落，禁止全仓扫描；优先续用 feasibility 拍 wf/tester 的 sessionID（省冷启动）。`,
-      `发现接口问题 → wf_command(name="wf:plan") 回规划修订（返工边）；完成 → wf_command(name="wf:build")`,
+      `发现接口问题 → wf_command(name="wf:plan") 回规划修订（返工边，plan 修订即作废确认记账）；完成 → wf_command(name="wf:build")（确认关卡：此前未经 question 方案确认的先补做，选项标签固定：批准执行/修改方案/终止任务）`,
       ...reuseLines(st, "wf/tester"),
     ].join("\n");
     case "building": return [
