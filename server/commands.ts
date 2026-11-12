@@ -16,6 +16,7 @@ import {
   type WfState,
 } from "./lib.ts";
 import { guidance, entryValue } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
+import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
 import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
@@ -133,6 +134,17 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         const flow = flowFor(st, cmd)!;
         st.phase = flow.to;
         st.updatedAt = at;
+        // tui-sidebar-elapsed T01（plan §3.2 冻结）：墙钟计时记账——离开阶段闭账（FOLD 折叠 key，
+        // 多轮 revisit 累计）；重置块已置 phaseEnteredAt=at 时闭账跳过（d 恒 0，不污染空账）。
+        // fromKey 置于 if 内：strict 下 from 经守卫收窄为 string（语义与冻结式逐字一致，仅作用域收窄）
+        if (from && st.phaseEnteredAt && st.phaseEnteredAt !== at) {
+          const fromKey = FOLD[from] ?? from;
+          const d = Math.max(0, Math.round((Date.parse(at) - Date.parse(st.phaseEnteredAt)) / 1000));
+          st.phaseDurations = { ...st.phaseDurations, [fromKey]: (st.phaseDurations?.[fromKey] ?? 0) + d };
+        }
+        st.phaseEnteredAt = at;
+        if (flow.to === "done" && st.startedAt && !st.finishedAt) st.finishedAt = at;
+        // 存量（无 startedAt）推 done 不置 finishedAt（总耗时保持 null 降级 ·）
         // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
         if (!st.projectID) {
           try {
@@ -394,6 +406,28 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }
+      },
+    });
+    add({
+      name: "wf:open",
+      description: `查看产物内容（只读降级轨：无参列产物清单，带参输出该产物全文，${VERSION}）`,
+      execute: async (a: any) => {
+        const st = await load(a.sessionID);
+        if (!st || (!st.slug && !st.phase)) return "wf:open：本会话无活动任务。";
+        const arts = st.artifacts ?? {};
+        const names = Object.keys(arts);
+        const file = promptText(a.prompt).trim();
+        if (!file) return `wf 产物清单（slug=${st.slug}）：${names.join("、") || "（无）"}\n用法：/wf:open <产物文件名> 查看全文（TUI 侧边栏可直接点击产物行）。`;
+        // 白名单 = artifacts 记账 key（防路径穿越；与 RPC read 契约同源）
+        if (!names.includes(file)) return `❌ 产物未记账：${file}（清单：${names.join("、") || "无"}）`;
+        const dir = await resolveProjectDir(st, a.sessionID);
+        const path = `${dir}/.workflow/${st.slug}/${file}`;
+        let text: string;
+        try { text = await fsReadFile(path, "utf8"); } catch { return `❌ 产物已记账但文件缺失：${path}`; }
+        const bytes = Buffer.byteLength(text, "utf8");
+        const MAX = 64 * 1024;
+        const truncated = bytes > MAX;
+        return [`📄 ${path}（${(bytes / 1024).toFixed(1)}k）`, "", truncated ? `${text.slice(0, MAX)}\n…（超 64KB 截断）` : text].join("\n");
       },
     });
     add({

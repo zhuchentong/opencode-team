@@ -47,7 +47,7 @@ export default {
     // ── M8-a/M16：RPC 桥（TUI 侧边栏读状态 + exec 通道，见 rpc-bridge.ts）──
     // runner：解 bridge↔commands 循环依赖的可变引用——commands 注册时填充 run，bridge exec 调用
     const runner: { run: ((name: string, a: any) => Promise<unknown>) | null } = { run: null };
-    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates, getReport, runner });
+    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(ctx, { load, scanStates, getReport, runner, resolveProjectDir });
 
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(ctx, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });

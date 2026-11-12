@@ -57,7 +57,8 @@ fs.mkdirSync(DIR, { recursive: true });
 // ── 纯函数：leaderOnlyReject ────────────────────────────────────────
 // M16-r38：leader 主名 workflow（显示 Workflow）；wf/leader 保留为过渡兼容别名（热载不断）。
 test("r36 leaderOnlyReject：豁免集齐全；leader（workflow+兼容 wf/leader）放行；非 leader/空 agent 变更拒、只读放行", () => {
-  assert.deepEqual([...READONLY_CMDS].toSorted(), ["wf:diagnose", "wf:ping", "wf:reset", "wf:status"]);
+  // M16-r46 批2：+wf:open（产物查看只读——非 leader 可用）
+  assert.deepEqual([...READONLY_CMDS].toSorted(), ["wf:diagnose", "wf:open", "wf:ping", "wf:reset", "wf:status"]);
   for (const c of ["wf:intake", "wf:plan", "wf:review", "wf:build", "wf:test", "wf:done", "wf:lane"]) {
     assert.equal(leaderOnlyReject("workflow", c), null, `workflow ${c} 放行`);
     assert.equal(leaderOnlyReject("wf/leader", c), null, `兼容别名 wf/leader ${c} 放行`);

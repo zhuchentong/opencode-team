@@ -1,13 +1,16 @@
 // wf-workflow — RPC 桥（M8-a，自 index.ts 原样搬移）：ctx.rpc.register(Wf)（shared/rpc.ts）
-// 暴露 state/list 方法供 TUI 侧边栏订阅；流转/产物落盘时 emit("updated") 驱动刷新。
+// 暴露 state/list/read 方法供 TUI 侧边栏订阅；流转/产物落盘时 emit("updated") 驱动刷新。
 // 注册失败 fail-soft（rpcErr 记录，供 /wf:diagnose 显示；此时尚不含 tui/ 部件，server 侧可独立验证）。
 // P1：命令输出槽迁移至 SQLite reports 表（getReport 由 state.ts 注入，ctx.storage 不再参与）。
+import * as fs from "node:fs";
 
-export async function createRpcBridge(ctx: any, { load, scanStates, getReport, runner }: {
+export async function createRpcBridge(ctx: any, { load, scanStates, getReport, runner, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
   getReport: (sessionID: string) => Promise<any>;
   runner: { run: ((name: string, a: any) => Promise<unknown>) | null };
+  // M16-r46 批1：产物落盘目录三级回退（与 artifact-tool 同源，state.ts 提供）
+  resolveProjectDir: (st: any, sessionID: string) => Promise<string>;
 }) {
   let rpcReg = null;
   let rpcErr = null;
@@ -40,12 +43,44 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
             size: st.size ?? null,
             planReviewVerdict: st.planReviewVerdict ?? null,
             planConfirmedAt: st.planConfirmedAt ?? null, // M16-r44：方案确认记账
+            // tui-sidebar-elapsed T02（plan §3.3）：墙钟计时 4 字段（存量任务 null → TUI 降级 ·）
+            startedAt: st.startedAt ?? null,
+            phaseEnteredAt: st.phaseEnteredAt ?? null,
+            phaseDurations: st.phaseDurations ?? null,
+            finishedAt: st.finishedAt ?? null,
             artifacts: st.artifacts ?? {},
             updatedAt: st.updatedAt ?? null,
             lastReport,
           };
         },
         list: async (input: any) => ({ sessions: await scanStates(input?.projectID ?? null, input?.directory ?? null) }),
+        // M16-r46 批1：产物预览数据通道（见 shared/rpc.ts read 契约注释）。
+        // 白名单 = artifacts 记账 key（防路径穿越）；错误走 error 字段不抛错；超 64KB 截断。
+        read: async (input: any) => {
+          const file = String(input?.file ?? "");
+          const sid = String(input?.sessionID ?? "");
+          const deny = (error: string) => ({ text: "", bytes: 0, path: "", truncated: false, error });
+          try {
+            const st = await load(sid);
+            if (!st || (!st.slug && !st.phase)) return deny("wf 无活动任务，无产物可读");
+            const recorded = Object.keys(st.artifacts ?? {});
+            if (!recorded.includes(file)) return deny(`产物未记账（不在产物清单内）：${file || "(空文件名)"}`);
+            const dir = await resolveProjectDir(st, sid);
+            const path = `${dir}/.workflow/${st.slug}/${file}`;
+            let text: string;
+            try {
+              text = fs.readFileSync(path, "utf8");
+            } catch {
+              return { ...deny(`产物已记账但文件缺失：${path}`), path };
+            }
+            const bytes = Buffer.byteLength(text, "utf8");
+            const MAX = 64 * 1024;
+            const truncated = bytes > MAX;
+            return { text: truncated ? text.slice(0, MAX) : text, bytes, path, truncated };
+          } catch (e) {
+            return deny(`wf read 失败：${String((e as Error)?.message ?? e)}`);
+          }
+        },
         // P2 主轨：TUI 本地命令经 exec 拿完整输出文本（methods 返回值通道，2.2.6 实证可用）。
         // 未知命令不抛错（抛错 client 只见 rpc.internal，原因被吞——quota 教训）；返回错误文案。
         exec: async (input: any) => {

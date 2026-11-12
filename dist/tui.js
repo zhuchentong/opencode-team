@@ -73,6 +73,29 @@ var Wf = { define: (def) => def }.define({
 				additionalProperties: true
 			}
 		},
+		read: {
+			input: {
+				type: "object",
+				properties: {
+					sessionID: { type: "string" },
+					file: { type: "string" }
+				},
+				required: ["sessionID", "file"],
+				additionalProperties: false
+			},
+			output: {
+				type: "object",
+				properties: {
+					text: { type: "string" },
+					bytes: { type: "integer" },
+					path: { type: "string" },
+					truncated: { type: "boolean" },
+					error: { type: "string" }
+				},
+				required: ["text", "path"],
+				additionalProperties: true
+			}
+		},
 		exec: {
 			input: {
 				type: "object",
@@ -186,6 +209,10 @@ var fit = (s, w) => {
 	}
 	return padE(out, w);
 };
+var fmtElapsed = (sec) => {
+	const s2 = Math.max(0, Math.floor(sec));
+	return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, "0")}`;
+};
 var ZH = {
 	intake: "需求录入",
 	planning: "计划",
@@ -202,12 +229,19 @@ var ZH = {
 };
 var zhOf = (phase) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
 var mark = (ok) => ok ? "✓" : "✗";
+var fmtKB = (b) => {
+	const n = Number(b ?? 0);
+	return n > 0 ? `${(n / 1024).toFixed(1).replace(/\.0$/, "")}k` : "";
+};
+var artLine = (name, ok, kb, exempt) => `  ▸ ${fit(name, 18)} ${exempt ? "免" : mark(ok)}${exempt || !kb ? "" : ` ${kb}`}`;
 function textEl(s, fg) {
 	const t = createElement("text");
 	try {
 		if (fg) setProp(t, "fg", fg);
 	} catch {}
-	setProp(t, "truncate", true);
+	try {
+		setProp(t, "wrapMode", "none");
+	} catch {}
 	insert(t, [sanitize(s)]);
 	return t;
 }
@@ -227,24 +261,28 @@ var listLine = (x) => {
 	const r = x?.rounds ?? {};
 	return `${fit(str(x?.slug || "(未定)"), 14)} ${fit(zhOf(x?.phase), 8)} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
 };
-var buildRows = (s, err, oth, othScope, T) => {
+var buildRows = (s, err, oth, othScope, T, now, w) => {
 	const t = Array.from({ length: ROWS }, () => " ");
 	const c = Array.from({ length: ROWS }, () => T.text.muted);
-	t[0] = "── Workflow ────────";
-	t[19] = "──────────────────────";
+	const af = Array.from({ length: ROWS }, () => null);
+	const W = w ?? 80;
+	t[0] = "── Workflow " + "─".repeat(Math.max(0, W - 12));
+	t[19] = "─".repeat(W);
 	if (err) {
 		t[1] = `wf 错误: ${err}`;
 		c[1] = T.text.feedback.error;
 		return {
 			t,
-			c
+			c,
+			af
 		};
 	}
 	if (!s) {
 		t[1] = "  wf: …";
 		return {
 			t,
-			c
+			c,
+			af
 		};
 	}
 	if (!s.active) {
@@ -258,7 +296,8 @@ var buildRows = (s, err, oth, othScope, T) => {
 		} else t[1] = "  wf: 本会话无活动任务";
 		return {
 			t,
-			c
+			c,
+			af
 		};
 	}
 	const r = s.rounds ?? {};
@@ -273,8 +312,7 @@ var buildRows = (s, err, oth, othScope, T) => {
 	const done = isDone ? total : i;
 	const bar = "●".repeat(done) + "○".repeat(total - done);
 	const arts = s.artifacts ?? {};
-	const hasPlanReview = Object.keys(arts).some((n) => n.startsWith("plan-review"));
-	const extraCount = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0 && !(daily && n.startsWith("plan-review"))).length;
+	const extraCount = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0).length;
 	const verdict = s.testReportVerdict;
 	const size = str(s.size || "M");
 	const pv = s.planReviewVerdict;
@@ -282,9 +320,11 @@ var buildRows = (s, err, oth, othScope, T) => {
 	c[1] = T.text.base;
 	t[2] = `  ${bar} ${done}/${total} · F${i} ${zhOf(s.phase)}`;
 	c[2] = T.text.action.primary;
-	t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}`;
+	const totalSec = s.finishedAt && s.startedAt ? (Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1e3 : s.startedAt && now ? (now - Date.parse(s.startedAt)) / 1e3 : null;
+	if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
+	t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}  ${padS("耗时", 6)}`;
 	c[4] = T.text.muted;
-	t[5] = " " + "─".repeat(23);
+	t[5] = " " + "─".repeat(W - 1);
 	c[5] = T.text.muted;
 	const roundOf = (stage) => {
 		if (stage === "review") return `${planV}/3`;
@@ -296,8 +336,16 @@ var buildRows = (s, err, oth, othScope, T) => {
 	for (let k = 0; k < total; k++) {
 		const stage = order[k];
 		const st = isDone || k < i ? "完成" : k === i ? "进行" : "待办";
+		let ev = "·";
+		if (st === "完成") {
+			const d = s.phaseDurations?.[FOLD[stage] ?? stage];
+			if (Number.isFinite(d)) ev = fmtElapsed(d);
+		} else if (st === "进行" && now && s.phaseEnteredAt) {
+			const sec = (now - Date.parse(s.phaseEnteredAt)) / 1e3;
+			if (Number.isFinite(sec)) ev = fmtElapsed(sec);
+		}
 		const row = 6 + k;
-		t[row] = ` ${String(k + 1).padStart(2, "0")} ${padE(ZH[stage] ?? stage, 8)}  ${st}  ${padS(roundOf(stage), 4)}`;
+		t[row] = ` ${String(k + 1).padStart(2, "0")} ${padE(ZH[stage] ?? stage, 8)}  ${st}  ${padS(roundOf(stage), 4)}  ${padS(ev, 6)}`;
 		c[row] = capOf(stage) ? T.text.feedback.error : k === i && !isDone ? T.text.action.primary : isDone || k < i ? T.text.base : T.text.muted;
 	}
 	let k = 6 + total;
@@ -318,17 +366,63 @@ var buildRows = (s, err, oth, othScope, T) => {
 		c[k] = verdict === "FAIL" ? T.text.feedback.error : verdict === "PASS" ? T.text.feedback.success : T.text.muted;
 	}
 	k++;
-	const a1 = daily ? size === "S" ? "plan-review —(S免)" : `plan-review ${mark(hasPlanReview)}` : `test-plan.md ${mark(!!arts["test-plan.md"])}`;
-	t[k] = `  产物 plan.md ${mark(!!arts["plan.md"])} · ${a1}`;
-	c[k] = T.text.base;
-	k++;
-	t[k] = `       test-report.md ${mark(!!arts["test-report.md"])} · 其他 ${extraCount} 项`;
-	c[k] = T.text.base;
+	if (daily) {
+		const items = [{
+			name: "plan.md",
+			ok: !!arts["plan.md"],
+			kb: fmtKB(arts["plan.md"]?.bytes)
+		}];
+		if (size === "S") items.push({
+			name: "plan-review",
+			ok: false,
+			kb: "",
+			exempt: true
+		});
+		else {
+			const pr = Object.keys(arts).filter((n) => n.startsWith("plan-review")).toSorted((a, b) => String(arts[b]?.at ?? "").localeCompare(String(arts[a]?.at ?? "")))[0];
+			if (pr) items.push({
+				name: pr,
+				ok: true,
+				kb: fmtKB(arts[pr]?.bytes)
+			});
+		}
+		items.push({
+			name: "test-report.md",
+			ok: !!arts["test-report.md"],
+			kb: fmtKB(arts["test-report.md"]?.bytes)
+		});
+		const extras = Object.keys(arts).filter((n) => CANON.indexOf(n) < 0 && !n.startsWith("plan-review")).toSorted((a, b) => String(arts[b]?.at ?? "").localeCompare(String(arts[a]?.at ?? "")));
+		for (const n of extras) items.push({
+			name: n,
+			ok: true,
+			kb: fmtKB(arts[n]?.bytes)
+		});
+		for (let n = 0; n < 3 && n < items.length; n++) {
+			const it = items[n];
+			t[14 + n] = artLine(it.name, it.ok, it.kb, it.exempt);
+			c[14 + n] = T.text.base;
+			if (it.ok && !it.exempt) af[14 + n] = it.name;
+		}
+		const more = items.length - 3;
+		if (more > 0) {
+			t[17] = `  ▸ …${more} 更多`;
+			c[17] = T.text.muted;
+		}
+	} else {
+		t[k] = `  ▸ plan.md ${mark(!!arts["plan.md"])} · test-plan.md ${mark(!!arts["test-plan.md"])}`;
+		c[k] = T.text.base;
+		k++;
+		t[k] = `     test-report.md ${mark(!!arts["test-report.md"])} · 其他 ${extraCount} 项`;
+		c[k] = T.text.base;
+		af[k - 1] = arts["plan.md"] ? "plan.md" : arts["test-plan.md"] ? "test-plan.md" : null;
+		af[k] = arts["test-report.md"] ? "test-report.md" : null;
+	}
 	t[18] = "  /wf:status 查看状态";
 	c[18] = T.text.muted;
 	return {
 		t,
-		c
+		c,
+		af
 	};
 };
 var isImportant = (text) => /⚠️|❌|FAIL|illegal/i.test(text);
@@ -485,7 +579,8 @@ var tui_default = Plugin.define({
 				const fp = JSON.stringify([
 					s ?? null,
 					oth,
-					othScope
+					othScope,
+					Math.floor(Date.now() / 5e3)
 				]);
 				if (fp !== lastFp) {
 					lastFp = fp;
@@ -540,6 +635,156 @@ var tui_default = Plugin.define({
 				});
 			}
 		};
+		const ROUTE_NAME = "wf-artifact";
+		const openArtifact = async (file) => {
+			const sid = latestSid;
+			if (!sid || !file) return;
+			probe({
+				evt: "open-artifact",
+				file
+			});
+			try {
+				const r = await rpc().read({
+					sessionID: sid,
+					file
+				}, rpcOpts());
+				if (!r || r.error) {
+					context.ui.toast.show({
+						message: String(r?.error ?? `读取产物失败：${file}`),
+						variant: "info"
+					});
+					return;
+				}
+				if (routerOk) try {
+					context.ui.router.navigate({
+						type: "plugin",
+						name: ROUTE_NAME,
+						data: {
+							file,
+							text: r.text,
+							bytes: r.bytes ?? 0,
+							path: r.path,
+							truncated: !!r.truncated
+						}
+					});
+					probe({
+						evt: "navigate-ok",
+						file
+					});
+					return;
+				} catch (e) {
+					probe({
+						evt: "navigate-err",
+						err: errMsg(e)
+					});
+				}
+				context.ui.toast.show({
+					message: `产物路径：${r.path}（预览 route 不可用）`,
+					variant: "info"
+				});
+			} catch (e) {
+				context.ui.toast.show({
+					message: `打开产物失败：${errMsg(e)}`,
+					variant: "error"
+				});
+			}
+		};
+		let routerOk = false;
+		try {
+			const R = context.ui?.router;
+			probe({
+				evt: "router-probe",
+				hasRegister: typeof R?.register === "function",
+				hasNavigate: typeof R?.navigate === "function",
+				hasCurrent: typeof R?.current === "function"
+			});
+			if (typeof R?.register === "function" && typeof R?.navigate === "function") {
+				R.register({
+					name: ROUTE_NAME,
+					render: (input) => {
+						probe({
+							evt: "route-render",
+							keys: Object.keys(input ?? {}).slice(0, 8).join(",")
+						});
+						const container = boxEl([]);
+						insert(container, () => {
+							try {
+								const d = input?.data ?? input ?? {};
+								const T = context.theme ?? { text: {
+									muted: "gray",
+									base: "white",
+									feedback: { error: "red" }
+								} };
+								const body = String(d.text ?? "").split("\n");
+								const rows = [
+									"── wf 产物预览 ────────────────",
+									`  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`,
+									`  ${str(d.path)}`,
+									" ",
+									...body.slice(0, 200).map((ln) => "  " + ln),
+									...body.length > 200 ? [`  …（共 ${body.length} 行，仅显示前 200 行）`] : [],
+									" ",
+									"  q 返回会话"
+								];
+								return boxEl(rows.map((ln, i) => textEl(ln, i <= 2 || i === rows.length - 1 ? T.text.muted : T.text.base)));
+							} catch (e) {
+								probe({
+									evt: "route-render-ERR",
+									err: errMsg(e)
+								});
+								return boxEl([textEl(`wf 预览异常: ${errMsg(e)}`, "red")]);
+							}
+						});
+						return container;
+					}
+				});
+				routerOk = true;
+			}
+		} catch (e) {
+			probe({
+				evt: "router-register-err",
+				err: errMsg(e)
+			});
+		}
+		if (routerOk) try {
+			context.keymap.layer(() => ({
+				mode: "global",
+				priority: 2,
+				commands: [{
+					id: "wf.artifact.close",
+					title: "wf: 关闭产物预览",
+					bind: "q",
+					enabled: () => {
+						try {
+							const cur = context.ui?.router?.current?.();
+							return String(cur?.name ?? "") === ROUTE_NAME;
+						} catch {
+							return false;
+						}
+					},
+					run: () => {
+						try {
+							context.ui.router.navigate({
+								type: "session",
+								sessionID: latestSid
+							});
+							return true;
+						} catch (e) {
+							probe({
+								evt: "close-nav-err",
+								err: errMsg(e)
+							});
+							return false;
+						}
+					}
+				}]
+			}));
+		} catch (e) {
+			probe({
+				evt: "keymap-err",
+				err: errMsg(e)
+			});
+		}
 		const offUpdated = rpc().events.on("updated", (e) => {
 			if (locOk(e)) refresh();
 		}, { signal: ac.signal });
@@ -617,8 +862,18 @@ var tui_default = Plugin.define({
 							const label = zhOf(s.phase);
 							return textEl(`▶ ${s.mode === "daily" ? `[daily·${str(s.size || "M")}] ` : ""}${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
 						}
-						const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
-						return boxEl(t.map((line, i) => textEl(line, c[i])));
+						const W = Math.max(24, Math.floor(Number(context?.renderer?.width)) || 80);
+						const { t, c, af } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T, Date.now(), W);
+						return boxEl(t.map((line, i) => {
+							const el = textEl(line, c[i]);
+							const f = af?.[i];
+							if (f) try {
+								setProp(el, "onMouseDown", () => {
+									openArtifact(f);
+								});
+							} catch {}
+							return el;
+						}));
 					} catch (e) {
 						probe({
 							evt: "render-ERR",
@@ -652,7 +907,8 @@ var tui_default = Plugin.define({
 					try {
 						editor.clear();
 					} catch {}
-					execLocal(name, promptText);
+					if (name === "wf:open" && promptText.trim() && routerOk) openArtifact(promptText.trim());
+					else execLocal(name, promptText);
 					probe({
 						evt: "intercept-hit",
 						name
@@ -686,4 +942,4 @@ var tui_default = Plugin.define({
 		};
 	}
 });
-export { buildRows, tui_default as default, dispW, listLine };
+export { buildRows, tui_default as default, dispW, fmtElapsed, listLine };

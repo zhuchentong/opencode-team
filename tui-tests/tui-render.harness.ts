@@ -61,7 +61,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const theme = {
   text: { base: "#fff", muted: "#888", action: { primary: "#0af" }, feedback: { error: "#f55", success: "#5f5" } },
 };
-function makeCtx() {
+function makeCtx(opts?: { noRouter?: boolean }) {
   const slots: Record<string, (props: any) => any> = {};
   const keymaps: any[] = [];
   let listSessions: any[] = [];
@@ -72,8 +72,14 @@ function makeCtx() {
   const dataCbs: any[] = [];
   let stateReply: any = { active: false, slug: "", phase: null };
   let lastExec: any = null;
+  let readReply: any = null;
   const editor = { plainText: "", clear() { this.plainText = ""; } };
-  const ctx = {
+  // M16-r46 批2：router mock（形状对齐 2.2.6 二进制取证的 register/navigate/current）
+  const router: any = { registered: [] as any[], navigated: [] as any[], cur: null as any,
+    register: (d: any) => { router.registered.push(d); },
+    navigate: (d: any) => { router.navigated.push(d); if (d?.name) router.cur = d; },
+    current: () => router.cur };
+  const ctx: any = {
     theme,
     options: {},
     location: { directory: "/proj" },
@@ -81,6 +87,7 @@ function makeCtx() {
       slot: (cfg: any) => { slots[cfg.append] = cfg.render; },
       panel: { open: () => false },
       toast: { show: (t: any) => { toasts.push(t); } },
+      ...(opts?.noRouter ? {} : { router }),
     },
     keymap: { layer: (fn: any) => { keymaps.push(fn); } },
     renderer: { currentFocusedEditor: editor },
@@ -90,6 +97,7 @@ function makeCtx() {
           state: async (_input: any) => stateReply,
           list: async (_input: any) => ({ sessions: listSessions }),
           exec: async (input: any) => { lastExec = input; return { text: "exec 报告", at: new Date().toISOString() }; },
+          read: async (_input: any) => readReply,
           events: { on: (name: string, cb: () => void, opts?: any) => { listeners.push({ name, cb, opts }); return () => { }; } },
         };
       },
@@ -98,9 +106,10 @@ function makeCtx() {
     data: { session: { get: (_id: string) => ({ projectID: "p1", location: { directory: "/proj" } }) }, listen: (cb: any) => { dataCbs.push(cb); return () => { }; }, on: (type: string, cb: any) => { if (type === "server.connected") connCbs.push(cb); return () => { }; } },
   };
   return {
-    ctx, slots, keymaps, listeners, toasts, dataCbs, editor, notifies, connCbs,
+    ctx, slots, keymaps, listeners, toasts, dataCbs, editor, notifies, connCbs, router,
     setSessions: (s: any[]) => { listSessions = s; },
     setState: (s: any) => { stateReply = s; },
+    setRead: (r: any) => { readReply = r; },
     getExec: () => lastExec,
   };
 }
@@ -140,6 +149,9 @@ console.log(`插件 id: ${t.id}`);
   ok("P4 通知层①server.connected 重拉存在", src.includes('"server.connected"'));
   ok("P4 通知层②attention.notify 接入存在", src.includes("attention"));
   ok("P4 通知层③AbortSignal 统一订阅存在", src.includes("ac.abort()"));
+  // M16-r46 批2：产物点击接线静态守卫（换树盲区由本守卫+真机目检代劳——探针③已实证 OpenTUI 命中）
+  ok("P4 产物行 onMouseDown 绑定点在位", src.includes('"onMouseDown"'));
+  ok("P4 router fail-soft 探测在位", src.includes("hasRegister"));
 }
 
 // ── P5：挂载渲染——render 返回单一元素 + testRender 帧不崩 ───────────
@@ -322,7 +334,8 @@ console.log(`插件 id: ${t.id}`);
 // ── P11: M16-r37 侧边栏表格化——buildRows 纯函数直测（绕开 testRender 信号→换树盲区）──
 // 布局锚：t0 头线/t1 slug/t2 进度/t4 表头/t5 细线/t6.. 阶段行（daily 6→6..11，full 9→6..14）；
 // 尾段 cursor=6+n（剩余>3 行先插空行）→ 关卡/产物1/产物2；t18 提示行/t19 尾线。
-// 列几何：1+2+1+8+2+4+2+4=24 cell；状态词起始偏移恒 14；轮次右对齐 4 cell。
+// 列几何：1+2+1+8+2+4+2+4+2+6=32 cell（tui-sidebar-elapsed：+2 分隔+6 耗时列）；
+// 状态词起始偏移恒 14；轮次右对齐 4 cell（20-23）；耗时右对齐 6 cell（26-31）。
 {
   const T = theme;
   const base = { active: true, slug: "todo", rounds: {}, artifacts: {}, testPlanWritten: false, testReportVerdict: null };
@@ -331,27 +344,40 @@ console.log(`插件 id: ${t.id}`);
   const s = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
   ok("P11 daily S slug 行带 [daily·S] 徽标", s.t[1].includes("[daily·S]"), s.t[1]);
   ok("P11 daily building=F3 进度 3/6", s.t[2].includes("F3") && s.t[2].includes("3/6") && s.t[2].includes("●●●○○○"), s.t[2]);
-  ok("P11 表头含 阶段/状态/轮次", s.t[4].includes("阶段") && s.t[4].includes("状态") && s.t[4].includes("轮次"), s.t[4]);
+  ok("P11 表头含 阶段/状态/轮次/耗时", s.t[4].includes("阶段") && s.t[4].includes("状态") && s.t[4].includes("轮次") && s.t[4].includes("耗时"), s.t[4]);
   const rows6 = s.t.slice(6, 12);
   ok("P11 daily 6 阶段行序号连续", rows6.every((r: string, k: number) => r.startsWith(` 0${k + 1} `)), JSON.stringify(rows6));
   ok("P11 daily 中文阶段名", rows6[0].includes("需求录入") && rows6[3].includes("执行") && rows6[5].includes("交付"), JSON.stringify(rows6));
   ok("P11 状态派生 完成/进行/待办", rows6[0].includes("完成") && rows6[3].includes("进行") && rows6[4].includes("待办"), JSON.stringify(rows6));
   ok("P11 阶段行状态列对齐（偏移=14）", rows6.every((r: string) => statusAt(r) === 14), JSON.stringify(rows6.map(statusAt)));
-  ok("P11 阶段行等宽 24 cell（轮次右对齐）", rows6.every((r: string) => dispW(r) === 24), JSON.stringify(rows6.map(dispW)));
+  ok("P11 阶段行等宽 32 cell（轮次/耗时右对齐）", rows6.every((r: string) => dispW(r) === 32), JSON.stringify(rows6.map(dispW)));
   ok("P11 进行行整行蓝高亮", s.c[9] === T.text.action.primary, s.c[9]);
   ok("P11 计划审核行挂 plan 轮次", s.t[8].includes("0/3"), s.t[8]);
   ok("P11 daily 测试行挂 fix 轮次", s.t[10].includes("0/3"), s.t[10]);
   ok("P11 daily 无 test-plan 假缺失", !s.t.some((r: string) => r.includes("test-plan")), JSON.stringify(s.t));
   ok("P11 daily S verify 显示自检", s.t[13].includes("自检"), s.t[13]);
-  ok("P11 daily S plan-review 显示免", s.t[14].includes("免"), s.t[14]);
-  ok("P11 其他产物计数行", s.t[15].includes("0 项"), s.t[15]);
+  // M16-r46 批1：产物区逐文件清单（daily 3 行 + 溢出行）
+  ok("P11 daily S 产物2=plan-review 免（重锚 r15）", s.t[15].includes("plan-review") && s.t[15].includes("免"), s.t[15]);
+  ok("P11 daily S 产物3=test-report ✗", s.t[16].includes("test-report.md") && s.t[16].includes("✗"), s.t[16]);
+  ok("P11 daily S 无溢出行（extras 0）", !s.t.some((r: string) => r.includes("更多")), JSON.stringify(s.t));
   ok("P11 提示行 /wf:status", s.t[18].includes("/wf:status"), s.t[18]);
   // daily M：verify 关卡随 planReviewVerdict + plan-review 产物显式 + 其他产物不重复计数
   const m = buildRows({ ...base, mode: "daily", size: "M", phase: "review", planReviewVerdict: "PASS", artifacts: { "plan.md": { at: "x" }, "plan-review-r1.md": { at: "x" } } }, null, [], "", T);
   ok("P11 daily M verify PASS 可见", m.t[13].includes("verify") && m.t[13].includes("PASS"), m.t[13]);
   ok("P11 daily M verify PASS 绿色", m.c[13] === T.text.feedback.success, m.c[13]);
-  ok("P11 daily M plan-review ✓", m.t[14].includes("plan-review") && m.t[14].includes("✓"), m.t[14]);
-  ok("P11 daily M plan-review 不计入其他产物", m.t[15].includes("0 项"), m.t[15]);
+  // M16-r46 批1：daily M 产物清单 = plan.md ✓+大小 / plan-review 真名 / test-report ✗；extras 0 无溢出
+  const a2 = buildRows({ ...base, mode: "daily", size: "M", phase: "review", planReviewVerdict: "PASS", artifacts: { "plan.md": { at: "2026-01-01T00:00:00Z", bytes: 1228 }, "plan-review-r1.md": { at: "2026-01-02T00:00:00Z", bytes: 820 } } }, null, [], "", T);
+  ok("P11 daily M 产物行含 ▸ 可点击暗示", [14, 15, 16].every((k) => a2.t[k].includes("▸")), JSON.stringify(a2.t.slice(14, 18)));
+  ok("P11 daily M plan.md 行带 KB 大小", a2.t[14].includes("plan.md") && a2.t[14].includes("✓") && a2.t[14].includes("1.2k"), a2.t[14]);
+  ok("P11 daily M plan-review 显示真名+大小", a2.t[15].includes("plan-review-r1.md") && a2.t[15].includes("0.8k"), a2.t[15]);
+  ok("P11 daily M test-report ✗ 无大小", a2.t[16].includes("test-report.md") && a2.t[16].includes("✗") && !a2.t[16].includes("k"), a2.t[16]);
+  ok("P11 daily M 名字列对齐（fit 18，▸ 后起 2）", [14, 15, 16].every((k) => a2.t[k].indexOf("plan") === 2 || /▸ [^\n]{18}/.test(a2.t[k])), JSON.stringify(a2.t.slice(14, 18)));
+  ok("P11 daily M canonical 排序 plan 先于 review", a2.t.findIndex((r: string) => r.includes("plan.md")) < a2.t.findIndex((r: string) => r.includes("plan-review")), JSON.stringify(a2.t.slice(14, 18)));
+  ok("P11 daily M 无溢出行", !a2.t.some((r: string) => r.includes("更多")), JSON.stringify(a2.t));
+  // M16-r46 批1：extras 溢出 → …N 更多；extras 按 at 降序
+  const a3 = buildRows({ ...base, mode: "daily", size: "M", phase: "review", artifacts: { "plan.md": { at: "2026-01-01T00:00:00Z", bytes: 1024 }, "custom-a.md": { at: "2026-01-03T00:00:00Z", bytes: 2048 }, "custom-b.md": { at: "2026-01-02T00:00:00Z", bytes: 4096 } } }, null, [], "", T);
+  ok("P11 daily 溢出行 …1 更多", a3.t[17].includes("1 更多"), a3.t[17]);
+  ok("P11 daily extras 按 at 降序（custom-a 入列、custom-b 溢出）", a3.t.some((r: string) => r.includes("custom-a")) && !a3.t.some((r: string) => r.includes("custom-b")), JSON.stringify(a3.t.slice(14, 18)));
   // daily done：满格 + 全行完成
   const d = buildRows({ ...base, mode: "daily", size: "S", phase: "done" }, null, [], "", T);
   ok("P11 daily done 6/6 满格", d.t[2].includes("6/6"), d.t[2]);
@@ -364,11 +390,13 @@ console.log(`插件 id: ${t.id}`);
   ok("P11 存量 building 仍 4/9", legacy.t[2].includes("4/9"), legacy.t[2]);
   const rows9 = legacy.t.slice(6, 15);
   ok("P11 存量 9 阶段行序号连续", rows9.every((r: string, k: number) => r.startsWith(` 0${k + 1} `)), JSON.stringify(rows9));
-  ok("P11 存量阶段行同样对齐", rows9.every((r: string) => statusAt(r) === 14 && dispW(r) === 24), JSON.stringify(rows9.map(statusAt)));
+  ok("P11 存量阶段行同样对齐", rows9.every((r: string) => statusAt(r) === 14 && dispW(r) === 32), JSON.stringify(rows9.map(statusAt)));
   ok("P11 存量执行审核行挂 build 轮次", legacy.t[11].includes("执行审核") && legacy.t[11].includes("0/3"), legacy.t[11]);
   ok("P11 存量修复行挂 fix 轮次", legacy.t[13].includes("修复") && legacy.t[13].includes("0/3"), legacy.t[13]);
   ok("P11 存量 test-plan 关卡仍在", legacy.t[15].includes("test-plan"), legacy.t[15]);
   ok("P11 存量 test-plan.md 产物行仍在", legacy.t[16].includes("test-plan.md"), legacy.t[16]);
+  // M16-r46 批1：full 产物行加 ▸ 前缀（可点击暗示；full 与 legacy 同路径仍逐字一致）
+  ok("P11 full 产物行 ▸ 前缀", legacy.t[16].startsWith("  ▸") || legacy.t[16].includes("▸"), legacy.t[16]);
   ok("P11 存量 slug 行无徽标", !legacy.t[1].includes("["), legacy.t[1]);
   const full = buildRows({ ...base, mode: "full", phase: "building" }, null, [], "", T);
   ok("P11 full 与存量视图逐字一致", JSON.stringify(full) === JSON.stringify(legacy));
@@ -396,7 +424,7 @@ console.log(`插件 id: ${t.id}`);
       ot2.setProp(b, "flexDirection", "column");
       for (let i = 0; i < s.t.length; i++) {
         const tx = ot2.createElement("text");
-        ot2.setProp(tx, "truncate", true);
+        ot2.setProp(tx, "wrapMode", "none");
         ot2.insert(tx, [s.t[i]]);
         ot2.insert(b, tx);
       }
@@ -409,8 +437,14 @@ console.log(`插件 id: ${t.id}`);
     const stageLines = frame.split("\n").filter((ln: string) => /0[1-6] /.test(ln) && /(完成|进行|待办)/.test(ln));
     ok("P12 真渲染 6 阶段行齐全", stageLines.length === 6, `n=${stageLines.length}`);
     ok("P12 真渲染状态列对齐（偏移=14）", stageLines.every((ln: string) => stAt(ln) === 14), JSON.stringify(stageLines.map(stAt)));
-    ok("P12 真渲染行宽 24 cell（trimEnd 后）", stageLines.every((ln: string) => dispW(ln.trimEnd()) === 24), JSON.stringify(stageLines.map((ln: string) => dispW(ln.trimEnd()))));
+    ok("P12 真渲染行宽 32 cell（trimEnd 后）", stageLines.every((ln: string) => dispW(ln.trimEnd()) === 32), JSON.stringify(stageLines.map((ln: string) => dispW(ln.trimEnd()))));
     ok("P12 帧含轮次与提示行", frame.includes("0/3") && frame.includes("/wf:status"));
+    // R6（tui-sidebar-elapsed 验收6）：耗时表头在帧内 + 装饰线拉满 w=80 被 wrapMode:"none" 硬裁到帧宽 50
+    ok("R6 帧含耗时表头", frame.includes("耗时"), JSON.stringify(frame.slice(0, 160)));
+    const headLine = frame.split("\n").find((ln: string) => ln.includes("── Workflow")) ?? "";
+    ok("R6 装饰线头线帧内宽度 50（wrapMode:none 硬裁剪生效）", dispW(headLine.trimEnd()) === 50, JSON.stringify(headLine));
+    const tailLine = frame.split("\n").find((ln: string) => /^─+$/.test(ln.trimEnd())) ?? "";
+    ok("R6 装饰线尾线帧内宽度 50", dispW(tailLine.trimEnd()) === 50, JSON.stringify(tailLine));
     await setup.dispose();
   } catch (e: any) {
     ok("P12 表格真渲染不崩", false, e?.message);
@@ -454,6 +488,149 @@ console.log(`插件 id: ${t.id}`);
   } finally {
     if (prevEnv === undefined) delete process.env.WF_COMPACT; else process.env.WF_COMPACT = prevEnv;
   }
+}
+
+// ── P14: M16-r46 批2 产物预览——buildRows af 纯函数 + router 接线 + 主轨/降级/退出 ──
+{
+  const T = theme;
+  const base = { active: true, slug: "todo", rounds: {}, testPlanWritten: false, testReportVerdict: null };
+  // 14a：af 维——daily ✓ 项可点击 / ✗ 与免不可点 / full 行级首个已记账产物
+  const d14 = buildRows({ ...base, mode: "daily", size: "M", phase: "building", artifacts: { "plan.md": { at: "2026-01-01T00:00:00Z", bytes: 1228 } } }, null, [], "", T);
+  ok("P14a daily ✓plan.md 行可点(af14) 而 ✗test-report 行不可点(af16)", d14.af[14] === "plan.md" && d14.af[16] === null, JSON.stringify(d14.af));
+  const d14b = buildRows({ ...base, mode: "daily", size: "M", phase: "building", artifacts: { "plan.md": { at: "2026-01-01T00:00:00Z", bytes: 1 }, "plan-review-r1.md": { at: "2026-01-02T00:00:00Z", bytes: 2 }, "test-report.md": { at: "2026-01-03T00:00:00Z", bytes: 3 }, "custom.md": { at: "2026-01-04T00:00:00Z", bytes: 4 } } }, null, [], "", T);
+  ok("P14a daily plan-review/test-report 真名可点", d14b.af[14] === "plan.md" && d14b.af[15] === "plan-review-r1.md" && d14b.af[16] === "test-report.md", JSON.stringify(d14b.af.slice(14, 18)));
+  ok("P14a daily 溢出行不可点", d14b.af[17] === null, JSON.stringify(d14b.af));
+  const f14 = buildRows({ ...base, phase: "building", artifacts: { "test-plan.md": { at: "x", bytes: 1 }, "extra.md": { at: "x", bytes: 2 } } }, null, [], "", T);
+  ok("P14a full 行取首个已记账产物（plan ✗→test-plan ✓）", f14.af[16] === "test-plan.md" && f14.af[17] === null, JSON.stringify(f14.af));
+  ok("P14a 错误/无任务视图 af 全空不崩", (() => { const e = buildRows(null, "boom", [], "", T); return e.af.every((x: string | null) => x === null); })());
+
+  // 14b：setup 注册 wf-artifact route（register 形状 name/render）
+  {
+    const { ctx, router } = makeCtx();
+    cleanups.push(t.setup(ctx as any)!);
+    ok("P14b setup 注册 wf-artifact route", router.registered.length === 1 && router.registered[0].name === "wf-artifact" && typeof router.registered[0].render === "function", JSON.stringify(router.registered.map((r: any) => r.name)));
+    // 14c：主轨 /wf:open 带参 → openArtifact（read→navigate，data 快照携带 text/file）
+    const { ctx: ctx2, slots: s2, router: r2, keymaps: k2, setRead, setState, editor, getExec } = makeCtx();
+    setState({ ...base, mode: "daily", size: "M", phase: "building", artifacts: { "plan.md": { at: "x", bytes: 1228 } } });
+    setRead({ text: "# 计划\n内容", bytes: 1228, path: "/proj/.workflow/todo/plan.md", truncated: false });
+    cleanups.push(t.setup(ctx2 as any)!);
+    try {
+      const st2 = await testRender(() => s2["sidebar.content"]({ sessionID: "ses_p14c" }), { width: 50, height: 24 });
+      await st2.flush();
+      await sleep(100); // mount refresh 落地（latestSid 就位）
+      const cmdsOf = (ks: any[]) => ks.map((f: any) => f()).flatMap((l: any) => l.commands ?? []);
+      const wfCmd = cmdsOf(k2).find((c: any) => c.id === "wf.exec");
+      ok("P14c 主轨 wf.exec 层在位", !!wfCmd);
+      editor.plainText = "/wf:open plan.md";
+      const rr = wfCmd.run();
+      ok("P14c /wf:open 带参同步 true（route 可用→本地预览）", rr === true);
+      await sleep(150);
+      ok("P14c read→navigate 携带 plugin route 与 data 快照", r2.navigated.some((n: any) => n.type === "plugin" && n.name === "wf-artifact" && n.data?.file === "plan.md" && n.data?.text.includes("# 计划")), JSON.stringify(r2.navigated));
+      // 14d：退出键层——route 激活时 enabled → q run → navigate 回 session
+      const closeLayer = cmdsOf(k2).find((c: any) => c.id === "wf.artifact.close");
+      ok("P14d 退出键层注册（q）", !!closeLayer);
+      ok("P14d route 激活时 enabled=true（navigate 过 wf-artifact）", closeLayer?.enabled() === true);
+      const nBefore = r2.navigated.length;
+      ok("P14d q 返回 run 同步 true", closeLayer?.run() === true);
+      ok("P14d 返回=navigate session route", r2.navigated.length === nBefore + 1 && r2.navigated.at(-1).type === "session", JSON.stringify(r2.navigated.at(-1)));
+      // 14e：无参 /wf:open → server exec（清单降级轨）
+      editor.plainText = "/wf:open";
+      wfCmd.run();
+      await sleep(100);
+      ok("P14e 无参透传 exec（清单由 server 出）", getExec()?.name === "wf:open" && getExec()?.prompt === "", JSON.stringify(getExec()));
+      await st2.dispose();
+    } catch (e: any) { ok("P14c-e 预览链路不崩", false, e?.message); }
+    void ctx; void router;
+  }
+  // 14f：noRouter 降级——带参也走 execLocal（server 全文 toast）
+  {
+    const { ctx: c3, slots: s3, keymaps: k3, setState, editor: ed3, getExec } = makeCtx({ noRouter: true });
+    setState({ ...base, mode: "daily", size: "M", phase: "building", artifacts: { "plan.md": { at: "x", bytes: 1 } } });
+    cleanups.push(t.setup(c3 as any)!);
+    try {
+      const st3 = await testRender(() => s3["sidebar.content"]({ sessionID: "ses_p14f" }), { width: 50, height: 24 });
+      await st3.flush();
+      await sleep(100);
+      const wfCmd3 = k3.map((f: any) => f()).flatMap((l: any) => l.commands ?? []).find((c: any) => c.id === "wf.exec");
+      ed3.plainText = "/wf:open plan.md";
+      wfCmd3.run();
+      await sleep(120);
+      ok("P14f noRouter → 带参透传 exec（降级 server 全文）", getExec()?.name === "wf:open" && getExec()?.prompt === "plan.md", JSON.stringify(getExec()));
+      ok("P14f noRouter 不注册退出键层", !k3.map((f: any) => f()).some((l: any) => (l.commands ?? []).some((c: any) => c.id === "wf.artifact.close")));
+      await st3.dispose();
+    } catch (e: any) { ok("P14f 降级不崩", false, e?.message); }
+  }
+  // 14g：点击端到端=已知换树盲区（testRender 帧循环不提交信号→换树，头注纪律：真机+静态守卫代劳）。
+  // OpenTUI 层命中已由本机 mockMouse 探针实证（批0 探针③：setProp onMouseDown→click 命中触发）；
+  // 插件接线由 P4 静态守卫锁定（onMouseDown 绑定点在位）+ 行为逻辑由 P14a/P14c 锁定；
+  // 真机目检（宿主 sidebar scrollbox 内点击）留用户验收，probe evt: open-artifact/navigate-ok 取证。
+}
+
+// ── R1-R7: tui-sidebar-elapsed 侧边栏宽度填充+阶段耗时列（plan §4 T03 验收 1-7）──
+// 口径=墙钟·冻结：intake 起连续累计；done 冻结总耗时；进行中依赖调用点 now；存量降级 ·。
+// R6 见 P12 块（真渲染 width:50）；R7 静态守卫与 P4 结构守卫互补（禁新 timer）。
+{
+  const T = theme;
+  const base = { active: true, slug: "todo", rounds: {}, artifacts: {}, testPlanWritten: false, testReportVerdict: null };
+  const statusAt = (row: string) => { const m = /(完成|进行|待办)/.exec(row); return m ? dispW(row.slice(0, m.index)) : -1; };
+  const NOW = Date.parse("2026-11-12T12:00:00.000Z"); // 固定 now：纯函数确定性
+
+  // R1 几何：32 cell + 偏移 14 + 表头四列（daily 6 行 / legacy 9 行）
+  const g6 = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
+  const g9 = buildRows({ ...base, phase: "building" }, null, [], "", T);
+  ok("R1 daily 6 阶段行 32 cell", g6.t.slice(6, 12).every((r: string) => dispW(r) === 32), JSON.stringify(g6.t.slice(6, 12).map(dispW)));
+  ok("R1 legacy 9 阶段行 32 cell", g9.t.slice(6, 15).every((r: string) => dispW(r) === 32), JSON.stringify(g9.t.slice(6, 15).map(dispW)));
+  ok("R1 状态列偏移仍 14", [...g6.t.slice(6, 12), ...g9.t.slice(6, 15)].every((r: string) => statusAt(r) === 14), JSON.stringify([...g6.t.slice(6, 12), ...g9.t.slice(6, 15)].map(statusAt)));
+  ok("R1 表头含 阶段/状态/轮次/耗时", ["阶段", "状态", "轮次", "耗时"].every((k) => g6.t[4].includes(k)), g6.t[4]);
+
+  // R2 计时数值（固定 now）：进行中 1:05 / 完成 0:42、2:10 / 总耗时 12:34（startedAt=now-754000ms）
+  ok("R2 fmtElapsed 导出", typeof ns.fmtElapsed === "function");
+  if (typeof ns.fmtElapsed === "function") {
+    ok("R2 fmtElapsed 格式 m:ss（负数钳 0）", ns.fmtElapsed(65) === "1:05" && ns.fmtElapsed(754) === "12:34" && ns.fmtElapsed(0) === "0:00" && ns.fmtElapsed(-5) === "0:00");
+  }
+  const timed = buildRows({
+    ...base, mode: "daily", size: "M", phase: "building",
+    startedAt: new Date(NOW - 754000).toISOString(),
+    phaseEnteredAt: new Date(NOW - 65000).toISOString(),
+    phaseDurations: { intake: 42, planning: 130, review: 5 },
+  }, null, [], "", T, NOW);
+  ok("R2 进行中行含 1:05（padS 6）", timed.t[9].includes("   1:05") && timed.t[9].endsWith("  1:05"), timed.t[9]);
+  ok("R2 完成行含 0:42/2:10", timed.t[6].includes("   0:42") && timed.t[7].includes("   2:10"), JSON.stringify(timed.t.slice(6, 9)));
+  ok("R2 t[2] 总耗时 共 12:34", timed.t[2].includes("共 12:34"), timed.t[2]);
+
+  // R3 降级：无计时字段 → 耗时列 padS("·",6)、t[2] 不含「共」；缺 now → 进行中亦 ·
+  const legacyRows = [...g6.t.slice(6, 12), ...g9.t.slice(6, 15)];
+  ok("R3 无计时字段各行耗时列 ·（padS 6）", legacyRows.every((r: string) => r.endsWith("     ·")), JSON.stringify(legacyRows));
+  ok("R3 无计时字段 t[2] 不含 共", !g6.t[2].includes("共") && !g9.t[2].includes("共"), g6.t[2]);
+  const noNow = buildRows({ ...base, mode: "daily", size: "S", phase: "building", phaseEnteredAt: new Date(NOW - 65000).toISOString() }, null, [], "", T);
+  ok("R3 缺 now 进行中行降级 ·（纯函数确定性）", noNow.t[9].endsWith("     ·"), noNow.t[9]);
+
+  // R4 done 冻结：总耗时与 now 无关（两次不同 now 结果逐字相同）
+  const doneSt = {
+    ...base, mode: "daily", size: "M", phase: "done",
+    startedAt: new Date(NOW - 754000).toISOString(),
+    finishedAt: new Date(NOW - 700000).toISOString(),
+    phaseDurations: { intake: 42, planning: 130, review: 5, building: 60, testing: 30 },
+  };
+  const d1 = buildRows(doneSt, null, [], "", T, NOW);
+  const d2 = buildRows(doneSt, null, [], "", T, NOW + 600000);
+  ok("R4 done 总耗时冻结（两 now 逐字相同）", JSON.stringify(d1) === JSON.stringify(d2));
+  ok("R4 done t[2] 含 共 0:54（finishedAt-startedAt）", d1.t[2].includes("共 0:54"), d1.t[2]);
+
+  // R5 装饰线：w=80 头/细/尾线；缺省 w 同 80；early-return 分支继承
+  const w80 = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T, undefined, 80);
+  ok("R5 w=80 头线 80 cell", dispW(w80.t[0]) === 80, w80.t[0]);
+  ok("R5 w=80 细线 空格+79─", w80.t[5] === " " + "─".repeat(79), w80.t[5]);
+  ok("R5 w=80 尾线 80─", w80.t[19] === "─".repeat(80), w80.t[19]);
+  ok("R5 缺省 w 同 80", dispW(g6.t[0]) === 80 && g6.t[5] === " " + "─".repeat(79) && g6.t[19] === "─".repeat(80), g6.t[0]);
+  const e80 = buildRows(null, "boom", [], "", T, undefined, 80);
+  ok("R5 错误分支装饰线继承 w", dispW(e80.t[0]) === 80 && e80.t[19] === "─".repeat(80), e80.t[0]);
+
+  // R7 fp tick 不加 timer（静态守卫；P4 结构守卫全绿另见 P4 块）
+  const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+  ok("R7 setInterval 唯一（复用 5s 轮询，不加新 timer）", (src.match(/setInterval\(/g) ?? []).length === 1);
+  ok("R7 无 setTimeout", !src.includes("setTimeout("));
+  ok("R7 fp 含 5s tick（闲置驱动刷新）", src.includes("Math.floor(Date.now() / 5000)"));
 }
 
 console.log("（清理 setup 定时器与订阅）");

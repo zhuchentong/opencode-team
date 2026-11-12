@@ -66,6 +66,29 @@ export const Wf = Rpc.define({
         additionalProperties: true,
       },
     },
+    // M16-r46 批1：产物预览数据通道——TUI 点击产物行/执行 /wf:open 时读产物内容。
+    // 错误不抛错（quota 教训：抛错 client 只见 rpc.internal 原因被吞），走 output.error 字段。
+    // 白名单 = state.artifacts 记账 key（防路径穿越）；超 64KB 截断置 truncated。
+    read: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, file: { type: "string" } },
+        required: ["sessionID", "file"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          bytes: { type: "integer" },
+          path: { type: "string" },
+          truncated: { type: "boolean" },
+          error: { type: "string" },
+        },
+        required: ["text", "path"],
+        additionalProperties: true,
+      },
+    },
     // P2 主轨通道：TUI 本地命令经此执行任意 /wf:*（返回值不丢——methods 通道契约可用）。
     // 服务端跑与 command execute 相同的编排（状态推进 + guidance + reports 发布），仅不注入聊天。
     // at 与 reports 行/事件同一时间戳：TUI 本地渲染据此登记去重键，防事件/轮询通道二次弹 toast。

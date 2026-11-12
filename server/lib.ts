@@ -70,6 +70,11 @@ export interface WfState {
   testPlanWritten?: boolean;
   testReportVerdict?: string;
   entryErr?: string;
+  // tui-sidebar-elapsed T01（plan §3.1）：墙钟计时记账——全部可选，存量快照自然缺省 → TUI 降级 ·
+  startedAt?: string;                       // ISO：intake 建任务时刻（总耗时起点）
+  phaseEnteredAt?: string;                  // ISO：当前阶段进入时刻
+  phaseDurations?: Record<string, number>;  // 秒；key=FOLD 折叠后阶段名（多轮 revisit 累计）
+  finishedAt?: string;                      // ISO：进入 done 时刻（总耗时冻结点）
   [key: string]: unknown;
 }
 
@@ -207,7 +212,7 @@ export function shellWriteTargets(cmd: unknown): string[] {
     const t = m[1] ?? m[2] ?? bare;
     if (!t || t.includes("*") || t.includes("$") || t.includes("`") || /^\d+$/.test(t)) continue;
     // 裸 token 须像路径（含 / 或 .）——比较符后的代码词（`a > b` 的 b、`> {`）不再误伤；
-    // 无扩展名裸重定向（`> build`）漏判可接受（fail-open 方向，见 README 已知边界）
+    // 无扩展名裸重定向（`> build`）漏判可接受（fail-open 方向，见 docs/HOST-CONTRACT.md 已知边界）
     if (bare && !bare.includes("/") && !bare.includes(".")) continue;
     found.add(t);
   }
@@ -288,7 +293,8 @@ export function isLeader(agent: string): boolean {
   return LEADER_ALIASES.includes(agent);
 }
 // 只读/清理豁免集：任何 agent 可用（用户自助诊断/清理不受限）。
-export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset"]);
+// M16-r46 批2：+wf:open（产物查看只读——TUI 键盘路径与非 TUI 客户端降级轨入口）。
+export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset", "wf:open"]);
 // 判定：豁免集放行；其余仅 leader（workflow，兼容 wf/leader）；agent 不可确认 → 变更类 fail-closed。
 // lane 整体 leader-only（含 ls，有意收紧：lane 属任务内部细节）。返回拒绝文案或 null（放行）。
 export function leaderOnlyReject(agent: string, cmd: string): string | null {
@@ -465,6 +471,11 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.testReportVerdict;
       delete st.planReviewVerdict; // M16-r34：新任务清验证结论
       delete st.planConfirmedAt; // M16-r44：新任务清方案确认记账
+      // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
+      st.startedAt = at;
+      st.phaseEnteredAt = at;
+      st.phaseDurations = {};
+      delete st.finishedAt;
     }
     // M16-r33 P2 体量前缀 [S]/[M]/[L] + M16-r34 模式前缀 [FULL]（可跟在 ! 强制符后，任意序）。
     // 新 intake 默认 daily（日常习惯流）；[FULL] 显式完整 9 阶段流。size 缺省 M。

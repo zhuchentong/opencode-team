@@ -505,7 +505,7 @@ test("T09 wf:debug sessProbe：单一扁平形状 {ok:true,topKeys,location}，�
 test("T10 allowRegexps 容错：非法正则不抛 setup，合法正则并入放行判定", async () => {
   const m = mkCtx({ allowRegexps: ["[invalid", "\\.custom$"] });
   const dispose = await plugin.setup(m.ctx); // 旧实现：new RegExp("[invalid") SyntaxError
-  assert.equal(m.cmds.length, 16, "命令注册齐全（10 流转 + 6 辅助）");
+  assert.equal(m.cmds.length, 17, "命令注册齐全（10 流转 + 7 辅助：M16-r46 +wf:open）");
   assert.ok(m.tools.some((t) => t.name === "wf_write_artifact"), "工具注册齐全");
   // 合法正则生效：planning 阶段 .custom 后缀放行，业务代码仍阻断
   await cmd(m, "wf:intake").execute({ sessionID: "ses_re", prompt: { text: "re" } });

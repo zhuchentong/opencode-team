@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FLOWS, LIMITS, evaluateTransition } from "../server/lib.ts";
+import { registerCommands } from "../server/commands.ts";
 
 const mkSt = (phase = null, extra = {}) => ({
   sessionID: "ses_test",
@@ -189,4 +190,152 @@ test("返工边完整覆盖：fixing→reconcile 合法（M10-a 返工边）", (
   const st = mkSt("fixing");
   assert.equal(advance(st, "wf:reconcile").ok, true);
   assert.equal(st.phase, "reconcile");
+});
+
+// ── tui-sidebar-elapsed T01：墙钟计时记账 A1-A6（plan §4 验收逐字）──────────────
+// 经 registerCommands + 内存 store mock 驱动 commands.ts 真实 apply 记账块（§3.2）；
+// mock 形状与 integration.test.js 胶水层同源，load/save 语义对齐 withStateRetry 契约。
+const TIMING_SID = "ses_timing";
+const isISO = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v) && Number.isFinite(Date.parse(v));
+
+const mkTimingHarness = async () => {
+  const store = new Map();
+  const cmds = [];
+  const ctx = {
+    options: { leaderOnly: false }, // 跳过 agent 解析（计时断言与 leader 关卡正交）
+    session: {
+      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: "/tmp/opencode/wf-elapsed" } }),
+      wait: async () => {},
+      prompt: async () => {},
+      hook: async () => ({ dispose() {} }),
+      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
+    },
+    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
+  };
+  const deps = {
+    load: async (sid) => store.get(sid) ?? null,
+    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
+    resolveProjectDir: async () => "/tmp/opencode/wf-elapsed",
+    removeState: async (sid) => { store.delete(sid); },
+    putReport: async () => {},
+    dumpStates: async () => [],
+    debugDirFor: async () => "/tmp/opencode/wf-elapsed",
+    probeOnce: async () => {},
+    LIMS: { ...LIMITS },
+    emitUpdated: async () => {},
+    emitReport: async () => {},
+    WfDef: null, rpcErr: null, runner: { run: null },
+  };
+  const { dispose } = await registerCommands(ctx, deps);
+  return {
+    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: TIMING_SID, prompt: { text } }),
+    st: () => store.get(TIMING_SID),
+    patch: (obj) => Object.assign(store.get(TIMING_SID), obj), // 关卡记账 fixture（与计时正交）
+    seed: (st) => store.set(TIMING_SID, structuredClone(st)),
+    dispose,
+  };
+};
+
+// daily 链推进至 done（关卡前置经 patch 置账；M 级须 planReviewVerdict PASS + 方案确认）
+const runDailyToDone = async (h, slug) => {
+  await h.run("wf:intake", slug);
+  await h.run("wf:plan");
+  await h.run("wf:review");
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  await h.run("wf:build");
+  await h.run("wf:test");
+  h.patch({ testReportVerdict: "PASS" });
+  await h.run("wf:done");
+};
+
+test("A1 计时：intake 后 startedAt/phaseEnteredAt 为 ISO 且相等，phaseDurations 深等 {}", async () => {
+  const h = await mkTimingHarness();
+  await h.run("wf:intake", "elapsed-a1");
+  const st = h.st();
+  assert.ok(isISO(st.startedAt), `startedAt 应为 ISO：${st.startedAt}`);
+  assert.ok(isISO(st.phaseEnteredAt), `phaseEnteredAt 应为 ISO：${st.phaseEnteredAt}`);
+  assert.equal(st.phaseEnteredAt, st.startedAt, "intake 时刻两字段相等");
+  assert.deepEqual(st.phaseDurations, {}, "空账不得污染");
+  h.dispose();
+});
+
+test("A2 计时：两次流转间隔 ≥1.05s → phaseDurations.intake>=1（number）；A3 每次流转后 phaseEnteredAt>=startedAt", async () => {
+  const h = await mkTimingHarness();
+  await h.run("wf:intake", "elapsed-a2");
+  const t0 = h.st();
+  assert.ok(Date.parse(t0.phaseEnteredAt) >= Date.parse(t0.startedAt), "A3：intake 后");
+  await new Promise((r) => setTimeout(r, 1050)); // 造秒级差（plan §4 T01 验证方式）
+  await h.run("wf:plan");
+  const st = h.st();
+  assert.equal(typeof st.phaseDurations?.intake, "number", `intake 闭账应为 number：${JSON.stringify(st.phaseDurations)}`);
+  assert.ok(st.phaseDurations.intake >= 1, `intake 耗时应 ≥1s：${JSON.stringify(st.phaseDurations)}`);
+  assert.ok(Date.parse(st.phaseEnteredAt) >= Date.parse(st.startedAt), "A3：plan 后");
+  h.dispose();
+});
+
+test("A4 计时：推进 done 后 finishedAt 为 ISO 且 >=startedAt；重复推进不覆写 finishedAt", async () => {
+  const h = await mkTimingHarness();
+  await runDailyToDone(h, "elapsed-a4");
+  const st = h.st();
+  assert.equal(st.phase, "done");
+  assert.ok(isISO(st.finishedAt), `finishedAt 应为 ISO：${st.finishedAt}`);
+  assert.ok(Date.parse(st.finishedAt) >= Date.parse(st.startedAt), "finishedAt >= startedAt");
+  const f1 = st.finishedAt;
+  // 重复推进：fixture 回拨 phase=testing 模拟再验收，再次 done → finishedAt 冻结不覆写
+  h.patch({ phase: "testing" });
+  await new Promise((r) => setTimeout(r, 20));
+  await h.run("wf:done");
+  assert.equal(h.st().phase, "done");
+  assert.equal(h.st().finishedAt, f1, "重复 done 不得覆写 finishedAt");
+  h.dispose();
+});
+
+test("A5 计时：强制重 intake（!slug）4 字段重置（phaseDurations 回 {}、startedAt 更新、finishedAt 清除）", async () => {
+  const h = await mkTimingHarness();
+  await h.run("wf:intake", "elapsed-a5");
+  await new Promise((r) => setTimeout(r, 1050));
+  await h.run("wf:plan"); // 累计 intake 耗时 ≥1s
+  const old = h.st();
+  assert.ok(old.phaseDurations.intake >= 1, "前置：旧账已有耗时");
+  // 非 done 阶段强制重 intake（force 路径）
+  await h.run("wf:intake", "!elapsed-a5-new");
+  const st = h.st();
+  assert.deepEqual(st.phaseDurations, {}, "强制重置后空账");
+  assert.ok(isISO(st.startedAt) && st.startedAt !== old.startedAt, "startedAt 更新为新 intake 时刻");
+  assert.equal(st.phaseEnteredAt, st.startedAt, "重置块置账相等（闭账跳过不污染）");
+  assert.equal(st.finishedAt, undefined);
+  // 新任务推进 done 置 finishedAt，再次强制重 intake → finishedAt 清除
+  await runDailyToDoneNoIntake(h);
+  assert.ok(isISO(h.st().finishedAt), "前置：新任务已置 finishedAt");
+  await h.run("wf:intake", "!elapsed-a5-third");
+  assert.equal(h.st().finishedAt, undefined, "重 intake 清除 finishedAt");
+  assert.deepEqual(h.st().phaseDurations, {});
+  h.dispose();
+});
+
+// A5 续段：intake 已在上方完成，仅推进 plan→done
+const runDailyToDoneNoIntake = async (h) => {
+  await h.run("wf:plan");
+  await h.run("wf:review");
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  await h.run("wf:build");
+  await h.run("wf:test");
+  h.patch({ testReportVerdict: "PASS" });
+  await h.run("wf:done");
+};
+
+test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnteredAt 置上、startedAt/finishedAt 仍缺、闭账与置账跳过、phaseDurations 不新增", async () => {
+  const h = await mkTimingHarness();
+  h.seed({
+    sessionID: TIMING_SID, slug: "legacy", phase: "intake", mode: "daily",
+    rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, lanes: {}, artifacts: {}, log: [],
+  });
+  await h.run("wf:plan");
+  const st = h.st();
+  assert.equal(st.phase, "planning", "存量流转不崩");
+  assert.ok(isISO(st.phaseEnteredAt), `phaseEnteredAt 应被置上：${st.phaseEnteredAt}`);
+  assert.equal(st.startedAt, undefined, "存量不兜底 startedAt");
+  assert.equal(st.finishedAt, undefined, "存量推 done 不置 finishedAt（本步未 done，亦不得置）");
+  assert.equal(st.phaseDurations, undefined, "闭账跳过：phaseDurations 不新增");
+  h.dispose();
 });

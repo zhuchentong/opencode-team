@@ -55,6 +55,8 @@ const fit = (s: string, w: number) => {
   }
   return padE(out, w);
 };
+// tui-sidebar-elapsed：耗时格式 m:ss（负数钳 0；>999:59 由 padS/fit 自然截，>16.6h 极端场景接受截断）
+export const fmtElapsed = (sec: number): string => { const s2 = Math.max(0, Math.floor(sec)); return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, "0")}`; };
 // 中文阶段名（TUI 显示层本地映射；shared/phases.ts 语义常量不动，折叠语义沿用 FOLD）
 const ZH: Record<string, string> = {
   intake: "需求录入", planning: "计划", review: "计划审核", test_design: "测试设计",
@@ -63,12 +65,16 @@ const ZH: Record<string, string> = {
 };
 const zhOf = (phase: any) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
 const mark = (ok: boolean) => (ok ? "✓" : "✗");
+// M16-r46 批1：产物清单格式化（KB 大小 0.5k/1.2k；行=▸+名字 fit 18+✓/✗/免+大小）——模块级纯函数
+const fmtKB = (b: unknown) => { const n = Number(b ?? 0); return n > 0 ? `${(n / 1024).toFixed(1).replace(/\.0$/, "")}k` : ""; };
+const artLine = (name: string, ok: boolean, kb: string, exempt?: boolean) =>
+  `  ▸ ${fit(name, 18)} ${exempt ? "免" : mark(ok)}${exempt || !kb ? "" : ` ${kb}`}`;
 
 // ── 节点构造：P0 探针逐字收敛（真机不崩的形态）────────────────────
 function textEl(s: string, fg?: any) {
   const t = createElement("text");
   try { if (fg) setProp(t, "fg", fg); } catch { /* ignore */ }
-  setProp(t, "truncate", true);
+  try { setProp(t, "wrapMode", "none"); } catch { /* fail-soft：宿主旧版无此 prop 不杀 slot */ }
   insert(t, [sanitize(s)]); // 数组形态（P0 实证）；文本恒非空
   return t;
 }
@@ -92,20 +98,26 @@ export const listLine = (x: any) => {
 };
 
 // M16-r37 表格化：恒定 20 行 = 头线/slug/进度/空/表头/细线/阶段行(6|9)/尾段(关卡+产物×2)/提示/尾线。
-// 阶段行列几何 1+2+1+8+2+4+2+4=24 cell（状态词偏移恒 14、轮次右对齐 4 cell）；
+// 阶段行列几何 1+2+1+8+2+4+2+4+2+6=32 cell（状态词偏移恒 14、轮次右对齐 4 cell 20-23、
+// 耗时右对齐 6 cell 26-31；tui-sidebar-elapsed）；装饰线拉满 w（缺省 80，超宽靠 wrapMode:"none" 硬裁剪）。
 // 导出供 harness P11 纯函数直测 + P12 真渲染复核（绕开 testRender 信号→换树盲区）；渲染结构不变。
-export const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any) => {
+export const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any, now?: number, w?: number) => {
   const t: string[] = Array.from({ length: ROWS }, () => " ");
   const c: any[] = Array.from({ length: ROWS }, () => T.text.muted);
-  t[0] = "── Workflow ────────";
-  t[ROWS - 1] = "──────────────────────";
+  // M16-r46 批2：af[r] = 该行首个可点击产物文件名（null=不可点击）——render 端据此绑 onMouseDown。
+  // 可点击判定：已记账（✓）且在白名单（artifacts key）；✗/免/溢出/计数不绑（验证问题3 决策）。
+  const af: (string | null)[] = Array.from({ length: ROWS }, () => null);
+  // tui-sidebar-elapsed：装饰线拉满 pane 宽 w（缺省 80）；在 early-return 分支前赋值，错误/无任务/非活跃自然继承
+  const W = w ?? 80;
+  t[0] = "── Workflow " + "─".repeat(Math.max(0, W - 12));
+  t[ROWS - 1] = "─".repeat(W);
   if (err) {
     t[1] = `wf 错误: ${err}`; c[1] = T.text.feedback.error;
-    return { t, c };
+    return { t, c, af };
   }
   if (!s) {
     t[1] = "  wf: …";
-    return { t, c };
+    return { t, c, af };
   }
   if (!s.active) {
     if (oth.length > 0) {
@@ -114,7 +126,7 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
     } else {
       t[1] = "  wf: 本会话无活动任务";
     }
-    return { t, c };
+    return { t, c, af };
   }
   const r = s.rounds ?? {};
   // 模式感知：daily 按 6 行连续进度；mode 缺失（存量）/full 走 9 行（语义同旧版，视图表格化）
@@ -129,15 +141,18 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
   const done = isDone ? total : i;
   const bar = "●".repeat(done) + "○".repeat(total - done);
   const arts = s.artifacts ?? {};
-  const hasPlanReview = Object.keys(arts).some((n: string) => n.startsWith("plan-review"));
-  const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0 && !(daily && n.startsWith("plan-review"))).length;
+  const extraCount = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0).length;
   const verdict = s.testReportVerdict;
   const size = str(s.size || "M");
   const pv = s.planReviewVerdict;
   t[1] = daily ? `  ${str(s.slug || "(未定)")} [daily·${size}]` : `  ${str(s.slug || "(未定)")}`; c[1] = T.text.base;
   t[2] = `  ${bar} ${done}/${total} · F${i} ${zhOf(s.phase)}`; c[2] = T.text.action.primary;
-  t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}`; c[4] = T.text.muted;
-  t[5] = " " + "─".repeat(23); c[5] = T.text.muted;
+  // tui-sidebar-elapsed：总耗时（墙钟·冻结）——done=finishedAt-startedAt 冻结差值；否则 now-startedAt；缺失/NaN 不追加「共」
+  const totalSec = s.finishedAt && s.startedAt ? (Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1000
+    : s.startedAt && now ? (now - Date.parse(s.startedAt)) / 1000 : null;
+  if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
+  t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}  ${padS("耗时", 6)}`; c[4] = T.text.muted;
+  t[5] = " " + "─".repeat(W - 1); c[5] = T.text.muted;
   // 轮次归属：计划审核=plan_review、执行审核=build_review（full）、修复=fix（full）/测试=fix（daily）
   const roundOf = (stage: string) => {
     if (stage === "review") return `${planV}/3`;
@@ -151,8 +166,18 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
   for (let k = 0; k < total; k++) {
     const stage = order[k];
     const st = isDone || k < i ? "完成" : k === i ? "进行" : "待办";
+    // tui-sidebar-elapsed：耗时列——完成=phaseDurations[FOLD[stage]??stage]（多轮累计）；进行中=now-phaseEnteredAt；
+    // 待办/缺字段/NaN → ·（存量任务自然降级）
+    let ev = "·";
+    if (st === "完成") {
+      const d = s.phaseDurations?.[FOLD[stage] ?? stage];
+      if (Number.isFinite(d)) ev = fmtElapsed(d);
+    } else if (st === "进行" && now && s.phaseEnteredAt) {
+      const sec = (now - Date.parse(s.phaseEnteredAt)) / 1000;
+      if (Number.isFinite(sec)) ev = fmtElapsed(sec);
+    }
     const row = 6 + k;
-    t[row] = ` ${String(k + 1).padStart(2, "0")} ${padE(ZH[stage] ?? stage, 8)}  ${st}  ${padS(roundOf(stage), 4)}`;
+    t[row] = ` ${String(k + 1).padStart(2, "0")} ${padE(ZH[stage] ?? stage, 8)}  ${st}  ${padS(roundOf(stage), 4)}  ${padS(ev, 6)}`;
     c[row] = capOf(stage) ? T.text.feedback.error
       : k === i && !isDone ? T.text.action.primary
         : isDone || k < i ? T.text.base : T.text.muted;
@@ -172,14 +197,43 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
     c[k] = verdict === "FAIL" ? T.text.feedback.error : verdict === "PASS" ? T.text.feedback.success : T.text.muted;
   }
   k++;
-  const a1 = daily
-    ? (size === "S" ? "plan-review —(S免)" : `plan-review ${mark(hasPlanReview)}`)
-    : `test-plan.md ${mark(!!arts["test-plan.md"])}`;
-  t[k] = `  产物 plan.md ${mark(!!arts["plan.md"])} · ${a1}`; c[k] = T.text.base;
-  k++;
-  t[k] = `       test-report.md ${mark(!!arts["test-report.md"])} · 其他 ${extraCount} 项`; c[k] = T.text.base;
+  // ── M16-r46 批1：产物区两形态 ──
+  // daily：逐文件清单（前 3 项 + 「…N 更多」溢出行）——canonical 优先（plan → plan-review → test-report），
+  //        extras 按 at 最近写入降序；KB 大小随 ✓ 项显示；S 级 plan-review 免审占位行。
+  // full：紧凑两行（原形态 + ▸ 可点击暗示，列内容不变）。fmtKB/artLine 见模块级。
+  if (daily) {
+    const items: Array<{ name: string; ok: boolean; kb: string; exempt?: boolean }> = [
+      { name: "plan.md", ok: !!arts["plan.md"], kb: fmtKB(arts["plan.md"]?.bytes) },
+    ];
+    if (size === "S") {
+      items.push({ name: "plan-review", ok: false, kb: "", exempt: true }); // S 级免复审占位
+    } else {
+      const pr = Object.keys(arts).filter((n: string) => n.startsWith("plan-review"))
+        .toSorted((a: string, b: string) => String(arts[b]?.at ?? "").localeCompare(String(arts[a]?.at ?? "")))[0];
+      if (pr) items.push({ name: pr, ok: true, kb: fmtKB(arts[pr]?.bytes) });
+    }
+    items.push({ name: "test-report.md", ok: !!arts["test-report.md"], kb: fmtKB(arts["test-report.md"]?.bytes) });
+    const extras = Object.keys(arts).filter((n: string) => CANON.indexOf(n) < 0 && !n.startsWith("plan-review"))
+      .toSorted((a: string, b: string) => String(arts[b]?.at ?? "").localeCompare(String(arts[a]?.at ?? "")));
+    for (const n of extras) items.push({ name: n, ok: true, kb: fmtKB(arts[n]?.bytes) });
+    for (let n = 0; n < 3 && n < items.length; n++) {
+      const it = items[n];
+      t[14 + n] = artLine(it.name, it.ok, it.kb, it.exempt);
+      c[14 + n] = T.text.base;
+      if (it.ok && !it.exempt) af[14 + n] = it.name; // ✓ 项可点击（免/✗ 不绑）
+    }
+    const more = items.length - 3;
+    if (more > 0) { t[17] = `  ▸ …${more} 更多`; c[17] = T.text.muted; }
+  } else {
+    t[k] = `  ▸ plan.md ${mark(!!arts["plan.md"])} · test-plan.md ${mark(!!arts["test-plan.md"])}`; c[k] = T.text.base;
+    k++;
+    t[k] = `     test-report.md ${mark(!!arts["test-report.md"])} · 其他 ${extraCount} 项`; c[k] = T.text.base;
+    // 行级命中（终端无子行粒度）：取该行首个已记账产物；计数区不可点
+    af[k - 1] = arts["plan.md"] ? "plan.md" : arts["test-plan.md"] ? "test-plan.md" : null;
+    af[k] = arts["test-report.md"] ? "test-report.md" : null;
+  }
   t[ROWS - 2] = "  /wf:status 查看状态"; c[ROWS - 2] = T.text.muted;
-  return { t, c };
+  return { t, c, af };
 };
 
 // 重要信号判定（attention.notify 触发面）：⚠️/❌/FAIL/illegal——与 server 文案同源符号
@@ -287,8 +341,9 @@ export default Plugin.define({
             }
           } catch { /* 回退列表失败按无处理 */ }
         }
-        // fingerprint 门禁：无真实变化绝不发信号（OpenTUI 不短路赋值，bump 即全树重建重绘）
-        const fp = JSON.stringify([s ?? null, oth, othScope]);
+        // fingerprint 门禁：无真实变化且同一 5s tick 内绝不发信号（OpenTUI 不短路赋值，bump 即全树重建重绘）；
+        // tui-sidebar-elapsed：tick=floor(now/5000) 闲置期驱动耗时刷新（复用 5s 轮询，不加新 timer）
+        const fp = JSON.stringify([s ?? null, oth, othScope, Math.floor(Date.now() / 5000)]);
         if (fp !== lastFp) {
           lastFp = fp;
           probe({ evt: "refresh", sid, active: !!s?.active, othN: oth.length });
@@ -312,6 +367,88 @@ export default Plugin.define({
         context.ui.toast.show({ message: `wf 执行失败：${errMsg(e)}`, variant: "error" });
       }
     };
+
+    // ── M16-r46 批2：产物预览（点击/命令 → RPC read → router route；全链 fail-soft）──
+    // API 面实证状态：onMouseDown 命中=本地 harness 实证（P14）；router=2.2.6 二进制取证
+    // （register/navigate/current 形状）+ 真机探针待确认（probe evt: router-probe/route-render）。
+    // 降级链：router 不可用 → toast 路径；read 错误 → toast 文案；navigate 抛错 → 同上。
+    const ROUTE_NAME = "wf-artifact";
+    const openArtifact = async (file: string) => {
+      const sid = latestSid;
+      if (!sid || !file) return;
+      probe({ evt: "open-artifact", file });
+      try {
+        const r = await rpc().read({ sessionID: sid, file }, rpcOpts());
+        if (!r || r.error) { context.ui.toast.show({ message: String(r?.error ?? `读取产物失败：${file}`), variant: "info" }); return; }
+        if (routerOk) {
+          try {
+            context.ui.router.navigate({ type: "plugin", name: ROUTE_NAME, data: { file, text: r.text, bytes: r.bytes ?? 0, path: r.path, truncated: !!r.truncated } });
+            probe({ evt: "navigate-ok", file });
+            return;
+          } catch (e) { probe({ evt: "navigate-err", err: errMsg(e) }); }
+        }
+        context.ui.toast.show({ message: `产物路径：${r.path}（预览 route 不可用）`, variant: "info" });
+      } catch (e) { context.ui.toast.show({ message: `打开产物失败：${errMsg(e)}`, variant: "error" }); }
+    };
+    let routerOk = false;
+    try {
+      const R = context.ui?.router;
+      probe({ evt: "router-probe", hasRegister: typeof R?.register === "function", hasNavigate: typeof R?.navigate === "function", hasCurrent: typeof R?.current === "function" });
+      if (typeof R?.register === "function" && typeof R?.navigate === "function") {
+        R.register({
+          name: ROUTE_NAME,
+          render: (input: any) => {
+            // 流派 A 同构：恒定容器 + 唯一 insert(accessor)；data 快照消费（navigate 时读好，零响应式依赖）
+            probe({ evt: "route-render", keys: Object.keys(input ?? {}).slice(0, 8).join(",") }); // 探针①：render 入参形状取证
+            const container = boxEl([]);
+            insert(container, () => {
+              try {
+                const d: any = input?.data ?? input ?? {};
+                const T = context.theme ?? { text: { muted: "gray", base: "white", feedback: { error: "red" } } };
+                const body = String(d.text ?? "").split("\n");
+                const head = `  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`;
+                const rows = [
+                  "── wf 产物预览 ────────────────",
+                  head,
+                  `  ${str(d.path)}`,
+                  " ",
+                  ...body.slice(0, 200).map((ln: string) => "  " + ln),
+                  ...(body.length > 200 ? [`  …（共 ${body.length} 行，仅显示前 200 行）`] : []),
+                  " ",
+                  "  q 返回会话",
+                ];
+                return boxEl(rows.map((ln: string, i: number) => textEl(ln, i <= 2 || i === rows.length - 1 ? T.text.muted : T.text.base)));
+              } catch (e) {
+                probe({ evt: "route-render-ERR", err: errMsg(e) });
+                return boxEl([textEl(`wf 预览异常: ${errMsg(e)}`, "red")]);
+              }
+            });
+            return container;
+          },
+        });
+        routerOk = true;
+      }
+    } catch (e) { probe({ evt: "router-register-err", err: errMsg(e) }); }
+    if (routerOk) {
+      // 退出键层（探针②：enabled 判定依赖 current() 形状——形状不符时恒 false，不劫持他处 q/esc）
+      try {
+        context.keymap.layer(() => ({
+          mode: "global",
+          priority: 2,
+          commands: [{
+            id: "wf.artifact.close",
+            title: "wf: 关闭产物预览",
+            bind: "q",
+            enabled: () => {
+              try { const cur = context.ui?.router?.current?.(); return String(cur?.name ?? "") === ROUTE_NAME; } catch { return false; }
+            },
+            run: () => {
+              try { context.ui.router.navigate({ type: "session", sessionID: latestSid }); return true; } catch (e) { probe({ evt: "close-nav-err", err: errMsg(e) }); return false; }
+            },
+          }],
+        }));
+      } catch (e) { probe({ evt: "keymap-err", err: errMsg(e) }); }
+    }
 
     // 事件通道（P0④ 五条件版真机已通）+ data.listen 兜底 + P4③ AbortSignal
     const offUpdated = rpc().events.on("updated", (e: any) => { if (locOk(e)) void refresh(); }, { signal: ac.signal });
@@ -378,8 +515,18 @@ export default Plugin.define({
               const badge = s.mode === "daily" ? `[daily·${str(s.size || "M")}] ` : "";
               return textEl(`▶ ${badge}${label} ${rr.plan_review ?? 0}/${rr.build_review ?? 0}/${rr.test_fix ?? 0}`, T.text.action.primary);
             }
-            const { t, c } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T);
-            return boxEl(t.map((line: string, i: number) => textEl(line, c[i])));
+            // tui-sidebar-elapsed：now=Date.now() 驱动进行中/总耗时；W=pane 宽（fail-soft 取不到/非正数回退 80，下限 24）
+            const W = Math.max(24, Math.floor(Number(context?.renderer?.width)) || 80);
+            const { t, c, af } = buildRows(data?.st ?? null, data?.err ?? null, data?.oth ?? [], data?.othScope ?? "", T, Date.now(), W);
+            return boxEl(t.map((line: string, i: number) => {
+              const el = textEl(line, c[i]);
+              // M16-r46 批2：可点击产物行绑 onMouseDown（探针③本地实证：setProp 转发到
+              // Renderable，mockMouse 命中触发；宿主默认 mouse:true）。setProp 失败静默
+              // （非 TUI 环境/测试 renderer 不支持时不崩——同 fg 形态 try/catch）。
+              const f = af?.[i];
+              if (f) { try { setProp(el, "onMouseDown", () => { void openArtifact(f); }); } catch { /* ignore */ } }
+              return el;
+            }));
           } catch (e) {
             probe({ evt: "render-ERR", err: errMsg(e) });
             return boxEl([textEl(`wf 渲染异常: ${errMsg(e)}`, "red")]);
@@ -407,7 +554,10 @@ export default Plugin.define({
           const name = sp < 0 ? body : body.slice(0, sp);
           const promptText = sp < 0 ? "" : body.slice(sp + 1);
           try { editor.clear(); } catch { }
-          void execLocal(name, promptText);
+          // M16-r46 批2：wf:open 带文件名且 route 可用 → 本地产物预览（read+navigate）；
+          // 其余情况（无参列清单 / router 不可用）透传 server exec（全文/清单 toast 降级轨）。
+          if (name === "wf:open" && promptText.trim() && routerOk) void openArtifact(promptText.trim());
+          else void execLocal(name, promptText);
           probe({ evt: "intercept-hit", name });
           return true;
         },

@@ -1,5 +1,6 @@
 node_modules/
 .workflow/
 .learnings/
+.codegraph/
 *.log
 .DS_Store
