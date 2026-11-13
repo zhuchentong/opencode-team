@@ -1,0 +1,125 @@
+// done-git-delivery-confirm T01：done 流转 git 环境检测与交付确认提示（A1-A5，plan §验收逐字）
+// 经 registerCommands + 内存 store mock 驱动 commands.ts 真实 transition（harness 形态与 flows.test.js 同源）；
+// fs 临时目录造 .git 形态。tests/ 保持 .js：禁任何 TS 语法（ERR 教训）。
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { LIMITS } from "../server/lib.ts";
+import { registerCommands } from "../server/commands.ts";
+
+const mkTmp = () => fs.mkdtempSync("/tmp/opencode/wf-done-git-");
+const A1_OPT = "A1：有 remote → 选项=提交并推送/仅提交/跳过";
+
+// kind: "remote"=.git 目录+config 含 remote；"noremote"=无 remote；"linked"=.git 文件+gitdir 指针；null=无 .git
+const writeGit = (dir, kind) => {
+  const remote = '[remote "origin"]\n\turl = https://example.com/r.git\n';
+  if (kind === "remote" || kind === "noremote") {
+    fs.mkdirSync(`${dir}/.git`, { recursive: true });
+    fs.writeFileSync(`${dir}/.git/config`, kind === "remote" ? remote : "[core]\n\trepositoryformatversion = 0\n");
+  } else if (kind === "linked") {
+    const real = `${dir}/.real-git/worktrees/w1`;
+    fs.mkdirSync(real, { recursive: true });
+    fs.writeFileSync(`${real}/config`, remote);
+    fs.writeFileSync(`${dir}/.git`, `gitdir: ${real}\n`);
+  }
+};
+
+const mkHarness = (dir) => {
+  const store = new Map();
+  const cmds = [];
+  const puts = []; // 捕获 entry.put 值（done 分支须含交付提示）
+  const sid = "ses_donegit";
+  const ctx = {
+    options: { leaderOnly: false },
+    session: {
+      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: dir } }),
+      wait: async () => {},
+      prompt: async () => {},
+      hook: async () => ({ dispose() {} }),
+      instructions: { entry: { put: async (q) => { puts.push(q.value); }, list: async () => [], remove: async () => {} } },
+    },
+    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
+  };
+  const deps = {
+    load: async (s) => store.get(s) ?? null,
+    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
+    resolveProjectDir: async () => dir,
+    removeState: async (s) => { store.delete(s); },
+    putReport: async () => {},
+    dumpStates: async () => [],
+    debugDirFor: async () => dir,
+    probeOnce: async () => {},
+    LIMS: { ...LIMITS },
+    emitUpdated: async () => {},
+    emitReport: async () => {},
+    WfDef: null, rpcErr: null, runner: { run: null },
+  };
+  return registerCommands(ctx, deps).then(({ dispose }) => ({
+    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: sid, prompt: { text } }),
+    st: () => store.get(sid),
+    patch: (obj) => Object.assign(store.get(sid), obj),
+    puts, dispose,
+  }));
+};
+
+// daily 链推进至 done 并返回 wf:done 输出文本（关卡前置经 patch 置账）
+const toDone = async (h, slug) => {
+  await h.run("wf:intake", slug);
+  await h.run("wf:plan");
+  await h.run("wf:review");
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  await h.run("wf:build");
+  await h.run("wf:test");
+  h.patch({ testReportVerdict: "PASS" });
+  return h.run("wf:done");
+};
+
+test("A1：.git 含 remote → done 输出交付确认三选项，doneGit 记账，entry 含提示", async () => {
+  const dir = mkTmp(); writeGit(dir, "remote");
+  const h = await mkHarness(dir);
+  const out = await toDone(h, "git-a1");
+  assert.match(out, /提交并推送\/仅提交\/跳过/, A1_OPT);
+  assert.match(out, /question/, "A1：须指令 leader 用 question 询问");
+  assert.deepEqual(h.st().doneGit, { isGit: true, hasRemote: true }, "A1：记账形状");
+  assert.match(h.puts[h.puts.length - 1], /交付确认/, "A1：done entry 抗 compaction 含提示");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("A2：.git 无 remote → 仅提交/跳过，隐藏推送", async () => {
+  const dir = mkTmp(); writeGit(dir, "noremote");
+  const h = await mkHarness(dir);
+  const out = await toDone(h, "git-a2");
+  assert.match(out, /仅提交\/跳过/, "A2：选项=仅提交/跳过");
+  assert.doesNotMatch(out, /提交并推送/, "A2：无 remote 不得出现推送选项");
+  assert.deepEqual(h.st().doneGit, { isGit: true, hasRemote: false }, "A2：hasRemote=false");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("A3：无 .git → 零交付提示，done 行为与旧版一致", async () => {
+  const dir = mkTmp();
+  const h = await mkHarness(dir);
+  const out = await toDone(h, "git-a3");
+  assert.doesNotMatch(out, /交付确认/, "A3：非 git 项目不渲染");
+  assert.equal(h.st().doneGit, undefined, "A3：无记账");
+  assert.doesNotMatch(h.puts[h.puts.length - 1], /交付确认/, "A3：entry 不含提示");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("A4：.git 为文件（linked worktree gitdir 指针）→ 解析 config 判 remote", async () => {
+  const dir = mkTmp(); writeGit(dir, "linked");
+  const h = await mkHarness(dir);
+  const out = await toDone(h, "git-a4");
+  assert.match(out, /提交并推送\/仅提交\/跳过/, "A4：指针 config 有 remote → 三选项");
+  assert.deepEqual(h.st().doneGit, { isGit: true, hasRemote: true }, "A4：linked 记账形状");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("A5：done 后新任务 intake → doneGit 清除，不残留旧交付提示", async () => {
+  const dir = mkTmp(); writeGit(dir, "remote");
+  const h = await mkHarness(dir);
+  await toDone(h, "git-a5");
+  assert.deepEqual(h.st().doneGit, { isGit: true, hasRemote: true }, "前置：旧任务已记账");
+  await h.run("wf:intake", "git-a5-next");
+  assert.equal(h.st().doneGit, undefined, "A5：新任务清账（intake 重置块）");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});

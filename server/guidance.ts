@@ -10,11 +10,24 @@ import { LIMITS, isDaily, budgetFor, KIND_FILES, SID_ALIAS_USAGE, type Limits, t
 // <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
+// done-git-delivery-confirm T01：done 交付确认指令——仅 st.doneGit.isGit 时渲染（无记账=输出字节级不变，
+// 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
+function doneGitLine(st: WfState): string | null {
+  if (!st.doneGit?.isGit) return null;
+  const opts = st.doneGit.hasRemote
+    ? "选项标签固定：提交并推送/仅提交/跳过"
+    : "未配置 remote——选项标签固定：仅提交/跳过（隐藏推送）";
+  return `📦 交付确认（git）：检测到 git 环境。汇报前必须先用 question 工具询问用户是否提交代码（${opts}）；` +
+    "未经用户批准不得 commit/push；批准后先跑项目门禁（如 bun run check）通过才提交，只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
+}
 export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   // 易变区纪律（借鉴 my-opencode-deepseek-config 字节稳定前缀）：静态指引在前，
   // 易变内容（轮次/续用 sessionID/head 行）殿后——返工同阶段 r+1、子会话登记只打穿尾部，静态段保 prompt cache。
   const head = `phase=${st.phase} slug=${st.slug} rounds=${JSON.stringify(st.rounds ?? {})}`;
-  if (st.phase === "done") return `${DONE_ENTRY}\n${head}`;
+  if (st.phase === "done") {
+    const git = doneGitLine(st);
+    return `${DONE_ENTRY}${git ? `\n${git}` : ""}\n${head}`;
+  }
   return `${guidance(st.phase, st, limits, overrides)}\n${head}`;
 }
 
@@ -131,13 +144,17 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       budgetLine(st, ["test-report"]),
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")（回 building 返工，test_fix≤${L.test_fix}）`,
     ].join("\n");
-    case "done": return [
-      `【wf 工作流｜done·日常模式】slug=${s}`,
-      S ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`
-        : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
-      budgetLine(st, ["lessons"]),
-    ].join("\n");
+    case "done": {
+      const git = doneGitLine(st);
+      return [
+        `【wf 工作流｜done·日常模式】slug=${s}`,
+        S ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`
+          : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+        ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
+        budgetLine(st, ["lessons"]),
+        ...(git ? [git] : []),
+      ].join("\n");
+    }
     default: return `【wf 工作流·日常模式】阶段 ${phase}`;
   }
 }
@@ -233,13 +250,17 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `轮次：第 ${r.test_fix}/${L.test_fix} 轮`,
       ...reuseLines(st, "wf/builder", "wf/fixer"),
     ].join("\n");
-    case "done": return [
-      `【wf 工作流｜done】slug=${s}`,
-      `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
-      WRITE_CONTRACT,
-      budgetLine(st, ["lessons"]),
-      `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
-    ].join("\n");
+    case "done": {
+      const git = doneGitLine(st);
+      return [
+        `【wf 工作流｜done】slug=${s}`,
+        `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+        WRITE_CONTRACT,
+        budgetLine(st, ["lessons"]),
+        `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
+        ...(git ? [git] : []),
+      ].join("\n");
+    }
     default: return `【wf 工作流】阶段 ${phase}`;
   }
 }

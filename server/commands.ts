@@ -76,6 +76,21 @@ const roleGuardText = (opt: any) => {
     return `\n角色托管漂移：${bad.map((r) => `${r.name}=${r.status}`).join(" ")}（syncRoles 开启后 setup 自动修复；unmanaged 需手动加标记）`;
   } catch { return ""; }
 };
+// done-git-delivery-confirm T01：done 流转的 git 环境检测（模块级 IO 纯函数，fail-open 由调用方兜底）。
+// isGit = <dir>/.git 存在（目录或 linked worktree 的 gitdir 指针文件均算）；
+// hasRemote = git config 匹配 [remote "...]（.git 文件 → 解析 gitdir: 指针取 <gitdir>/config；读失败保守 false）。
+export function detectDoneGit(dir: string): { isGit: boolean; hasRemote: boolean } {
+  const gitPath = `${dir}/.git`;
+  if (!fs.existsSync(gitPath)) return { isGit: false, hasRemote: false };
+  let configPath = `${gitPath}/config`;
+  try {
+    if (fs.statSync(gitPath).isFile()) {
+      const m = fs.readFileSync(gitPath, "utf8").match(/^gitdir:\s*(.+)\s*$/m);
+      if (m) configPath = `${m[1].startsWith("/") ? m[1] : `${dir}/${m[1]}`}/config`;
+    }
+    return { isGit: true, hasRemote: /\[remote\s+"/.test(fs.readFileSync(configPath, "utf8")) };
+  } catch { return { isGit: true, hasRemote: false }; }
+}
 
 export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const E = ctx?.session?.instructions?.entry;
@@ -152,6 +167,18 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
             st.projectID = s?.projectID ?? null;
             st.directory = s?.location?.directory ?? null;
           } catch { }
+        }
+        // done-git-delivery-confirm T01：进 done 即检测 git 环境（置于 directory 补全后、inject 前，
+        // 使 done entry 渲染即含交付确认指令）；fail-open：任何异常=不记账=零提示，绝不阻断流转。
+        if (flow.to === "done") {
+          try {
+            const dir = st.directory ?? (await resolveProjectDir(st, sessionID));
+            if (dir) {
+              const g = detectDoneGit(String(dir));
+              // 非 git 项目不记账且清旧账（重复推 done 幂等）：state 零污染，done 行为与旧版逐字节一致
+              if (g.isGit) st.doneGit = g; else delete st.doneGit;
+            }
+          } catch { /* fail-open */ }
         }
         logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
         await inject(st);

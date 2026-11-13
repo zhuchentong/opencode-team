@@ -51,6 +51,10 @@ export interface WfState {
   // M16-r44：方案确认记账——leader 经 question 工具呈现含「批准执行」选项的确认卡片时由 guard-hook 记录；
   //   plan 修订（wf:plan 推进 / wf_write_artifact kind=plan）与新任务 intake 即作废，wf:build 关卡校验
   planConfirmedAt?: string;
+  // done-git-delivery-confirm T01：wf:done 流转时检测项目 git 环境记账（commands.ts detectDoneGit，
+  //   fail-open=异常不记账）；guidance/entry 据此条件渲染交付确认指令——leader 必须 question 询问
+  //   用户「提交并推送/仅提交/跳过」（无 remote 隐藏推送），批准前不得 commit/push。新任务 intake 清除。
+  doneGit?: { isGit: boolean; hasRemote: boolean };
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -536,6 +540,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.testReportVerdict;
       delete st.planReviewVerdict; // M16-r34：新任务清验证结论
       delete st.planConfirmedAt; // M16-r44：新任务清方案确认记账
+      delete st.doneGit; // done-git T01：新任务不得残留旧交付提示
       // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
       st.startedAt = at;
       st.phaseEnteredAt = at;
