@@ -6,6 +6,7 @@
 >
 > 上游脉络：架构评审 → 方案 v1 → 设计模式建议 → 方案 v2 → 独立验证（I-1~I-4/S-1~S-6）→
 > v2 修订版。R1（`664cc14` 机械重构）与 R2（`07fa0c2` 模式收敛）已交付并推送 origin/master。
+> **R1/R2 交付内容与模块地图见 §0.1–0.4（跨设备执行的前置知识，R3 全部锚点建立其上）。**
 > R3 是重构三部曲的最后一批，也是**唯一动持久化形状**的一批——风险最高，纪律最严。
 > 后续另有 `PLAN-agent-phase-latency-optimization-v3.md`（阶段耗时优化），其自述排在 R1/R2/R3
 > 之后启动；本批不依赖它，但它的 P0-A（mock bootstrap 根修）若先做可省本批 worktree 环境税（§7.4）。
@@ -33,6 +34,77 @@ R3 = 把 R1/R2 收敛好的"形状"落到**持久化层与类型层**，四个�
 4. TUI 去重逻辑有独立单测（`createDeduper` 纯函数）。
 5. `bun run check` 五合一 EXIT=0（build → bun test → tsc --noEmit → oxlint → TUI harness）。
 6. 真机跑通一个 `[S]` daily 任务全程到 done（README 验证清单 5 条 + 侧边栏不崩）。
+
+### 0.1 R1 已交付 — 机械重构（commit `664cc14`，52 files，+2363/−1437）
+
+> 行为不变重构；过程产物在 `.workflow/arch-r1-host-split/`（**gitignore 本机文件，跨设备不可见**，
+> 交付事实以本节 + `git show 664cc14` 为准）。
+
+- **lib.ts 842→15 行 barrel**：纯逻辑按域拆 `server/domain/{types,flow,guard,artifact,session,report,policy,diagnose}.ts`。
+  `types.ts` = 零依赖叶子（共享类型+常量唯一来源）；domain 内部边白名单 = 任意→types + diagnose→{flow,artifact,session}；
+  domain 禁 import 编排层（`tests/domain-acyclic.test.js` 守卫）。35 个 import 方经 barrel 零改动。
+- **server/host.ts 防腐层**：`adaptHost(ctx)` 是全仓唯一收裸 ctx 的函数；11 文件 50 处 `ctx.` 直戳收敛；
+  `tests/host-boundary.test.js` 守卫（audit 口径剥注释/字符串）。宿主升级爆炸半径 15 文件→1。
+- **swallow() 环形审计**：observe.ts ring buffer（≤200 FIFO）；66 处静默 catch 清零（探针 3 处除外）；
+  diagnose 🔇 摘要节；**code 前缀=文件基名**（`tests/swallow-coverage.test.js` 守卫——R3 新文件写 swallow 须遵守）。
+- **managed-sync.ts**：roles/skills 托管同步泛型抽取（内容零触碰）。
+- **tests/helpers/ 装配同源**：host-stub/store-stub/command-deps/wiring 四件；mock 形状与真实接口同源。
+- 基线：351 测试；lib 导出 62 名锁（`tests/lib-exports.test.js`）；6 新守卫测试。
+
+### 0.2 R2 已交付 — 模式收敛（commit `07fa0c2`，29 files，+915/−398）
+
+> 行为不变重构（HEAD 对比 42 组输出逐字节零差异）；过程产物在 `.workflow/arch-r2-profile-statemachine/`
+> （同上，跨设备不可见）。**R3 的全部锚点建立在本节形状之上。**
+
+- **Strategy**：`WorkflowProfile` 注册表（`PROFILES` full/daily 模块自注册；`profileOf(st)` 是 isDaily
+  唯一消费点）；`flowFor/gateFor/nextFor` 签名不变、内部读 profile；guidance 经 `GUIDANCE_BY_ID` 按
+  profile.id 派发；`tierOf` 归一 + `DISPATCH_BY_TIER`（`st.size ===` 字面清零）。
+- **State Object**：`PHASES_FULL/PHASES_DAILY`（PhaseDef{next,blocking}）单点注册；`NEXT/NEXT_DAILY`
+  降为派生视图（值逐字不变）；guard-hook blocking 判定读 profile（miss 回退全局 BLOCKING Set）。
+- **Specification**：`GATES/GATES_DAILY` 值 = **Gate 对象 `{id,isSatisfiedBy(st),explain(st)}`**（非函数！）；
+  文案迁 `shared/prompts/gates.ts`；`st.gateStatus={id,ok,at}` 快照（evaluateTransition 覆写、intake 清除）；
+  levelFor R0 结构化判定（❌ 扫描兜底保留）；diagnose 细化 note `gate-rejected:<id>` 按 base 归组 + └ 明细行。
+- **解环**：`server/transition.ts`（createTransition：load→校验→应用→inject→save 编排，含计时闭账/
+  done-git/selfmod 写点）；`server/command-bus.ts`（**runner 可变盒子已退役**，index 装配期建 bus，
+  rpc-bridge/command-tool/commands 三入口共享，`bus.call` 返回 {text,at,brief,level}）；
+  `makeInitialWfState`/`REJECT_NOTES`/`WfError` 入 types 叶子。
+- **Pipeline**：`server/middleware.ts`（leaderGate×tierSync，`CMD_MW_ORDER` 声明 + tests/middleware.test.js 锁序）；
+  `renderReport`（domain/report.ts，文本链单点，旧 sanitizeText 平移）。
+- 基线：**369 测试 / 42 文件**；lib 导出锁 **62→70 名**；commands.ts 680→430 行；
+  swallow code 前缀随迁移改名（transition:*/middleware:*）。
+
+### 0.3 R2 后模块地图（R3 锚点的前置知识）
+
+| 文件 | 职责（R2 后） | R3 触点 |
+|---|---|---|
+| `server/domain/types.ts` | 域类型叶子：WfState（**仍平铺+索引签名**）/FlowLogEntry/Gate/PhaseDef/WorkflowProfile/REJECT_NOTES/tierOf/makeInitialWfState | T3.1 分组+删索引签名；T3.2 branded 类型 |
+| `server/domain/flow.ts` | PROFILES/PHASES/GATES（Gate 对象）/evaluateTransition（gateStatus 写点、intake 重置块） | T3.1 子步 B/C/D：verdict 读点+重置块改子对象 |
+| `server/state.ts` | SQLite tasks/events/reports；writeTaskRow CAS；withStateRetry；rowToState（约 :220） | T3.1 normalize 插入点（load 出口）；**CAS 红线零改** |
+| `server/transition.ts` | createTransition 编排（timing 闭账/done-git/selfmod 写点、makeInitialWfState） | T3.1 子步 A/D 写点改子对象 |
+| `server/middleware.ts` | leaderGate×tierSync（tierBase/roleSessions 读写） | T3.1 子步 C |
+| `server/commands.ts`（430 行） | 命令注册表 + publishOutput/injectReport 双轨 + 辅助命令 | T3.1 status 显示读点；T3.3 publishReport 收敛 |
+| `server/command-bus.ts` | bus.call dispatch（未知命令 ❌/brief/level） | T3.3 Report 对象化（dispatch 返回形状） |
+| `server/rpc-bridge.ts` | state 投影（st 扁平字段→wire schema，约 :42-50） | T3.1 投影层改读子对象（**wire 形状不变**） |
+| `server/domain/session.ts` | resolveSidAlias/completeSidPrefix/isNearTruncation（运行时别名协议） | T3.2 SidRef 唯一构造点 |
+| `server/domain/report.ts` | levelFor（R0 gateStatus+R1 ❌）/briefFor 分派/clipBrief/renderReport | T3.1 verdicts 读点；T3.3 brief/level 生成不动 |
+| `shared/rpc.ts` | wire 契约（required 数组锁，rpc-drift 快照） | T3.3 只扩 properties |
+| `shared/prompts/gates.ts` | 关卡文案模板（字节级红线） | T3.1 子步 B 取值点（文案本体不动） |
+| `tui/index.tsx`（692 行） | 流派 A slot render + shown Set 手写去重（:363-400，60s 门+cap50） | T3.3 createDeduper 替换；T3.4 拆模块 |
+| `tests/`（369 基线） | lib-exports 70 名锁 / rpc-drift 快照 / domain-acyclic / host-boundary / swallow-coverage 等守卫 | R3 安全网；新锁 wfstate-fields/dedup |
+
+### 0.4 R1/R2 有意未做（= R3 的边界，勿重做已交付项）
+
+| 未做项 | 现状 | R3 任务 |
+|---|---|---|
+| WfState 分组 | 仍 30+ 平铺字段；R2 仅**新增** gateStatus 扁平字段（分组留给 R3） | T3.1 |
+| 索引签名 | WfState（types.ts:83）与 FlowLogEntry（:24）两处 `[key: string]: unknown` 仍在 | T3.1 子步 D |
+| 零回显类型化 | 运行时防线已齐（登记/别名/自愈/渲染纪律），但纪律只在注释 | T3.2 |
+| 去重单实现 | exec/事件/轮询三通道 + TUI shown Set 各自手写（语义一致但无单点） | T3.3 |
+| tui 拆模块 | 单文件 692 行（流派 A 约束下可拆，R2 未动 TUI） | T3.4 |
+| mock bootstrap 根修 | R1 环境层绕过（代码点级拼接已修）；ESM 首跑时序残留 | 可选微修 §7.4 |
+
+> 验证报告（I-1~I-4/S-1~S-6）原文为本地会话产物未入库；其结论已全部吸收进本文档
+> （types 叶子/装配分层/GATES 串行/tui 拆分/SidRef 双形态/口径修正等），跨设备执行以本文档为准。
 
 ## 1. 前置核对（执行第一步，不可跳过）
 
@@ -367,6 +439,8 @@ R2 态（07fa0c2）；stateJson 新形回退后旧代码可读（normalize 只�
 ## 11. 跨设备执行备注
 
 - 本文档自包含：不依赖本机会话上下文、不依赖 /tmp/opencode/slim-src 等本机历史副本。
+  R1/R2 过程产物（.workflow/arch-r1-host-split/、.workflow/arch-r2-profile-statemachine/）为
+  gitignore 本机文件，跨设备不可见——交付事实以 §0.1–0.4 + `git show 664cc14 07fa0c2` 为准。
 - 环境：bun（版本见 package.json/bun.lock）、git、opencode 宿主（真机验证需）。`bun install` 即可。
 - 测试隔离：`WF_PROJECTS_FILE` 由 bunfig.toml preload（tests/_preload.js）钉临时路径，跨设备一致。
 - 状态库：各项目 `.workflow/wf.db`（gitignore，不入库）；跨设备执行时本仓库自身的 wf.db 是测试对象，
