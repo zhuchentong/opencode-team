@@ -167,6 +167,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | session-lookup skill 内容 | `skills/session-lookup/SKILL.md` | syncSkills（默认开启）同步宿主全局 skills 目录；改后需 `/reload` 或新会话生效 |
 | 续接别名语法 / 近似截断阈值 | `server/lib.ts`（resolveSidAlias / isNearTruncation） | guidance/leader.md/SKILL.md 文案同源靠测试内容锚 |
 | 产物预算 | `server/lib.ts`（ARTIFACT_BUDGET_KB / _S_KB） | guidance 双通道渲染 |
+| 引擎自改并发护栏 | `server/lib.ts`（isSelfModDir/selfModWarnLine）+ `server/state.ts`（PROJECT_DBS+持久清单+scanActiveTasks 跨库扫描）+ `server/commands.ts`（intake 接线） | 任务目录=插件仓库根→跨项目扫描其它活动任务（活跃/休眠分级）告警+st.selfMod 记账；探测根可 `options.selfModRoot` 覆盖；清单路径钩子 `WF_PROJECTS_FILE`（测试隔离） |
 | 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 

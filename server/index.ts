@@ -72,7 +72,7 @@ export default {
     const commands = await registerCommands(ctx, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated,
       emitReport: async (sid: string, text: string, at: string) => { await emitReport(sid, text, at); }, // T06：bridge 返回通道形状，deps 契约 Promise<void>（组装层适配）
       WfDef, rpcErr,
-      putReport, removeState, dumpStates, runner });
+      putReport, removeState, dumpStates, runner }); // selfmod-guard T01：探测根走运行时 ctx.options.selfModRoot（index 不再透传）
 
     return () => {
       for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg, roleReg, skillReg]) { try { r?.dispose?.(); } catch { } }

@@ -80,6 +80,28 @@ test("r38 isLeader：workflow 与 wf/leader 均为 leader；其余（含 wf/* �
   }
 });
 
+// ── F1（implant×build 卡死 1.5 天实证）：拒绝文案按「会话是否持任务」分支 ──
+test("F1 leaderOnlyReject st 分支：持任务=两出口并列（切回 workflow/重跑 + reset 清账）；无任务=旧文案逐字", () => {
+  const st = { slug: "implant", phase: "testing", rounds: {} };
+  const r = leaderOnlyReject("build", "wf:done", st);
+  assert.match(r, /^❌/, "拒绝前缀不变量（levelFor=warn）");
+  assert.match(r, /本会话即任务「implant」/, "精确指认=本会话自身");
+  assert.match(r, /phase=testing/);
+  assert.match(r, /切回 workflow 后重跑 wf:done/, "出口一：切回 agent 重跑");
+  assert.match(r, /勿新开会话接管/, "堵住误导路径（开新会话拿不到任务行）");
+  assert.match(r, /\/wf:reset 清账/, "出口二：直接清账（reset 本在豁免集）");
+  assert.match(r, /只读命令/, "只读能力说明");
+  assert.match(r, /仅限 workflow/, "『仅限 workflow』子串保留（存量断言兼容）");
+  // 无任务/st 缺省 → 旧文案逐字（两参调用=三参缺省的等价锚）
+  assert.equal(leaderOnlyReject("build", "wf:done", null), leaderOnlyReject("build", "wf:done"));
+  assert.equal(leaderOnlyReject("build", "wf:done", undefined), leaderOnlyReject("build", "wf:done"));
+  assert.equal(leaderOnlyReject("build", "wf:done", { slug: "", phase: null, rounds: {} }), leaderOnlyReject("build", "wf:done"), "幽灵快照走旧文案");
+  // 优先级不变：只读豁免 / leader 放行 / 空 agent fail-closed 均在 st 分支之前
+  assert.equal(leaderOnlyReject("build", "wf:status", st), null);
+  assert.equal(leaderOnlyReject("workflow", "wf:done", st), null);
+  assert.match(leaderOnlyReject("", "wf:done", st), /无法确认/, "空 agent 身份文案优先于任务分支");
+});
+
 // ── 全链路：聊天命令入口 ────────────────────────────────────────────
 test("r36 聊天命令：build intake 拒（无幽灵行）；leader 放行；有行后 build 推进拒 + 审计 agent-rejected", async () => {
   const m = mkCtx({}, { ses_b: "build", ses_l: "wf/leader" });
@@ -96,6 +118,7 @@ test("r36 聊天命令：build intake 拒（无幽灵行）；leader 放行；�
   m.ctx.session.get = async ({ sessionID } = {}) => ({ projectID: "pi1", agent: sessionID === "ses_l" ? "build" : "wf/leader", location: { directory: DIR } });
   const r3 = await cmd(m, "wf:plan").execute({ sessionID: "ses_l", prompt: {} });
   assert.match(r3, /仅限 workflow/);
+  assert.match(r3, /本会话即任务/, "F1：guarded 带快照命中任务分支（load 上提至拒绝前）");
   const st = stOf("ses_l");
   assert.equal(st.phase, "intake", "推进被拒不生效");
   assert.ok(st.log.some((e) => e.cmd === "wf:plan" && !e.ok && /agent-rejected:build/.test(e.note ?? "")), "拒绝落审计");

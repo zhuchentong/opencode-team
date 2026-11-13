@@ -13,4 +13,5 @@
 6. 不记录 secrets/tokens/私钥，不粘贴整份源码。
 
 产出：更新后的 .learnings/*.md + <project>/.workflow/<slug>/lessons.md（简短复盘：新增 N 条 / 更新 M 条 / 晋升候选 K 条）。
+**完成回执（交付确认串行链的证据）**：回复 leader 必含「已写 .learnings/ 文件清单 + 完成时刻（ISO）」——git 项目 leader 须等你的回执到齐才发起交付确认 question，确认后不再补写经验（防提交后工作区复脏）。
 **瘦身预算：lessons.md ≤6KB（M 级；S 级 ≤3KB，以委派 prompt 为准，字节计）**——只列新增/更新条目摘要与晋升候选，不复述全过程、不粘贴整份源码。修订已有 lessons 用 patch 模式只输出变更段（先 read 原文、old 逐字摘录），勿全量重写。

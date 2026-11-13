@@ -60,6 +60,11 @@ export interface WfState {
   //   fail-open=异常不记账）；guidance/entry 据此条件渲染交付确认指令——leader 必须 question 询问
   //   用户「提交并推送/仅提交/跳过」（无 remote 隐藏推送），批准前不得 commit/push。新任务 intake 清除。
   doneGit?: { isGit: boolean; hasRemote: boolean };
+  // selfmod-concurrency-guard T01（F2 v2）：引擎自改任务记账——intake 检测任务目录=插件仓库根
+  //   （isSelfModDir，commands.ts 接线，fail-open）时置位；驱动 building guidance 纪律行（entry 通道
+  //   抗 compaction）与跨库扫描并发告警（scanActiveTasks：内存∪持久项目清单，休眠任务亦现形）。
+  //   新任务 intake 重算（重置块清除），非自改 intake 亦清除残留。
+  selfMod?: boolean;
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -119,7 +124,7 @@ export const NEXT: Record<string, string> = {
   // M16-r28 兼容行：存量 assign 阶段任务（阶段已并入 test_design）的下一步指引
   assign: "/wf:test-design（assign 已并入 test_design，直接推进即可）",
   test_design: "/wf:build", building: "/wf:reconcile", reconcile: "/wf:review-build", build_review: "/wf:test",
-  testing: "PASS→/wf:done，FAIL→/wf:fix", fixing: "/wf:test", done: "（终态，含并行复盘）",
+  testing: "PASS→/wf:done，FAIL→/wf:fix", fixing: "/wf:test", done: "（终态；git 项目按「总结→提交/不提交→完成」串行）",
 };
 
 // M16-r44：方案确认关卡拒绝文案（full/daily 共用；blocked-append 指路契约）
@@ -150,7 +155,10 @@ export const GATES: Record<string, (st: WfState) => string | null> = {
 export const FLOWS_DAILY: Record<string, FlowDef> = {
   "wf:intake": { to: "intake",   from: ["*"],                          counter: null },
   "wf:plan":   { to: "planning", from: ["intake", "planning", "review"], counter: null },
-  "wf:review": { to: "review",   from: ["planning", "review"],         counter: "plan_review" },
+  // selfmod-concurrency-guard A2：FAIL 修订收敛为唯一路径 wf:plan→wf:review——review→review 直推
+  //   复审边移除（双任务同版本取证：走哪条纯模型裁量=漂移；修订必改 plan，改后恒在 planning）。
+  //   full 模式 FLOWS 不动（在途兼容）。
+  "wf:review": { to: "review",   from: ["planning"],                    counter: "plan_review" },
   "wf:build":  { to: "building", from: ["review"],                     counter: null },
   // 返工触发器：daily 无 fixing 阶段，wf:fix 改指 building（复用 test_fix≤3，零新计数逻辑）
   "wf:fix":    { to: "building", from: ["testing"],                    counter: "test_fix" },
@@ -371,10 +379,19 @@ export function isLeader(agent: string): boolean {
 export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset", "wf:open"]);
 // 判定：豁免集放行；其余仅 leader（workflow，兼容 wf/leader）；agent 不可确认 → 变更类 fail-closed。
 // lane 整体 leader-only（含 ls，有意收紧：lane 属任务内部细节）。返回拒绝文案或 null（放行）。
-export function leaderOnlyReject(agent: string, cmd: string): string | null {
+// F1（implant×build 卡死 1.5 天实证）：可选第三参 st=本会话快照——会话持任务时说明「本会话即
+// leader 会话，只是 agent 被切走」，旧文案「请切换到 workflow 会话」误导开新会话接管（新会话拿不到
+// 任务行，done 永远推不动）。两出口并列：切回 workflow 重跑 / 直接 /wf:reset 清账（reset 在豁免集）。
+// st 缺省或无任务 → 旧文案逐字（存量断言零改动）。
+export function leaderOnlyReject(agent: string, cmd: string, st?: WfState | null): string | null {
   if (READONLY_CMDS.has(cmd)) return null;
   if (isLeader(agent)) return null;
   if (!agent) return `❌ 无法确认 agent 身份，工作流变更仅限 ${LEADER_AGENT}：请在 ${LEADER_AGENT} 会话执行（查看状态可用 /wf:status）。`;
+  if (st && st.slug && st.phase) {
+    return `❌ 工作流变更仅限 ${LEADER_AGENT}（当前 agent=${agent}）。本会话即任务「${st.slug}」（phase=${st.phase}）的 leader 会话——` +
+      `把本会话切回 ${LEADER_AGENT} 后重跑 ${cmd} 即可，勿新开会话接管（新会话拿不到该任务）；` +
+      `确要放弃收尾可在本会话直接 /wf:reset 清账（丢 done 交付环节，进度已入 events 审计）。只读命令 /wf:status /wf:diagnose /wf:ping /wf:open 不受限。`;
+  }
   return `❌ 工作流仅限 ${LEADER_AGENT}（当前 agent=${agent}）。请切换到 ${LEADER_AGENT} 会话执行；查看状态可用 /wf:status。`;
 }
 
@@ -546,6 +563,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.planReviewVerdict; // M16-r34：新任务清验证结论
       delete st.planConfirmedAt; // M16-r44：新任务清方案确认记账
       delete st.doneGit; // done-git T01：新任务不得残留旧交付提示
+      delete st.selfMod; // selfmod-guard T01：自改记账按新任务目录重算
       // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
       st.startedAt = at;
       st.phaseEnteredAt = at;
@@ -786,4 +804,40 @@ export function briefFallback(cmd: string, text: string): string {
   const tag = `【wf｜${String(cmd ?? "").replace(/^wf:/, "")}】`;
   const first = String(text ?? "").split("\n").find((l) => l.trim() !== "") ?? "";
   return `${tag}\n${clipBrief(first)}`;
+}
+
+// ── selfmod-concurrency-guard T01（F2 v2）：引擎自改并发护栏（纯逻辑；跨库扫描 IO 在 state.ts，接线在 commands.ts）──
+// 背景（双任务日志实证）：notification-brief-display 修改插件自身仓库时，builder 对入口文件分步
+//   连续 edit 的热载中间态被同进程 dso-app 在途会话真实执行（其 wf.db 被静默 ALTER 加列）。
+// v1 进程内存注册表盲区（implant×build 卡死 1.5 天实证 + 多日 resume 习惯取证）：休眠未收尾任务
+//   不在内存、热载即清零 → v2 改跨库扫描：PROJECT_DBS 内存表 ∪ 持久项目清单逐库查 is_active=1；
+//   updatedAt 分级活跃/休眠（休眠=可能已废弃，同样先裁决再开工——唤醒后即干扰源）。
+export interface ActiveOther { slug: string; phase: string | null; directory: string | null; updatedAt: string | null }
+// 目录比较（尾斜杠归一；任一侧空=false=判不出不算自改，fail-open 宁缺勿滥告警）
+export function isSelfModDir(taskDir: unknown, pluginRoot: unknown): boolean {
+  const norm = (d: unknown) => String(d ?? "").replace(/[\\/]+$/, "");
+  const a = norm(taskDir), b = norm(pluginRoot);
+  return !!a && !!b && a === b;
+}
+// ⚠️ 前缀（成功轨告警，非拒绝——❌ REJECT_PREFIX 互斥不变量由 tests/brief-level.test.js 守卫；
+// 本行为=advisory，裁决权在用户）。>5 项折叠防长单行；directory 不入文案（噪音），slug·phase 足够定位。
+// F2 v2 分级：updated_at 距 now <24h=活跃；否则=休眠（≥N 天未更新+最后时刻 MM-DD，可能已废弃）——
+// 休眠任务被唤醒后同样是热载干扰源（implant 实证），文案给出各自处置出口（活跃=暂停/同意并发；
+// 休眠=先核实后 done 收尾或 reset 清账）。updatedAt 解析失败按休眠·日期未知（宁保守多提示）。
+export function selfModWarnLine(others: ActiveOther[], now: number = Date.now()): string | null {
+  if (!others.length) return null;
+  const DAY = 24 * 3600 * 1000;
+  const tag = (o: ActiveOther): string => {
+    const label = `${o.slug || "(未定)"}·${o.phase ?? "?"}`;
+    const t = Date.parse(String(o.updatedAt ?? ""));
+    if (!Number.isFinite(t)) return `${label}（休眠，日期未知）`;
+    if (now - t < DAY) return `${label}（活跃）`;
+    const days = Math.max(1, Math.floor((now - t) / DAY));
+    return `${label}（休眠≥${days}天未更新，最后 ${String(o.updatedAt).slice(5, 10)}，可能已废弃）`;
+  };
+  const shown = others.slice(0, 5).map(tag).join("、");
+  return `⚠️ 引擎自改护栏：本任务修改插件自身仓库，跨项目扫描发现 ${others.length} 个其它活动任务（${shown}${others.length > 5 ? " 等" : ""}）。` +
+    "热载新代码会作用于全部在途会话，休眠任务被唤醒后同样受影响——请先 question 呈用户裁决后再委派 builder：" +
+    "活跃任务=暂停或明确同意并发；休眠任务=先 /wf:status 核实，done 收尾或 /wf:reset 清账；" +
+    "builder 对 server/ 入口文件禁分步连续 edit，全部编辑完成后一次性核验。";
 }

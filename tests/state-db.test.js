@@ -115,6 +115,29 @@ test("scanStates：done 且 >14 天 GC；新鲜 done 保留", async () => {
   s.close();
 });
 
+// ── F3（selfmod-concurrency-guard 第二批）：幽灵行显式 GC ──
+// 12 库取证：slug='' 且 phase 空=迁移产物（11-10 同秒出现于全部库），现 GC 只清 done → 永不回收。
+// 无误杀边界：空 slug+phase 非空（intake 开发态）与空 slug+done（新鲜 done 锚）都不删。
+test("F3 幽灵行 GC：slug='' 且 phase NULL/'' 在 scanStates 即删；带 phase 与 done 空 slug 行保留", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_keep", slug: "", phase: "intake", rounds: {}, log: [] });
+  {
+    const d = new Database(dbFile(dir));
+    d.run("INSERT INTO tasks (session_id, slug, phase, is_active, rev, updated_at, state_json) VALUES ('ses_gh1', '', NULL, NULL, 1, '2026-11-10T06:57:22.000Z', ?)",
+      JSON.stringify({ sessionID: "ses_gh1", slug: "", phase: null, rounds: {} }));
+    d.run("INSERT INTO tasks (session_id, slug, phase, is_active, rev, updated_at, state_json) VALUES ('ses_gh2', '', '', NULL, 1, '2026-11-10T06:57:22.000Z', ?)",
+      JSON.stringify({ sessionID: "ses_gh2", slug: "", phase: "", rounds: {} }));
+    d.close();
+  }
+  const list = await s.scanStates(null, null);
+  assert.ok(list.find((x) => x.sessionID === "ses_keep"), "空 slug+带 phase 的开发态行不得误杀");
+  const d2 = new Database(dbFile(dir), { readonly: true });
+  assert.equal(d2.query("SELECT COUNT(*) AS n FROM tasks WHERE session_id IN ('ses_gh1','ses_gh2')").get().n, 0, "双空幽灵行（NULL 与 '' 两种 phase）均被回收");
+  d2.close();
+  s.close();
+});
+
 test("scanStates 项目过滤（A6 + M14 directory 回退语义）", async () => {
   const dir = tmpDir();
   const s = await newStore(dir);
@@ -232,8 +255,7 @@ test("T01 logSeq：存量行无 logSeq（SQL 删字段）→ logAdd+save 恰追�
   s.close();
 });
 
-// ── T04（M16-r39 A4）：writeTaskRow 单语句 CAS 原子写 ─────────────────
-// 旧 save 读-比-写三步非原子（同进程 TOCTOU 窗口）；新原语 INSERT/UPDATE…WHERE rev
+// ── T04（M16-r39 A4）：writeTaskRow 单语句 CAS 原子写 ─────────────────// 旧 save 读-比-写三步非原子（同进程 TOCTOU 窗口）；新原语 INSERT/UPDATE…WHERE rev
 // 单语句定胜负。跨进程原子性由本原语单测证明，save 保留 pre-check 快速路径。
 const mkCasRow = (phase) => ({
   sessionID: "ses_cas", slug: "cas", phase, projectID: null, directory: null,

@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { LIMITS } from "../server/lib.ts";
+import { guidance } from "../server/guidance.ts"; // F4b：done 串行文案纯渲染断言（不经 transition）
 import { registerCommands } from "../server/commands.ts";
 
 const mkTmp = () => fs.mkdtempSync("/tmp/opencode/wf-done-git-");
@@ -112,6 +113,26 @@ test("A4：.git 为文件（linked worktree gitdir 指针）→ 解析 config �
   assert.match(out, /提交并推送\/仅提交\/跳过/, "A4：指针 config 有 remote → 三选项");
   assert.deepEqual(h.st().doneGit, { isGit: true, hasRemote: true }, "A4：linked 记账形状");
   h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ── F4（用户报告竞态实证）：git 项目 done=「总结→提交/不提交→完成」串行 ──
+test("F4：git 项目 done 文案串行——learner 回执门控交付确认+提交范围含经验文件；S 级同构；无记账零变化", async () => {
+  const dir = mkTmp(); writeGit(dir, "remote");
+  const h = await mkHarness(dir);
+  const out = await toDone(h, "git-f4");
+  assert.match(out, /总结 → 提交\/不提交 → 完成/, "F4：顺序固定并写入文案");
+  assert.match(out, /提交范围=本任务代码\+\.learnings\//, "F4：经验文件随交付入库");
+  assert.match(out, /确认前落盘，提交后不得再写|回执到齐前不得发起交付确认/, "F4：确认前经验全部落盘（防提交后复脏）");
+  h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ── F4（用户报告竞态实证）：git 项目 done=「总结→提交/不提交→完成」串行 ──
+test("F4b（full 模式同源）：git=回执门控交付确认；无记账=旧并行文案逐字", () => {
+  const g = guidance("done", { slug: "x", phase: "done", rounds: {}, mode: "full", size: "M", doneGit: { isGit: true, hasRemote: true } });
+  assert.match(g, /回执到齐前不得发起交付确认/, "full 模式也串行");
+  assert.match(g, /总结→提交\/不提交→完成/, "顺序固定行内标注");
+  const old = guidance("done", { slug: "x", phase: "done", rounds: {}, mode: "full", size: "M" });
+  assert.match(old, /并行委派 wf\/learner 复盘沉淀（不阻塞交付）/, "无记账=旧文案零回归（残窗=检测 fail-open，接受）");
 });
 
 test("A5：done 后新任务 intake → doneGit 清除，不残留旧交付提示", async () => {

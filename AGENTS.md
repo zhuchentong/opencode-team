@@ -36,6 +36,8 @@
 
 - docs/HOST-CONTRACT.md 是真机契约结论（宿主契约备忘+已知边界，自 README 迁出），事故原始记录在 `.learnings/ERRORS.md`、`LEARNINGS.md`（.gitignore 排除但本机存在）。与该结论冲突的"常识修复"一律先查证再动手。
 - 注释、文档、提交信息用中文；提交格式 = 中文约定式提交 + emoji（见 git log）。
-- `.workflow/`（含运行态 `wf.db`）与 `.learnings/` 不入库；产物 md、overrides 约定见 README。
+- `.workflow/`（含运行态 `wf.db`）不入库；`.learnings/` 默认应入库随交付提交（wf intake 指引口径，F4），本仓库历史选择仍 ignore——两库策略各自定，产物 md、overrides 约定见 README。
 - 长 ID 编排纪律（晋升自 LRN-20261112-003，M16-r48 B 层确证）：LLM 编排勿让模型凭记忆复述长不透明 ID——给别名或省略新建、服务端就地自愈改写截断前缀、任何模型可见文本绝不回显完整 ID（回显=转录燃料，抗 compaction 注入点使其常在场自我强化）；DB 审计记录不算回显。
+- 引擎自改并发护栏 v2（selfmod-concurrency-guard，双任务+implant 卡死日志实证）：wf:intake 检测任务目录=插件仓库根（lib.ts isSelfModDir，fail-open）→ **跨库扫描**其它活动任务（state.ts scanActiveTasks：PROJECT_DBS 内存 ∪ 持久清单 `~/.local/share/opencode/wf-projects.jsonl`，逐库查 is_active=1；v1 进程注册表因热载清零=静默失明且休眠任务不可见，已退役）→ ⚠️ 告警按 updatedAt 分级（活跃/休眠≥N 天+处置出口 done/reset）进 intake 输出 + st.selfMod 记账驱动 building 纪律行（entry 通道）。builder/纪律文案对 `server/*` 入口文件禁分步连续 edit（中间态被同进程其它项目会话真实执行，notification×phase-a 实证：他项目 wf.db 被静默 ALTER）。测试隔离：`WF_PROJECTS_FILE` 显式设置=扫描只读该文件、注册不落文件（bunfig preload 全局钉临时路径）。已知边界：另一宿主进程不受本进程热载影响=不覆盖；daily FAIL 修订唯一路径 wf:plan（FLOWS_DAILY review→review 边已移除）；full 模式该边保留（在途兼容）。
+- edit 防撞纪律（两任务 4 次 edit 撞车实证）：`sed`/脚本批量重写文件后，必须重新 read 再 edit（old 锚点已失效=撞车主因之一）；`.workflow/**` 产物 md 修订只用 wf_write_artifact patch 或原生 edit 前先 read 原文，禁止凭记忆构造 old 串。
 - 拒绝文案 ❌ 前缀不变量（notification-brief-display T05）：新增拒绝/halt/错误文案**必须**以 lib.ts `REJECT_PREFIX`（"❌"）开头——OS 通知 `level==="warn"` 判定（levelFor R1）与 brief 分派（briefFor）都依赖它；成功 guidance 恒以【开头，互斥由 tests/brief-level.test.js 守卫锁死（违反=静默漏弹通知）。零回显：redactIds 替换 token=`〔已隐去〕`（shared/redact.ts，G-1——token 改动必含 ses_ 子串则 brief `!includes("ses_")` 不变量断言必红）。已知降噪边界：full 模式 FAIL→wf:plan 修订轮为 info（wf:fix 才 warn，plan §3.3）。

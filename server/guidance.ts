@@ -12,13 +12,19 @@ import { LIMITS, isDaily, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFo
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
 // done-git-delivery-confirm T01：done 交付确认指令——仅 st.doneGit.isGit 时渲染（无记账=输出字节级不变，
 // 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
+// F4（用户报告竞态实证：并行 learner 在提交后继续写 .learnings/ → 提交后工作区复脏）：git 项目流程
+// 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前，
+// 提交范围含 .learnings/ 随总结入库；确认批准后不得再有新的经验写入。
 function doneGitLine(st: WfState): string | null {
   if (!st.doneGit?.isGit) return null;
   const opts = st.doneGit.hasRemote
     ? "选项标签固定：提交并推送/仅提交/跳过"
     : "未配置 remote——选项标签固定：仅提交/跳过（隐藏推送）";
-  return `📦 交付确认（git）：检测到 git 环境。汇报前必须先用 question 工具询问用户是否提交代码（${opts}）；` +
-    "未经用户批准不得 commit/push；批准后先跑项目门禁（如 bun run check）通过才提交，只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
+  return `📦 交付确认（git）：检测到 git 环境。流程顺序固定「总结 → 提交/不提交 → 完成」：审计汇报与经验沉淀全部落盘后` +
+    `（非 S 级须等 wf/learner 完成回执，S 级须先自写 lessons），才用 question 工具询问用户是否提交代码（${opts}）；` +
+    "未经用户批准不得 commit/push；批准后先跑项目门禁（如 bun run check）通过才提交，" +
+    "提交范围=本任务代码+.learnings/ 经验文件（经验默认入库，确认前落盘，提交后不得再写），" +
+    "只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
 }
 export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   // 易变区纪律（借鉴 my-opencode-deepseek-config 字节稳定前缀）：静态指引在前，
@@ -80,6 +86,13 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 // S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
 // M/L=planner 拆 T<nn> 功能点 + reviewer 独立五维验证 + builder 逐点 TDD + tester 独立核对。
 const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
+// ── selfmod-concurrency-guard A3：daily building 派发策略绑 size（双任务同版本取证：
+// M 分 2 派 vs L 一派到底=纯裁量漂移；收敛为 size 决定策略，例外须理由）──────────────
+const DISPATCH_L = `L 级：分批委派 wf/builder——按 plan 批次表/依赖序（每批 ≤4 个 T<nn>，续用同一 builder session），worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill 单树串行形态）。一派到底=例外须在回执说明理由。`;
+const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；多 builder 并行需用户同意+worktree。`;
+// selfmod-guard T01：引擎自改纪律行（st.selfMod 门控渲染——entry 通道抗 compaction；
+// 无记账=零渲染，存量 guidance 字节级不变）
+const SELFMOD_LINE = `引擎自改模式：server/ 下文件正被宿主按内容指纹热载——builder 禁分步连续 edit（中间态会被同进程其它项目的在途会话真实执行，双任务日志实证），全部编辑完成、自检通过后一次性核验；intake 告警出现的并发任务未经用户裁决不得开工——休眠任务先核实再处置（/wf:status 查归属，done 收尾或 /wf:reset 清账），唤醒后同样是干扰源。`;
 function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...limits };
   const s = st.slug || "(未定)";
@@ -89,7 +102,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
     case "intake": return [
       `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
       `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
-      `1) 与用户澄清需求（一次一问、多选优先，歧义收敛后再推进；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/（.learnings/ 默认入库随交付提交，仅项目选择不入库时才加它的 ignore）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
       S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
       `完成 → wf_command(name="wf:plan")`,
@@ -119,8 +132,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 当未验证线索逐条确认销项 + plan.md 修订 diff + 一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(S
-        ? `自验通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；wf:build 关卡校验确认记账）→ wf_command(name="wf:build")；不过 → 修订 plan 后再验；超限 → 停下问用户`
-        : `FAIL → wf_command(name="wf:plan") 带意见修订再 wf:review（plan 修订即作废确认记账）；PASS → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务）→ wf_command(name="wf:build")（关卡校验 plan-review 结论+确认记账）；超限 → 停下问用户`);
+        ? `自验通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；wf:build 关卡校验确认记账）→ wf_command(name="wf:build")；不过 → 唯一返修路径：wf_command(name="wf:plan") 亲自修订再 wf:review；超限 → 停下问用户`
+        : `FAIL → 唯一返修路径：wf_command(name="wf:plan") 带意见修订再 wf:review（review 直推复审边已移除；plan 修订即作废确认记账）；PASS → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务）→ wf_command(name="wf:build")（关卡校验 plan-review 结论+确认记账）；超限 → 停下问用户`);
       lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
       if (!S && (r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
       return lines.join("\n");
@@ -129,9 +142,11 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       const lines = [
         `【wf 工作流｜building·日常模式】slug=${s}`,
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
-          : `委派 wf/builder：按 T<nn> 功能点逐点 TDD（红测试从 plan 验收标准写，先红后绿），主树串行（多 builder 并行=例外，需用户同意+worktree）。`,
-        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`]),
+          : st.size === "L" ? DISPATCH_L : DISPATCH_M,
+        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
+        ...(st.selfMod ? [SELFMOD_LINE] : []),
       ];
       if ((r.test_fix ?? 0) > 0) lines.push(`返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
       if (!S) lines.push(...reuseLines(st, "wf/builder"));
@@ -147,10 +162,16 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
     ].join("\n");
     case "done": {
       const git = doneGitLine(st);
+      const serial = !!git; // F4：git 项目=总结→提交/不提交→完成 串行；无记账=旧文案字节级不变（残窗=检测 fail-open 的并行，接受）
       return [
         `【wf 工作流｜done·日常模式】slug=${s}`,
-        S ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`
-          : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+        S
+          ? (serial
+            ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，先自写 lessons 与 .learnings/ 落盘，再发起交付确认——顺序固定「总结→提交/不提交→完成」。`
+            : `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`)
+          : (serial
+            ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
+            : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`),
         ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
         budgetLine(st, ["lessons"]),
         ...(git ? [git] : []),
@@ -167,7 +188,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
   switch (phase) {
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
-      `1) 与用户澄清需求（一次一问、多选优先，歧义收敛后再推进；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/。`,
+      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/（.learnings/ 默认入库随交付提交，仅项目选择不入库时才加它的 ignore）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
       `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
       `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
@@ -255,7 +276,9 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       const git = doneGitLine(st);
       return [
         `【wf 工作流｜done】slug=${s}`,
-        `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+        git
+          ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
+          : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
         WRITE_CONTRACT,
         budgetLine(st, ["lessons"]),
         `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,

@@ -7,6 +7,7 @@
 
 **自行**产出报告到委派 prompt 指定的产物路径（一般 <project>/.workflow/<slug>/plan-review-r<N>.md，N 由 leader 给出；勿回传全文由 leader 代写；回执只带摘要+路径+结论）：小报告（≤2KB）直接 wf_write_artifact(kind=plan-review, content) 单次写；大报告分段——首段原生 write（首段即含结论行），后续段 edit 追加（每段≤2KB），失败先 read 尾部断点续写，**全部落盘后**才 wf_write_artifact(kind=plan-review)（不带 content=注册）记账。
 **首行必须 `**结论**: PASS|FAIL`**（日常模式 M/L 的 wf:build 关卡据此放行；FAIL=须修订后再验）。正文：分级路径（初检/升级+触发）+ 按严重度分级的问题与具体修订建议。
+**建议纪律**（双任务同版本取证：建议形态纯靠裁量，漂移大）：结构性修订建议（改名/拆分/移动/新增模块）必须给出 ≥2 备选方案+影响面清单+建议倾向，交 leader 裁决，勿单方案强推；每条建议提出前先做**自洽预演**——假想 plan 已按该建议修订，用本条 finding 的验收视角复查它是否与其余 findings、已冻结接口、plan 声明的计数口径矛盾（自相矛盾的建议=下一轮 FAIL 的种子）。
 **瘦身预算：≤8KB（M 级；S 级 ≤3KB，以委派 prompt 携带的预算为准，字节计）**——findings 用表格（编号/严重度/位置/问题/修订建议），只留要点，禁冗长散文（过长拖慢生成与 planner 修订阅读）。
 复审轮次（r≥2）修订报告用原生 edit 或 patch 模式只输出变更段（先 read 原文、old 逐字摘录，严格未命中自动模糊回退），勿全量重写；原生 edit 改过报告则须 wf_write_artifact(kind=plan-review) 注册（轮次文件名以当前轮次为准）。
 只读审查，不改业务代码。完整模式含可测性评审（与 tester feasibility 并行）；日常模式聚焦方案五维验证。

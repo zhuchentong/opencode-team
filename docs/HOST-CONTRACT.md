@@ -14,7 +14,7 @@
 - **命令返回值**：`execute(): Promise<void>` 契约返回值被丢弃；抛错的 message 会以 error toast 显示（语义错误勿用）。`tui.toast.show` 服务端事件在 2.2.6 已无发布者
 - **prompt/synthetic**：`resume:false` 源码级不唤醒模型（durable admit 进 inbox）；忙会话需先 `session.wait` 否则 steer 注入诱发多走一步
 - **RPC**：methods 调用必须带 `{location:{directory}}`；events 五硬条件（id/事件名逐字一致、events 声明、对象 schema、emit await+catch、live-only 订阅）——事件按 `location.directory` 过滤（多实例并存全 folder 广播），错过不重放故配轮询对账
-- **加载与缓存**：宿主对 TUI 插件模块**路径级永久缓存**（唯一解完全重启）；server 侧按内容指纹热载；正被加载的入口文件禁止分步 edit（热重载读中间态）；`{package,options}` 不传达 TUI
+- **加载与缓存**：宿主对 TUI 插件模块**路径级永久缓存**（唯一解完全重启）；server 侧按内容指纹热载；正被加载的入口文件禁止分步 edit（热重载读中间态）；`{package,options}` 不传达 TUI。**干扰面实证（selfmod-concurrency-guard，notification×phase-a 双任务日志）**：热载影响=同插件 server 进程所服务的**全部项目会话**——notification 在插件仓库分步 edit 期间，phase-a 在 dso-app 的 `wf:test`/`wf:done` 落库即被新代码静默 ALTER 其 `wf.db`（加列恰为向后兼容未炸）；另一宿主进程不受影响。护栏=跨库扫描告警（v2：PROJECT_DBS 内存 ∪ 持久项目清单 `~/.local/share/opencode/wf-projects.jsonl`，逐库查 is_active=1、updatedAt 活跃/休眠分级）。**v1 进程内存注册表盲区实证（I-1/implant）**：内存表随热载清零=护栏恰在最需要时静默失明，且休眠未收尾任务（用户多日 resume 习惯）不在内存——持久清单+跨库扫描为正解；`WF_PROJECTS_FILE` 显式设置=扫描只读该文件（测试隔离，bunfig preload 全局钉临时路径防污染真实清单）
 - **agent 文件热载（M16-r31 P0 真机实证）**：宿主全局 `agents/*.md` 的创建/编辑/删除**免重启即时生效**——经 `GET /api/agent` 读 `Agent.Info.system` 验证（scratch 探针 create→visible / edit→hot-reload / delete→gone 全过）。`Agent.Info.system`（string）= 角色提示词字段，frontmatter 映射 `description/mode/permissions`。此为角色内容插件托管（B1 文件同步）的地基；`ctx.agent.transform` 的 editor 无 `add`（文档），故不走 transform 而走文件同步
 - **keymap**：`run` 返回 Promise 即算已处理（同步透传必须返回 `false`）；冒号命令名在宿主 slash 派发静默失效（主轨因此选 return 拦截形态）
 - **杂项**：插件 id 含 `:` 与 storage 文件命名冲突；`@opencode/schema` 运行时版本错位会崩（依赖全 external 共享宿主实例）；宿主对 node_modules 不跑 TSX transform（发布前预编译）

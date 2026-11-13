@@ -9,16 +9,17 @@
 // deps 来源：load/save/resolveProjectDir（state）、debugDirFor/probeOnce（observe）、
 // LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）。
 import * as fs from "node:fs";
+import { join } from "node:path";
 import {
   VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
   evaluateTransition, promptText, diagnoseReport, pingReport,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
-  FLOW_CMD_NAMES, levelFor, briefFallback, type ReportLevel,
+  FLOW_CMD_NAMES, levelFor, briefFallback, isSelfModDir, selfModWarnLine, type ReportLevel,
   type WfState,
 } from "./lib.ts";
 import { guidance, entryValue, briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
 import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
-import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, type Store } from "./state.ts";
+import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, scanActiveTasks, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
 import {
@@ -43,7 +44,7 @@ export const FLOW_DESCRIPTIONS: Record<string, string> = {
   "wf:review-build": "进入 build_review：wf/builder-reviewer，≤3 轮",
   "wf:test": "进入 testing：wf/tester verify → test-report.md（PASS|FAIL）",
   "wf:fix": "进入 fixing：同 lane 回 builder / 跨 lane 用 fixer，≤3 轮",
-  "wf:done": "进入 done：审计汇报 + 并行 learner 复盘",
+  "wf:done": "进入 done：审计汇报→经验沉淀回执→交付确认（git 项目串行：总结→提交/不提交→完成）",
 };
 
 // M16-r39 T06：deps 类型化（CommandDeps 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）
@@ -64,6 +65,22 @@ export interface CommandDeps {
   rpcErr?: string | null;
   runner?: { run: ((name: string, a: any) => Promise<unknown>) | null };
 }
+
+// selfmod-guard T01：插件仓库根=本模块上级目录（bun 直跑 TS，import.meta.dirname 实证可用，roles.ts 同源）；
+// 解析失败 → ""，isSelfModDir 恒 false（fail-open：判不出=不告警，宁缺勿滥）。
+const PLUGIN_REPO_ROOT = (() => {
+  try { return fs.realpathSync(join(import.meta.dirname, "..")); } catch { return ""; }
+})();
+// 生效探测根：options.selfModRoot 覆盖（测试/特殊安装布局）> 模块仓库根。运行时读 ctx.options
+// （与 leaderOnly 同模式——setup 期捕获会丢失测试与热载后的选项变更）。
+const selfModRootFor = (ctx: any): string => {
+  const o = ctx?.options?.selfModRoot;
+  if (typeof o === "string" && o) { try { return fs.realpathSync(o); } catch { return o; } }
+  return PLUGIN_REPO_ROOT;
+};
+// 任务目录归一（realpath 失败回退原值——软链/inode 差异不得使自改漏判为假阴性的反例已由
+// isSelfModDir 的 fail-open 语义兜住：判不出=不告警）
+const realDir = (d: unknown): string => { try { return fs.realpathSync(String(d ?? "")); } catch { return String(d ?? ""); } };
 
 // M16-r28 lint 清理：以下三个纯函数不捕获 registerCommands 闭包变量，上提模块级（function-scoping）
 // P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
@@ -137,6 +154,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
     let lastLoaded: WfState | null = null; // 原始 loaded（可 null）——终败 entry 回滚基准
     let from: string | null = null;
     let preArtifacts: string[] = [];
+    let selfModNote: string | null = null; // selfmod-guard T01：告警行（save 成功后追加输出）
     const res = await withStateRetry({
       load: async () => {
         const loaded = await load(sessionID);
@@ -199,6 +217,19 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
           } catch { /* fail-open */ }
         }
         logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
+        // selfmod-guard T01（F2 v2）：intake 引擎自改检测（fail-open=判不出按非自改）——任务目录=插件仓库根
+        // → st.selfMod 记账（building guidance 纪律行走 entry 通道，抗 compaction）+ 跨库扫描其它活动任务
+        // （scanActiveTasks：内存∪持久清单，休眠任务亦现形——v1 内存注册表盲区实证）。
+        // 告警行在 transition 末尾 save 成功后追加，非拒绝=⚠️ 前缀。
+        if (cmd === "wf:intake") {
+          try {
+            const dir = realDir(st.directory ?? (await resolveProjectDir(st, sessionID)));
+            if (isSelfModDir(dir, selfModRootFor(ctx))) {
+              st.selfMod = true;
+              selfModNote = selfModWarnLine(scanActiveTasks(sessionID));
+            } else delete st.selfMod;
+          } catch { /* fail-open */ }
+        }
         await inject(st);
         return null;
       },
@@ -218,6 +249,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
     if (cmd === "wf:intake" && from && from !== "done" && preArtifacts.length > 0) {
       out += `\n⚠️ 强制重置已清空 ${preArtifacts.length} 项产物记账（${preArtifacts.join(", ")}）——磁盘文件仍在 .workflow/${st.prev?.slug ?? "旧slug"}/，新任务账实不符；如需沿用请先对账（/wf:diagnose）。`;
     }
+    // selfmod-guard T01：并发告警（仅检测到其它活动任务时非 null；⚠️ 行不带 ❌=info 轨，裁决归用户）
+    if (cmd === "wf:intake" && selfModNote) out += `\n${selfModNote}`;
     return out;
   };
 
@@ -350,13 +383,17 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         if (ctx?.options?.leaderOnly !== false) {
           const agent = await resolveAgent(a, ctx.session.get);
           await probeOnce(a?.sessionID, "cmd-agent-probe", { cmd: def.name, aKeys: Object.keys(a ?? {}), agent });
-          const rej = leaderOnlyReject(agent, def.name);
+          // F1（implant×build 卡死 1.5 天实证）：load 上提至拒绝判定前——会话持任务时拒绝文案给
+          // 「切回 workflow 重跑 / reset 清账」两个准确出口（旧文案误导开新会话接管）。
+          // load fail→null→旧文案分支（fail-open）；审计复用同一快照（best-effort 语义不变）。
+          let rejSt: WfState | null = null;
+          try { rejSt = await load(String(a?.sessionID ?? "")); } catch { rejSt = null; }
+          const rej = leaderOnlyReject(agent, def.name, rejSt);
           if (rej) {
             try {
-              const st = await load(String(a?.sessionID ?? ""));
-              if (st && (st.slug || st.phase)) {
-                logAdd(st, { at: new Date().toISOString(), cmd: def.name, from: st.phase, to: st.phase, ok: false, note: `agent-rejected:${agent || "(unknown)"}` });
-                await save(st);
+              if (rejSt && (rejSt.slug || rejSt.phase)) {
+                logAdd(rejSt, { at: new Date().toISOString(), cmd: def.name, from: rejSt.phase, to: rejSt.phase, ok: false, note: `agent-rejected:${agent || "(unknown)"}` });
+                await save(rejSt);
               }
             } catch { /* 审计 best-effort，不影响拒绝 */ }
             return rej;
