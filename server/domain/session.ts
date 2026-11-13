@@ -1,6 +1,6 @@
 // wf-workflow — domain/session：角色→子会话自动登记与 ID 零转录续接纯函数（自 lib.ts 逐字节平移）。
 // 长 ID 编排纪律：任何模型可见文本绝不回显完整 ID（回显=转录燃料）。
-import { isLeader, type WfState } from "./types.ts";
+import { isLeader, type RoleSessions, type WfState } from "./types.ts";
 
 // ── M16-r40：角色→子会话自动登记（纯函数可测）────────────────────────
 // 仅 wf/* 非 leader 子会话、ses_ 合法形状才登记；同角色 sessionID 未变化返回 false
@@ -11,8 +11,8 @@ export function trackRoleSession(st: WfState, agent: unknown, sessionID: unknown
   const sid = String(sessionID ?? "");
   if (!a.startsWith("wf/") || isLeader(a)) return false;
   if (!/^ses_[A-Za-z0-9]+$/.test(sid)) return false;
-  if (st.roleSessions?.[a]?.sessionID === sid) return false;
-  (st.roleSessions ??= {})[a] = { sessionID: sid, at: new Date().toISOString() };
+  if (st.reuse?.roleSessions?.[a]?.sessionID === sid) return false; // R3 T3.1 子步 C：reuse 子对象
+  ((st.reuse ??= {}).roleSessions ??= {})[a] = { sessionID: sid, at: new Date().toISOString() };
   return true;
 }
 
@@ -26,7 +26,7 @@ export const SID_ALIAS_USAGE = `sessionID="auto"（无 lane 登记时即续用�
 
 export interface SidAliasInput {
   role?: string; // 目标角色（auto 只解析该角色自身登记，杜绝跨角色误续）
-  roleSessions?: WfState["roleSessions"];
+  roleSessions?: RoleSessions; // R3 T3.1 子步 C：登记表形状单点派生
   lanes?: WfState["lanes"];
 }
 export type SidAliasResult =

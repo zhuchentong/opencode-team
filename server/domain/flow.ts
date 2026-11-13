@@ -203,7 +203,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       st.rounds = { plan_review: 0, build_review: 0, test_fix: 0 };
       st.artifacts = {};
       st.lanes = {};
-      st.roleSessions = {}; // M16-r40：新任务不得复用旧任务的子会话
+      st.reuse = { ...st.reuse, roleSessions: {} }; // M16-r40：新任务不得复用旧任务的子会话（R3 T3.1 子步 C）
       // R3 T3.1 子步 B：verdicts 家族整组重置（子对象内字段=组全集，覆写空组即逐字等价旧 5 行 delete）
       st.verdicts = {};
       delete st.doneGit; // done-git T01：新任务不得残留旧交付提示

@@ -65,14 +65,17 @@ export interface WfState {
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
   lanes?: Record<string, { sessionID?: string; worktree?: string | null; at?: string }>; // M16-r39 T06：worktree 可 null（lane set 无 worktree 时写 null，形状同源）
+  // R3 T3.1 子步 C：reuse 分组——roleSessions/tierBase 迁入（读兼容：normalizeState 搬平铺字段）
   // M16-r40：角色→最新子会话自动登记（agent→{sessionID,at}）。子代理调 wf_write_artifact /
   //   edit 时插件自动捕获其 sessionID；guidance 重委派点按登记存在性渲染续用指引（指路别名/省略新建，
   //   不回显 ID——回显即转录燃料，fix-sid-truncation-echo-loop T02），守卫对截断前缀就地自愈改写（T01）——
   //   修「leader 凭记忆复述长随机 ses_ ID 被截断→重试→冷启动」。仅服务默认单会话形态；多 builder 并行走 lanes。
-  roleSessions?: Record<string, { sessionID: string; at: string }>;
-  // M16-r43：档位跟随上次记录的会话基座（Session.Info.model 的 providerID/id）——切模型检测依据，
+  // M16-r43：tierBase 档位跟随上次记录的会话基座（Session.Info.model 的 providerID/id）——切模型检测依据，
   //   变化时审计 tier-model-switch 并清空 roleSessions（旧子会话=旧模型，防混模型续用）。
-  tierBase?: { providerID: string; id: string; variant?: string; at: string };
+  reuse?: {
+    roleSessions?: Record<string, { sessionID: string; at: string }>;
+    tierBase?: { providerID: string; id: string; variant?: string; at: string };
+  };
   artifacts?: Record<string, { at?: string; bytes?: number }>;
   log?: FlowLogEntry[];
   // M16-r39 T01：log 单调序号（logAdd 递增）——save 按序号差增量追 events，
@@ -112,6 +115,13 @@ export function normalizeState(st: WfState): WfState {
     if (s[k] !== undefined) { timing[k] = s[k]; delete s[k]; }
   }
   if (hadTiming || Object.keys(timing).length > 0) s.timing = timing;
+  // reuse（子步 C）
+  const hadReuse = s.reuse != null;
+  const reuse = { ...s.reuse };
+  for (const k of ["roleSessions", "tierBase"] as const) {
+    if (s[k] !== undefined) { reuse[k] = s[k]; delete s[k]; }
+  }
+  if (hadReuse || Object.keys(reuse).length > 0) s.reuse = reuse;
   // verdicts（子步 B）
   const hadVerdicts = s.verdicts != null;
   const verdicts = { ...s.verdicts };
@@ -121,6 +131,9 @@ export function normalizeState(st: WfState): WfState {
   if (hadVerdicts || Object.keys(verdicts).length > 0) s.verdicts = verdicts;
   return st;
 }
+
+// R3 T3.1 子步 C：登记表形状单点（session.ts SidAliasInput 等派生用）
+export type RoleSessions = NonNullable<WfState["reuse"]>["roleSessions"];
 
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
 export interface FlowDef {

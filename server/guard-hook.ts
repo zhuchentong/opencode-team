@@ -107,7 +107,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         // ── M16-r45 A：别名续接——"auto"/"@Tnn"/"@wf/xx" 服务端解析改写，零转录（消灭复述失真源）──
         // 解析失败 loud-fail（勿静默新建：leader 的续用意图会丢）；改写入参 args 引用宿主将执行的对象。
         if (passed === SID_ALIAS_AUTO || passed.startsWith("@")) {
-          const res = resolveSidAlias(passed, { role: target, roleSessions: st.roleSessions, lanes: st.lanes });
+          const res = resolveSidAlias(passed, { role: target, roleSessions: st.reuse?.roleSessions, lanes: st.lanes }); // R3 T3.1 子步 C
           if (!res.ok) {
             logAdd(st, { at: new Date().toISOString(), cmd: "session:alias", tool: toolName, detail: `${target}: ${passed} ✗ ${res.reason}`, from: st.phase, to: st.phase, ok: false, note: "alias-rejected" });
             try { await save(st); } catch (e) { swallow(e, "guard-hook:alias-reject-save-fail"); }
@@ -136,7 +136,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           return;
         }
 
-        const tracked = st.roleSessions?.[target]?.sessionID;
+        const tracked = st.reuse?.roleSessions?.[target]?.sessionID;
         if (!tracked) return; // 该角色无登记，不干预
         if (passed === tracked) return; // ID 正确，放行
         const shapeOk = /^ses_[A-Za-z0-9]+$/.test(passed);

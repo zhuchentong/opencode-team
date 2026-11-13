@@ -83,7 +83,7 @@ test("M16-r47 register：原生落盘 plan-review → 注册记账 verdict/artif
   assert.equal(st.artifacts["plan-review-r1.md"].bytes, fs.statSync(fileOf("register-review", "plan-review-r1.md")).size);
   const last = st.log.filter((e) => e.cmd === "tool:wf_write_artifact").at(-1);
   assert.equal(String(last.note), "plan-review-r1.md mode=register", "审计打 mode=register");
-  assert.equal(st.roleSessions?.["wf/planner-reviewer"]?.sessionID, sid, "roleSessions 登记与 content 模式同链路");
+  assert.equal(st.reuse?.roleSessions?.["wf/planner-reviewer"]?.sessionID, sid, "roleSessions 登记与 content 模式同链路"); // R3 T3.1 子步 C
   dispose?.();
 });
 

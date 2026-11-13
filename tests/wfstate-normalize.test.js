@@ -105,3 +105,19 @@ test("normalize A+B 混合：timing 与 verdicts 同时搬迁（旧最全平铺�
   });
   assert.equal(Object.keys(out).filter((k) => Object.keys({ planReviewVerdict: 1, testReportVerdict: 1, testPlanWritten: 1, planConfirmedAt: 1, gateStatus: 1, startedAt: 1, phaseEnteredAt: 1, phaseDurations: 1, finishedAt: 1 }).includes(k)).length, 0, "顶层无任何旧平铺键残留");
 });
+
+// ── 子步 C：reuse 家族（roleSessions/tierBase 同名迁入）──────────────────────
+test("normalize reuse：旧平铺 roleSessions/tierBase 搬入子对象（同名）；幂等", () => {
+  const st = {
+    sessionID: "ses_r", slug: "t",
+    roleSessions: { "wf/planner": { sessionID: "ses_p1", at: "t" } },
+    tierBase: { providerID: "prov", id: "m1", at: "t" },
+  };
+  const out = normalizeState(st);
+  assert.deepEqual(out.reuse, {
+    roleSessions: { "wf/planner": { sessionID: "ses_p1", at: "t" } },
+    tierBase: { providerID: "prov", id: "m1", at: "t" },
+  });
+  assert.ok(!("roleSessions" in out) && !("tierBase" in out), "顶层已 delete");
+  assert.equal(JSON.stringify(out), JSON.stringify(normalizeState(out)), "幂等");
+});

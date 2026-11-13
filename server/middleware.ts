@@ -78,12 +78,12 @@ export function createCommandGuard(deps: GuardDeps) {
     const at = new Date().toISOString();
     const notes: string[] = [];
     // 切模型检测：基座变化 → 审计 + 清空 roleSessions（仅首次登记 tier-init，不清会话）
-    const prev = st.tierBase;
+    const prev = st.reuse?.tierBase; // R3 T3.1 子步 C
     if (!prev || prev.providerID !== ref.providerID || prev.id !== ref.id) {
-      st.tierBase = { providerID: ref.providerID, id: ref.id, variant: ref.variant, at };
+      st.reuse = { ...st.reuse, tierBase: { providerID: ref.providerID, id: ref.id, variant: ref.variant, at } };
       const baseKey = `${ref.providerID}/${ref.id}`;
       if (prev) {
-        st.roleSessions = {};
+        st.reuse = { ...st.reuse, roleSessions: {} };
         notes.push(`🧠 档位跟随：基座模型切换为 ${baseKey}，流程角色项目级档位已重写；旧子会话为旧模型（${prev.providerID}/${prev.id}），重委派一律新建——勿凭记忆续接旧 sessionID。`);
       }
       notes.push(`__AUDIT__tier-model-switch:${baseKey}${prev ? `（原 ${prev.providerID}/${prev.id}）` : ""}`);

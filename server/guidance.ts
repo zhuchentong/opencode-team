@@ -85,7 +85,7 @@ function leanLine(st: WfState): string | null {
 //   现仅以登记做存在性判断：有登记即指路别名/省略新建（sid 不进渲染文本）；无登记→不渲染（首次委派自然新建）。
 //   仅续用已完成的子会话（防静默分叉）；续用失败立即新建，勿反复重试。
 function reuseLine(st: WfState, agent: string): string | null {
-  const sid = st.roleSessions?.[agent]?.sessionID;
+  const sid = st.reuse?.roleSessions?.[agent]?.sessionID; // R3 T3.1 子步 C
   if (!sid) return null; // 无登记→不渲染；sid 仅作存在性检查，不进渲染文本（防回显燃料）
   return `续用 ${agent} 子会话：优先 subagent 传 ${SID_ALIAS_USAGE}；不确定时省略 sessionID（新建，天然免疫截断）；绝不逐字粘贴长 ID（仅续用已完成的子会话；续用失败立即新建，勿反复重试）。`;
 }

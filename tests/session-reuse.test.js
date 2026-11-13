@@ -38,7 +38,8 @@ const stOf = (sid) => {
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
   finally { try { d.close(); } catch { } }
 };
-const blank = (over = {}) => ({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
+import { withVerdicts } from "./helpers/state-fixture.js";
+const blank = (over = {}) => withVerdicts({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over }); // R3 T3.1：平铺键→子对象
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(`${DIR}/src`, { recursive: true });
 
@@ -46,15 +47,15 @@ fs.mkdirSync(`${DIR}/src`, { recursive: true });
 test("trackRoleSession：wf/* 子会话登记；同 ID 去重；换 ID 更新", () => {
   const st = blank();
   assert.equal(trackRoleSession(st, "wf/planner", "ses_aaa111"), true);
-  assert.equal(st.roleSessions["wf/planner"].sessionID, "ses_aaa111");
-  assert.ok(typeof st.roleSessions["wf/planner"].at === "string");
+  assert.equal(st.reuse.roleSessions["wf/planner"].sessionID, "ses_aaa111"); // R3 T3.1 子步 C：读点改 reuse
+  assert.ok(typeof st.reuse.roleSessions["wf/planner"].at === "string");
   assert.equal(trackRoleSession(st, "wf/planner", "ses_aaa111"), false, "同 sessionID 不重复登记（免 save 抖动）");
   assert.equal(trackRoleSession(st, "wf/planner", "ses_bbb222"), true, "同角色新会话 → 更新");
-  assert.equal(st.roleSessions["wf/planner"].sessionID, "ses_bbb222");
+  assert.equal(st.reuse.roleSessions["wf/planner"].sessionID, "ses_bbb222");
   // 多角色并存
   assert.equal(trackRoleSession(st, "wf/builder", "ses_ccc333"), true);
-  assert.equal(st.roleSessions["wf/builder"].sessionID, "ses_ccc333");
-  assert.equal(st.roleSessions["wf/planner"].sessionID, "ses_bbb222", "角色互不覆盖");
+  assert.equal(st.reuse.roleSessions["wf/builder"].sessionID, "ses_ccc333");
+  assert.equal(st.reuse.roleSessions["wf/planner"].sessionID, "ses_bbb222", "角色互不覆盖");
 });
 
 test("trackRoleSession：leader/普通 agent/非法形状拒绝", () => {
@@ -68,13 +69,13 @@ test("trackRoleSession：leader/普通 agent/非法形状拒绝", () => {
   assert.equal(trackRoleSession(st, "wf/planner", "bogus_id"), false, "非 ses_ 前缀不登记");
   assert.equal(trackRoleSession(st, "wf/planner", ""), false);
   assert.equal(trackRoleSession(st, "wf/planner", null), false);
-  assert.equal(st.roleSessions, undefined, "全部拒绝 → 不建字段");
+  assert.equal(st.reuse?.roleSessions, undefined, "全部拒绝 → 不建字段");
 });
 
 test("intake 重置清 roleSessions（新任务不得复用旧任务子会话）", () => {
   const st = blank({ phase: "done", slug: "old", roleSessions: { "wf/planner": { sessionID: "ses_old1", at: "t" } } });
   assert.ok(evaluateTransition("wf:intake", st, "new-task").ok);
-  assert.deepEqual(st.roleSessions, {}, "intake 重置清空角色会话登记");
+  assert.deepEqual(st.reuse.roleSessions, {}, "intake 重置清空角色会话登记"); // R3 T3.1 子步 C
 });
 
 // ── guidance：重委派点渲染续用指引（T02：零回显）─────────────────────
@@ -132,14 +133,14 @@ test("wf_write_artifact：wf/planner 子会话写 plan → 管辖状态自动登
   // 子会话（独立 sessionID）写 plan → 登记到 leader 管辖状态
   await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_plannerChild", agent: "wf/planner" });
   const st = stOf(leader);
-  assert.equal(st.roleSessions["wf/planner"].sessionID, "ses_plannerChild", "产物写入自动登记子会话");
+  assert.equal(st.reuse.roleSessions["wf/planner"].sessionID, "ses_plannerChild", "产物写入自动登记子会话");
   // 重委派点（回 planning 修订）guidance 渲染续用指引——零回显（T02）
   await cmd(m, "wf:review").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: FAIL\n问题" }, { sessionID: "ses_reviewerChild", agent: "wf/planner-reviewer" });
   const back = await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   assert.ok(!String(back).includes("ses_plannerChild"), "回 planning 的 guidance 不得回显登记 sid");
   assert.match(String(back), /sessionID="auto"/, "指路别名续用");
-  assert.equal(stOf(leader).roleSessions["wf/planner-reviewer"].sessionID, "ses_reviewerChild");
+  assert.equal(stOf(leader).reuse.roleSessions["wf/planner-reviewer"].sessionID, "ses_reviewerChild");
 });
 
 test("wf_write_artifact：leader 自写（wf/leader）不登记；同子会话重复写不改变登记", async () => {
@@ -148,11 +149,11 @@ test("wf_write_artifact：leader 自写（wf/leader）不登记；同子会话�
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[S] self" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# plan" }, { sessionID: leader, agent: "wf/leader" });
-  assert.equal(stOf(leader).roleSessions?.["wf/leader"], undefined, "leader 自写不登记");
+  assert.equal(stOf(leader).reuse?.roleSessions?.["wf/leader"], undefined, "leader 自写不登记");
   // 同一 planner 子会话重复写 → sessionID 不变
   await tool(m).execute({ kind: "plan", content: "# plan v2" }, { sessionID: "ses_p1", agent: "wf/planner" });
   await tool(m).execute({ kind: "plan", patch: [{ old: "v2", new: "v3" }] }, { sessionID: "ses_p1", agent: "wf/planner" });
-  assert.equal(stOf(leader).roleSessions["wf/planner"].sessionID, "ses_p1");
+  assert.equal(stOf(leader).reuse.roleSessions["wf/planner"].sessionID, "ses_p1");
 });
 
 // ── 集成：guard-hook 登记 builder/fixer（只改码不写产物）──────────────
@@ -169,10 +170,10 @@ test("guard-hook：wf/builder 子会话 edit（building 非阻断阶段）→ �
   await cmd(m, "wf:build").execute({ sessionID: leader, prompt: {} }); // → building（非阻断；M 级过验证关卡+确认关卡）
   // builder 子会话改业务代码：building 放行，且登记其 sessionID
   await m.hook()({ tool: "edit", sessionID: "ses_builderChild", agent: "wf/builder", input: { path: `${DIR}/src/a.ts` } }, {});
-  assert.equal(stOf(leader).roleSessions["wf/builder"].sessionID, "ses_builderChild", "builder edit 自动登记");
+  assert.equal(stOf(leader).reuse.roleSessions["wf/builder"].sessionID, "ses_builderChild", "builder edit 自动登记");
   // 非 wf agent（build）edit → 不登记
   await m.hook()({ tool: "edit", sessionID: "ses_buildAgent", agent: "build", input: { path: `${DIR}/src/b.ts` } }, {});
-  assert.equal(stOf(leader).roleSessions?.["build"], undefined, "普通 agent 不登记");
+  assert.equal(stOf(leader).reuse?.roleSessions?.["build"], undefined, "普通 agent 不登记");
   // 返工指引渲染续用指引（零回显，T02）
   await cmd(m, "wf:test").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "test-report", content: "**结论**: FAIL\n缺陷" }, { sessionID: "ses_testerChild", agent: "wf/tester" });
@@ -191,7 +192,7 @@ test("guard-hook：登记不干扰闸门——planning 阶段 wf/builder 越权 
     (e) => /硬关卡：阶段「planning」/.test(String(e.message)),
     "越权 edit 仍被闸门阻断（登记不得吞掉关卡异常）",
   );
-  assert.equal(stOf(leader).roleSessions["wf/builder"].sessionID, "ses_builderChild", "阻断前登记已落盘");
+  assert.equal(stOf(leader).reuse.roleSessions["wf/builder"].sessionID, "ses_builderChild", "阻断前登记已落盘");
 });
 
 // ── wf:status 取证 ──────────────────────────────────────────────────

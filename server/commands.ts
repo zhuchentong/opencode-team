@@ -199,7 +199,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
           `gates: testPlan=${st.verdicts?.testPlanWritten ? "✅" : "❌"}  testReport=${st.verdicts?.testReport ?? "-"}  planReview=${st.verdicts?.planReview ?? "-"}  planConfirm=${st.verdicts?.confirmedAt ? "✅" : "❌"}`, // R3 T3.1 子步 B
           `lanes: ${JSON.stringify(st.lanes ?? {})}`,
-          `roleSessions: ${JSON.stringify(st.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
+          `roleSessions: ${JSON.stringify(st.reuse?.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
           `下一步: ${nextFor(st, st.phase)}`,
           `最近流转:`,
@@ -285,13 +285,13 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           const raw = String(t[2] ?? "");
           if (!raw) return "❌ 用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径]";
           if (raw === SID_ALIAS_AUTO || raw.startsWith("@")) {
-            const res = resolveSidAlias(raw, { roleSessions: st0.roleSessions, lanes: st0.lanes });
+            const res = resolveSidAlias(raw, { roleSessions: st0.reuse?.roleSessions, lanes: st0.lanes });
             if (!res.ok) return `❌ 别名解析失败：${res.reason}${res.candidates?.length ? `（可用：${res.candidates.join(", ")}）` : ""}`;
             sid = res.sid;
             setNote = `｜别名 ${raw} → ${sid}`;
           } else {
             const known = [...new Set([
-              ...Object.values(st0.roleSessions ?? {}).map((v) => v?.sessionID).filter(Boolean),
+              ...Object.values(st0.reuse?.roleSessions ?? {}).map((v) => v?.sessionID).filter(Boolean),
               ...Object.values(st0.lanes ?? {}).map((v) => v?.sessionID).filter(Boolean),
             ] as string[])];
             const comp = completeSidPrefix(raw, known);
