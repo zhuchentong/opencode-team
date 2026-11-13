@@ -121,3 +121,25 @@ test("normalize reuse：旧平铺 roleSessions/tierBase 搬入子对象（同名
   assert.ok(!("roleSessions" in out) && !("tierBase" in out), "顶层已 delete");
   assert.equal(JSON.stringify(out), JSON.stringify(normalizeState(out)), "幂等");
 });
+
+// ── 子步 D：delivery 家族（doneGit/selfMod 同名迁入）─────────────────────────
+test("normalize delivery：旧平铺 doneGit/selfMod 搬入子对象（同名）；幂等；A+B+C+D 全混合收敛", () => {
+  const st = {
+    sessionID: "ses_d", slug: "t", phase: "done",
+    doneGit: { isGit: true, hasRemote: false },
+    selfMod: true,
+  };
+  const out = normalizeState(st);
+  assert.deepEqual(out.delivery, { doneGit: { isGit: true, hasRemote: false }, selfMod: true });
+  assert.ok(!("doneGit" in out) && !("selfMod" in out), "顶层已 delete");
+  assert.equal(JSON.stringify(out), JSON.stringify(normalizeState(out)), "幂等");
+  // 旧最全平铺快照一次收敛（timing+verdicts+reuse+delivery 四组并存）
+  const full = {
+    startedAt: "t0", phaseDurations: {}, planReviewVerdict: "PASS", planConfirmedAt: "t1",
+    roleSessions: { "wf/builder": { sessionID: "ses_b", at: "t" } },
+    tierBase: { providerID: "p", id: "m", at: "t" }, doneGit: { isGit: true, hasRemote: true }, selfMod: false,
+  };
+  const o2 = normalizeState(full);
+  assert.ok(o2.timing && o2.verdicts && o2.reuse && o2.delivery, "四组子对象齐备");
+  assert.ok(!("startedAt" in o2) && !("doneGit" in o2) && !("roleSessions" in o2) && !("planReviewVerdict" in o2), "顶层无平铺残留");
+});

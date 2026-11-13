@@ -206,8 +206,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       st.reuse = { ...st.reuse, roleSessions: {} }; // M16-r40：新任务不得复用旧任务的子会话（R3 T3.1 子步 C）
       // R3 T3.1 子步 B：verdicts 家族整组重置（子对象内字段=组全集，覆写空组即逐字等价旧 5 行 delete）
       st.verdicts = {};
-      delete st.doneGit; // done-git T01：新任务不得残留旧交付提示
-      delete st.selfMod; // selfmod-guard T01：自改记账按新任务目录重算
+      st.delivery = {}; // R3 T3.1 子步 D：delivery 整组重置（doneGit+selfMod=组全集，等价旧两行 delete）
       // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
       // R3 T3.1 子步 A：timing 整组重置（子对象内字段=组全集，整组覆写即逐字等价旧 4 行）
       st.timing = { startedAt: at, phaseEnteredAt: at, phaseDurations: {} };

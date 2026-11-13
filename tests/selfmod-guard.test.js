@@ -40,7 +40,8 @@ const stOf = (sid) => {
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
   finally { try { d.close(); } catch { } }
 };
-const blank = (over = {}) => ({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
+import { withVerdicts } from "./helpers/state-fixture.js";
+const blank = (over = {}) => withVerdicts({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over }); // R3 T3.1：平铺键→子对象
 // 第二项目库（模拟休眠/活跃的其它任务）：直接 createStore 建真库，清单行手工 append（env 模式=只读清单）
 const mkProj = async (dir) => {
   fs.rmSync(dir, { recursive: true, force: true });
@@ -131,7 +132,7 @@ test("A1 v2 intake 接线：自改命中 → st.selfMod 记账 + ⚠️ 分级�
   assert.match(out, /⚠️ 引擎自改护栏/, "intake 输出追加告警");
   assert.match(out, /dormant-task·testing/, "清单含休眠任务");
   assert.match(out, /休眠/, "分级措辞=休眠非活跃（时间账来自 updated_at 列）");
-  assert.equal(stOf("ses_sm").selfMod, true, "st.selfMod 持久化记账");
+  assert.equal(stOf("ses_sm").delivery?.selfMod, true, "st.selfMod 持久化记账"); // R3 T3.1 子步 D
 });
 
 test("A1 v2 intake 负例：清单空=零打扰仍记自改账；探测根不匹配=无告警无记账且清残留", async () => {
@@ -139,20 +140,20 @@ test("A1 v2 intake 负例：清单空=零打扰仍记自改账；探测根不匹
   await plugin.setup(m.ctx);
   const out = await cmd(m, "wf:intake").execute({ sessionID: "ses_e", prompt: { text: "[M] empty" } });
   assert.ok(!out.includes("引擎自改护栏"), "无其它任务=零告警打扰");
-  assert.equal(stOf("ses_e").selfMod, true, "自改命中仍记账");
+  assert.equal(stOf("ses_e").delivery?.selfMod, true, "自改命中仍记账");
   m.ctx.options.selfModRoot = "/tmp/not-matching-root";
   await cmd(m, "wf:intake").execute({ sessionID: "ses_e", prompt: { text: "! [M] normal" } });
-  assert.equal(stOf("ses_e").selfMod, undefined, "非自改 intake 清除残留记账");
+  assert.equal(stOf("ses_e").delivery?.selfMod, undefined, "非自改 intake 清除残留记账");
 });
 
 test("A1 intake 重置块清 selfMod（done→新任务重算）", () => {
   const st = blank({ phase: "done", slug: "old", selfMod: true });
   assert.ok(evaluateTransition("wf:intake", st, "new-task").ok);
-  assert.equal(st.selfMod, undefined, "新任务不得继承旧自改记账");
+  assert.equal(st.delivery?.selfMod, undefined, "新任务不得继承旧自改记账");
 });
 
 test("A1 building guidance 自改纪律行（st.selfMod 门控，非自改字节级不变；休眠处置指路）", () => {
-  const g = guidance("building", blank({ mode: "daily", size: "M", selfMod: true }));
+  const g = guidance("building", blank({ mode: "daily", size: "M", selfMod: true })); // 平铺键经 withVerdicts→delivery 翻译
   assert.match(g, /引擎自改模式/);
   assert.match(g, /禁.*连续 edit|禁分步连续 edit/, "入口文件编辑纪律进 entry 通道（抗 compaction）");
   assert.match(g, /休眠任务先核实/, "v2：休眠任务处置指路在纪律行");

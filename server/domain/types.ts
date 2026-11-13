@@ -21,7 +21,11 @@ export interface FlowLogEntry {
   tool?: string;
   detail?: string;
   at?: string;
-  [key: string]: unknown;
+  from?: string | null; // R3 T3.1 子步 D：原索引签名容忍的动态字段显式登记（承载 st.phase，可 null）
+  to?: string | null;   // 同上
+  rounds?: WfState["rounds"]; // 同上（轮次快照）
+  // R3 T3.1 子步 D：索引签名收尾——未知字段收进 _ext（消隐式 any 逃逸口）
+  _ext?: Record<string, unknown>;
 }
 export interface WfState {
   // M16-r39 T06：持久化/会话元数据字段类型化（原经索引签名 unknown 容错）
@@ -52,15 +56,18 @@ export interface WfState {
     // intake 重置块清除（跨任务不残留）。保持 R2 形状（id/ok/at）整体迁入。
     gateStatus?: { id: string; ok: boolean; at: string };
   };
+  // R3 T3.1 子步 D：delivery 分组——doneGit/selfMod 迁入（读兼容：normalizeState 搬平铺字段）。
   // done-git-delivery-confirm T01：wf:done 流转时检测项目 git 环境记账（commands.ts detectDoneGit，
   //   fail-open=异常不记账）；guidance/entry 据此条件渲染交付确认指令——leader 必须 question 询问
   //   用户「提交并推送/仅提交/跳过」（无 remote 隐藏推送），批准前不得 commit/push。新任务 intake 清除。
-  doneGit?: { isGit: boolean; hasRemote: boolean };
-  // selfmod-concurrency-guard T01（F2 v2）：引擎自改任务记账——intake 检测任务目录=插件仓库根
+  // selfmod-concurrency-guard T01（F2 v2）：selfMod 引擎自改任务记账——intake 检测任务目录=插件仓库根
   //   （isSelfModDir，commands.ts 接线，fail-open）时置位；驱动 building guidance 纪律行（entry 通道
   //   抗 compaction）与跨库扫描并发告警（scanActiveTasks：内存∪持久项目清单，休眠任务亦现形）。
   //   新任务 intake 重算（重置块清除），非自改 intake 亦清除残留。
-  selfMod?: boolean;
+  delivery?: {
+    doneGit?: { isGit: boolean; hasRemote: boolean };
+    selfMod?: boolean;
+  };
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
@@ -90,7 +97,8 @@ export interface WfState {
     phaseDurations?: Record<string, number>;  // 秒；key=FOLD 折叠后阶段名（多轮 revisit 累计）
     finishedAt?: string;                      // ISO：进入 done 时刻（总耗时冻结点）
   };
-  [key: string]: unknown;
+  // R3 T3.1 子步 D：索引签名收尾——未知/历史动态字段收进 _ext（消隐式 any 逃逸口）
+  _ext?: Record<string, unknown>;
 }
 
 // R3 T3.1（arch-r3-state-shape-migration）：旧平铺快照 → 新分组形状的归一（load 出口调用）。
@@ -122,6 +130,13 @@ export function normalizeState(st: WfState): WfState {
     if (s[k] !== undefined) { reuse[k] = s[k]; delete s[k]; }
   }
   if (hadReuse || Object.keys(reuse).length > 0) s.reuse = reuse;
+  // delivery（子步 D）
+  const hadDelivery = s.delivery != null;
+  const delivery = { ...s.delivery };
+  for (const k of ["doneGit", "selfMod"] as const) {
+    if (s[k] !== undefined) { delivery[k] = s[k]; delete s[k]; }
+  }
+  if (hadDelivery || Object.keys(delivery).length > 0) s.delivery = delivery;
   // verdicts（子步 B）
   const hadVerdicts = s.verdicts != null;
   const verdicts = { ...s.verdicts };

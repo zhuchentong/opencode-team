@@ -140,7 +140,7 @@ export function createTransition(deps: TransitionDeps) {
             if (dir) {
               const g = detectDoneGit(String(dir));
               // 非 git 项目不记账且清旧账（重复推 done 幂等）：state 零污染，done 行为与旧版逐字节一致
-              if (g.isGit) st.doneGit = g; else delete st.doneGit;
+              if (g.isGit) st.delivery = { ...st.delivery, doneGit: g }; else delete st.delivery?.doneGit; // R3 T3.1 子步 D
             }
           } catch (e) { swallow(e, "transition:done-git-detect-fail"); }
         }
@@ -153,9 +153,9 @@ export function createTransition(deps: TransitionDeps) {
           try {
             const dir = realDir(st.directory ?? (await resolveProjectDir(st, sessionID)));
             if (isSelfModDir(dir, selfModRootFor(host.options))) {
-              st.selfMod = true;
+              st.delivery = { ...st.delivery, selfMod: true }; // R3 T3.1 子步 D
               selfModNote = selfModWarnLine(scanActiveTasks(sessionID));
-            } else delete st.selfMod;
+            } else delete st.delivery?.selfMod;
           } catch (e) { swallow(e, "transition:selfmod-detect-fail"); }
         }
         await inject(st);

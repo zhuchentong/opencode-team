@@ -17,8 +17,8 @@ export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:int
 // 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前，
 // 提交范围含 .learnings/ 随总结入库；确认批准后不得再有新的经验写入。
 function doneGitLine(st: WfState): string | null {
-  if (!st.doneGit?.isGit) return null;
-  const opts = st.doneGit.hasRemote
+  if (!st.delivery?.doneGit?.isGit) return null; // R3 T3.1 子步 D
+  const opts = st.delivery.doneGit.hasRemote
     ? "选项标签固定：提交并推送/仅提交/跳过"
     : "未配置 remote——选项标签固定：仅提交/跳过（隐藏推送）";
   return `📦 交付确认（git）：检测到 git 环境。流程顺序固定「总结 → 提交/不提交 → 完成」：审计汇报与经验沉淀全部落盘后` +
@@ -160,7 +160,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
           `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
-        ...(st.selfMod ? [SELFMOD_LINE] : []),
+        ...(st.delivery?.selfMod ? [SELFMOD_LINE] : []), // R3 T3.1 子步 D
       ];
       if ((r.test_fix ?? 0) > 0) lines.push(`返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
       if (!S) lines.push(...reuseLines(st, "wf/builder"));

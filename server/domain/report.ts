@@ -28,7 +28,7 @@ export function levelFor(cmd: string, text: string, st: WfState | null): ReportL
   if (cmd === "wf:fix") return "warn"; // R2
   if ((cmd === "wf:test" && st?.verdicts?.testReport === "FAIL") ||
       (cmd === "wf:review" && st?.verdicts?.planReview === "FAIL")) return "warn"; // R3
-  if (cmd === "wf:done" && st?.phase === "done" && st?.doneGit?.isGit) return "warn"; // R4
+  if (cmd === "wf:done" && st?.phase === "done" && st?.delivery?.doneGit?.isGit) return "warn"; // R4
   return "info"; // R5
 }
 
