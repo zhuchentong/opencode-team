@@ -1,5 +1,7 @@
 # Agent 阶段耗时优化方案 v3（终版，待 R1/R2/R3 执行完后启动）
 
+> **状态：已被 v3.1 取代**（`PLAN-agent-phase-latency-optimization-v3.1.md`——病灶口径/行号/落点有修正，见其 §修正汇总与 §0 证据表）。本文档仅存档，勿按此执行。
+
 > 证据基线：arch-r1-host-split（daily/L，2026-11-13 全流程实测，终值数据见 §0）+
 > oh-my-opencode-slim 源码精读（借鉴机制与源码位置索引见文末备忘；如需回读原文：
 > `git clone --depth 1 https://github.com/alvinunreal/oh-my-opencode-slim`，本机历史副本在
