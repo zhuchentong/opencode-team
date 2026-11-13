@@ -245,12 +245,99 @@ function textEl(s, fg) {
 	insert(t, [sanitize(s)]);
 	return t;
 }
-function boxEl(children) {
+function boxEl(children, height) {
 	const b = createElement("box");
 	setProp(b, "width", "100%");
+	if (height) try {
+		setProp(b, "height", height);
+	} catch {}
 	setProp(b, "flexDirection", "column");
 	for (const c of children) if (c !== null && c !== void 0 && c !== false) insert(b, c);
 	return b;
+}
+var SyntaxStyleClass = null;
+var syntaxStyleImportErr = "";
+var syntaxStyleCache = /* @__PURE__ */ new Map();
+import("@opentui/core").then((mod) => {
+	SyntaxStyleClass = mod?.SyntaxStyle ?? null;
+}, (e) => {
+	syntaxStyleImportErr = errMsg(e);
+});
+var hasMdCatalogue = () => {
+	try {
+		return !!ot.getComponentCatalogue?.().markdown;
+	} catch {
+		return "unknown";
+	}
+};
+function mdEl(content, onError, onStyle) {
+	let m = null;
+	try {
+		m = createElement("markdown");
+		try {
+			setProp(m, "width", "100%");
+		} catch {}
+		if (SyntaxStyleClass) try {
+			const owner = m.ctx?.nativeScene;
+			let ss = syntaxStyleCache.get(owner);
+			if (ss === void 0) {
+				ss = SyntaxStyleClass.create(owner);
+				syntaxStyleCache.set(owner, ss);
+			}
+			setProp(m, "syntaxStyle", ss);
+			onStyle?.({ evt: "syntax-style-ok" });
+		} catch (e2) {
+			onStyle?.({
+				evt: "syntax-style-err",
+				err: errMsg(e2)
+			});
+		}
+		else if (syntaxStyleImportErr) onStyle?.({
+			evt: "syntax-style-import-err",
+			err: syntaxStyleImportErr
+		});
+		setProp(m, "content", content || " ");
+		return m;
+	} catch (e) {
+		if (m && typeof m.destroy === "function") try {
+			m.destroy();
+		} catch {}
+		onError?.({
+			err: errMsg(e),
+			hasMd: hasMdCatalogue()
+		});
+		return null;
+	}
+}
+var hasScrollCatalogue = () => {
+	try {
+		return !!ot.getComponentCatalogue?.().scrollbox;
+	} catch {
+		return "unknown";
+	}
+};
+function scrollEl(children, onError) {
+	let s = null;
+	try {
+		s = createElement("scrollbox");
+		try {
+			setProp(s, "width", "100%");
+		} catch {}
+		try {
+			setProp(s, "flexGrow", 1);
+		} catch {}
+		for (const c of children) if (c !== null && c !== void 0 && c !== false) insert(s, c);
+		return s;
+	} catch (e) {
+		if (s && typeof s.destroy === "function") try {
+			s.destroy();
+		} catch {}
+		onError?.({
+			err: errMsg(e),
+			hasScroll: hasScrollCatalogue()
+		});
+		return null;
+	}
 }
 var stageOf = (phase, order = STAGE_ORDER) => {
 	const p = FOLD[phase] ?? phase;
@@ -706,7 +793,7 @@ var tui_default = Plugin.define({
 							evt: "route-render",
 							keys: Object.keys(input ?? {}).slice(0, 8).join(",")
 						});
-						const container = boxEl([]);
+						const container = boxEl([], "100%");
 						insert(container, () => {
 							try {
 								const d = input?.data ?? input ?? {};
@@ -716,17 +803,44 @@ var tui_default = Plugin.define({
 									feedback: { error: "red" }
 								} };
 								const body = String(d.text ?? "").split("\n");
-								const rows = [
-									"── wf 产物预览 ────────────────",
-									`  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`,
-									`  ${str(d.path)}`,
-									" ",
-									...body.slice(0, 200).map((ln) => "  " + ln),
-									...body.length > 200 ? [`  …（共 ${body.length} 行，仅显示前 200 行）`] : [],
-									" ",
-									"  q 返回会话"
+								const head = `  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`;
+								const fixedHead = [
+									textEl("── wf 产物预览 ────────────────", T.text.muted),
+									textEl(head, T.text.muted),
+									textEl(`  ${str(d.path)}`, T.text.muted),
+									textEl(" ", T.text.muted)
 								];
-								return boxEl(rows.map((ln, i) => textEl(ln, i <= 2 || i === rows.length - 1 ? T.text.muted : T.text.base)));
+								const fixedFoot = [textEl(" ", T.text.muted), textEl("  q 返回会话", T.text.muted)];
+								const md = mdEl(body.slice(0, 200).join("\n"), (info) => probe({
+									evt: "md-el-err",
+									...info
+								}), (info) => probe(info));
+								if (md) {
+									probe({
+										evt: "route-render-md-ok",
+										lines: Math.min(body.length, 200)
+									});
+									const kids = [md, ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行；截断可能落在代码块/表格中段）`, T.text.muted)] : []];
+									const sc = scrollEl(kids, (info) => probe({
+										evt: "scroll-el-err",
+										...info
+									}));
+									return boxEl([
+										...fixedHead,
+										...sc ? [sc] : kids,
+										...fixedFoot
+									], "100%");
+								}
+								const kids = [...body.slice(0, 200).map((ln) => textEl("  " + ln, T.text.base)), ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行）`, T.text.muted)] : []];
+								const sc2 = scrollEl(kids, (info) => probe({
+									evt: "scroll-el-err",
+									...info
+								}));
+								return boxEl([
+									...fixedHead,
+									...sc2 ? [sc2] : kids,
+									...fixedFoot
+								], "100%");
 							} catch (e) {
 								probe({
 									evt: "route-render-ERR",

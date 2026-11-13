@@ -566,6 +566,211 @@ console.log(`插件 id: ${t.id}`);
   // 真机目检（宿主 sidebar scrollbox 内点击）留用户验收，probe evt: open-artifact/navigate-ok 取证。
 }
 
+// ── P15: artifact-md-preview—route render markdown 双轨（mdEl 优先 + 纯文本降级）──
+{
+  const MD_SAMPLE = [
+    "# 计划标题",
+    "",
+    "**结论**: PASS",
+    "",
+    "| 列A | 列B |",
+    "| --- | --- |",
+    "| 甲 | 乙 |",
+    "",
+    "- 项目一",
+    "",
+    "```ts",
+    "const x = 1;",
+    "```",
+  ].join("\n");
+  const mdSnapshot = { file: "plan.md", text: MD_SAMPLE, bytes: 200, path: "/proj/.workflow/todo/plan.md", truncated: false };
+
+  // 15a：markdown 主轨——同步构造特征：代码围栏独立成 code block（围栏字符消失）、表格变表格（分隔行消失、单元可见）。
+  // 标题 ## 与强调 ** 的 conceal/着色属异步高亮 pass，testRender 帧循环不提交（头注盲区）——不断言。
+  {
+    const { ctx, router } = makeCtx();
+    cleanups.push(t.setup(ctx as any)!);
+    const routeRender = router.registered[0].render;
+    try {
+      const st = await testRender(() => routeRender({ data: mdSnapshot }), { width: 60, height: 30 });
+      await st.flush();
+      const frame: string = st.captureCharFrame();
+      ok("P15a 主轨帧含代码块内容", frame.includes("const x = 1"), JSON.stringify(frame.slice(0, 160)));
+      ok("P15a 代码围栏 ``` 原样消失（同步成独立代码块）", !frame.includes("```"), JSON.stringify(frame.slice(0, 160)));
+      ok("P15a 表格渲染：单元文本可见且 | --- 分隔行消失", frame.includes("列A") && frame.includes("甲") && !frame.includes("| ---"), JSON.stringify(frame.slice(0, 220)));
+      await st.dispose();
+    } catch (e: any) { ok("P15a markdown 主轨渲染不崩", false, e?.message); }
+  }
+
+  // 15b：降级轨——catalogue 无 markdown（createElement 构造期同步 throw）→ 逐行纯文本，围栏与 ** 原样保留
+  {
+    const solidAny: any = await import("@opentui/solid");
+    const cat = typeof solidAny.getComponentCatalogue === "function" ? solidAny.getComponentCatalogue() : null;
+    ok("P15b getComponentCatalogue 含 markdown 键（本地 0.8.3 能力确认）", !!cat && !!cat.markdown);
+    if (cat && cat.markdown) {
+      const saved = cat.markdown;
+      delete cat.markdown;
+      try {
+        const { ctx, router } = makeCtx();
+        cleanups.push(t.setup(ctx as any)!);
+        const st = await testRender(() => router.registered[0].render({ data: mdSnapshot }), { width: 60, height: 30 });
+        await st.flush();
+        const frame: string = st.captureCharFrame();
+        ok("P15b 降级轨=逐行纯文本（``` 与 **结论** 原样保留）", frame.includes("```") && frame.includes("**结论**"), JSON.stringify(frame.slice(0, 200)));
+        await st.dispose();
+      } catch (e: any) { ok("P15b 降级轨不崩", false, e?.message); }
+      finally { cat.markdown = saved; }
+    }
+  }
+
+  // 15c：静态守卫——mdEl 接线点 + 双轨探针 + 不经 sanitize
+  {
+    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    ok("P15c createElement(\"markdown\") 构造点在位", src.includes('createElement("markdown")'));
+    ok("P15c md 双轨探针在位（route-render-md-ok/md-el-err/hasMd 归因）", src.includes("route-render-md-ok") && src.includes("md-el-err") && src.includes("hasMd"));
+    const mi = src.indexOf("function mdEl");
+    ok("P15c mdEl 定义在位", mi >= 0);
+    if (mi >= 0) {
+      const mb = src.slice(mi, src.indexOf("\n}", mi));
+      ok("P15c mdEl 不经 sanitize（换行语义保持）", !mb.includes("sanitize("));
+    }
+  }
+}
+
+// ── P16: artifact-preview-scroll—route 正文 scrollbox 包裹（双轨正文入滚动区，头尾固定）──
+{
+  const P16_MD = ["# 计划标题", "", "**结论**: PASS", "", "| 列A | 列B |", "| --- | --- |", "| 甲 | 乙 |", "", "```ts", "const x = 1;", "```"].join("\n");
+  const P16_LONG = ["# 长产物", "", ...Array.from({ length: 100 }, (_, i) => `正文第 ${i} 行，内容稍长以撑高内容区`)].join("\n");
+
+  // 树遍历工具：st.renderer.root → _childrenInLayoutOrder（运行时实证 2026-11-13：无公开 children getter）
+  const findNode = (n: any, namePart: string): any => {
+    if (!n) return null;
+    if ((n.constructor?.name ?? "").includes(namePart)) return n;
+    for (const c of n._childrenInLayoutOrder ?? []) { const r = findNode(c, namePart); if (r) return r; }
+    return null;
+  };
+
+  // 16a：主轨——scrollbox 在位，markdown 元素为其子；头部标题行仍在 scrollbox 之外（固定区）
+  {
+    const { ctx, router } = makeCtx();
+    cleanups.push(t.setup(ctx as any)!);
+    try {
+      const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: P16_MD, bytes: 200, path: "/p/plan.md", truncated: false } }), { width: 60, height: 30 });
+      await st.flush();
+      const root: any = (st as any).renderer?.root;
+      const sb = findNode(root, "ScrollBox");
+      ok("P16a 主轨树含 scrollbox", !!sb, sb ? "found" : "not found");
+      ok("P16a markdown 为 scrollbox 之子", !!sb && (sb._childrenInLayoutOrder ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Markdown")), sb ? String((sb._childrenInLayoutOrder ?? []).map((c: any) => c.constructor?.name)) : "no sb");
+      await st.dispose();
+    } catch (e: any) { ok("P16a 主轨滚动渲染不崩", false, e?.message); }
+  }
+
+  // 16b：长文档溢出——viewport 有界（≤终端高）且 content 高度 > viewport 高度（滚动语义成立的结构性前提）
+  {
+    const { ctx, router } = makeCtx();
+    cleanups.push(t.setup(ctx as any)!);
+    try {
+      const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: P16_LONG, bytes: 9000, path: "/p/plan.md", truncated: false } }), { width: 60, height: 30 });
+      await st.flush();
+      const sb = findNode((st as any).renderer?.root, "ScrollBox");
+      const vh = sb?.viewport?.height, ch = sb?.content?.height;
+      ok("P16b scrollbox viewport 有界", !!sb && vh > 0 && vh <= 30, `vh=${vh}`);
+      ok("P16b content 溢出 viewport（可滚动结构成立）", !!sb && ch > vh, `vh=${vh} ch=${ch}`);
+      await st.dispose();
+    } catch (e: any) { ok("P16b 长文档滚动渲染不崩", false, e?.message); }
+  }
+
+  // 16c：能力缺失降级——catalogue 无 scrollbox（旧宿主）→ scrollEl 构造期同步 throw → null → 正文直挂，不崩且 markdown 仍生效
+  {
+    const solidAny: any = await import("@opentui/solid");
+    const cat = typeof solidAny.getComponentCatalogue === "function" ? solidAny.getComponentCatalogue() : null;
+    ok("P16c getComponentCatalogue 含 scrollbox 键（本地 0.8.x 能力确认）", !!cat && !!cat.scrollbox);
+    if (cat && cat.scrollbox) {
+      const saved = cat.scrollbox;
+      delete cat.scrollbox;
+      try {
+        const { ctx, router } = makeCtx();
+        cleanups.push(t.setup(ctx as any)!);
+        const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: P16_MD, bytes: 200, path: "/p/plan.md", truncated: false } }), { width: 60, height: 30 });
+        await st.flush();
+        const frame: string = st.captureCharFrame();
+        ok("P16c 无 scrollbox 不崩且 markdown 主轨仍生效", frame.includes("const x = 1"), JSON.stringify(frame.slice(0, 160)));
+        ok("P16c 无 scrollbox 时树中确无滚动节点（降级直挂）", !findNode((st as any).renderer?.root, "ScrollBox"));
+        await st.dispose();
+      } catch (e: any) { ok("P16c 降级轨不崩", false, e?.message); }
+      finally { cat.scrollbox = saved; }
+    }
+    // 16c2：纯文本降级轨（无 markdown）正文同样入 scrollbox
+    if (cat && cat.markdown) {
+      const savedM = cat.markdown;
+      delete cat.markdown;
+      try {
+        const { ctx, router } = makeCtx();
+        cleanups.push(t.setup(ctx as any)!);
+        const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: P16_LONG, bytes: 9000, path: "/p/plan.md", truncated: false } }), { width: 60, height: 30 });
+        await st.flush();
+        const sb = findNode((st as any).renderer?.root, "ScrollBox");
+        ok("P16c2 纯文本轨正文亦入 scrollbox（text 为其子）", !!sb && (sb._childrenInLayoutOrder ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Text")), sb ? String((sb._childrenInLayoutOrder ?? []).length) : "no sb");
+        await st.dispose();
+      } catch (e: any) { ok("P16c2 纯文本滚动轨不崩", false, e?.message); }
+      finally { cat.markdown = savedM; }
+    }
+  }
+
+  // 16d：静态守卫——scrollEl 构造点 + 探针归因 + 不设 height:100% 于 scrollbox（避免挤出头尾固定行）
+  {
+    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    ok("P16d createElement(\"scrollbox\") 构造点在位", src.includes('createElement("scrollbox")'));
+    ok("P16d scroll 降级探针在位（scroll-el-err/hasScroll 归因）", src.includes("scroll-el-err") && src.includes("hasScroll"));
+    const si = src.indexOf("function scrollEl");
+    ok("P16d scrollEl 定义在位", si >= 0);
+    if (si >= 0) {
+      const sbBody = src.slice(si, src.indexOf("\n}", si));
+      ok("P16d scrollEl 不设 height（高度约束只在外层容器，防挤出头尾）", !sbBody.includes('"height"'));
+    }
+  }
+}
+
+// ── P17: artifact-md-syntaxstyle—markdown 高亮/conceal 生效（syntaxStyle 接线）──
+{
+  const HL_MD = ["# 标题一", "", "段落里 **加粗** 与 `行内代码`。"].join("\n");
+
+  // 17a 行为面：异步 highlight pass 经真定时器提交（probe-md-fix 实证 ~1.5s 足够；
+  // R7 setTimeout 守卫扫描对象是 tui/index.tsx 源码，不含本 harness）→ conceal 生效。
+  {
+    const { ctx, router } = makeCtx();
+    cleanups.push(t.setup(ctx as any)!);
+    try {
+      const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: HL_MD, bytes: 100, path: "/p/plan.md", truncated: false } }), { width: 60, height: 12 });
+      await st.flush();
+      await new Promise((r) => setTimeout(r, 1600));
+      await st.flush();
+      const frame: string = st.captureCharFrame();
+      ok("P17a syntaxStyle 接线：标题 # conceal", !frame.includes("# 标题一") && frame.includes("标题一"), JSON.stringify(frame.slice(0, 120)));
+      ok("P17a 加粗/行内代码 conceal", !frame.includes("**加粗**") && frame.includes("加粗") && !frame.includes("`行内代码`"), JSON.stringify(frame.slice(0, 160)));
+      await st.dispose();
+    } catch (e: any) { ok("P17a 高亮渲染不崩", false, e?.message); }
+  }
+
+  // 17b 静态守卫：import 点在位 + mdEl 内 syntaxStyle 先于 content + 三探针归因 + 模块级缓存（防泄漏）
+  {
+    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    ok("P17b import(\"@opentui/core\") 动态装载点在位", src.includes('import("@opentui/core")'));
+    const mi = src.indexOf("function mdEl");
+    ok("P17b mdEl 定义在位", mi >= 0);
+    if (mi >= 0) {
+      const mb = src.slice(mi, src.indexOf("\n}", mi));
+      const ssi = mb.indexOf("syntaxStyle");
+      ok("P17b mdEl 内 syntaxStyle setProp 点在位", ssi >= 0);
+      ok("P17b syntaxStyle 先于 content（子 CodeRenderable 建块前就位）", ssi >= 0 && mb.indexOf('"content"') > ssi);
+    }
+    ok("P17b 三探针归因在位（ok/err/import-err）", src.includes("syntax-style-ok") && src.includes("syntax-style-err") && src.includes("syntax-style-import-err"));
+    ok("P17b 按 owner 分键缓存（Map get/set，防跨 context 误用与 native 泄漏）", src.includes("syntaxStyleCache.get(") && src.includes("syntaxStyleCache.set(") && src.includes("new Map<any, any>()"));
+    const vc = await (await import("node:fs/promises")).readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+    ok("P17b vite external 含 @opentui/core（防打包第二份 core）", vc.includes('"@opentui/core"'));
+  }
+}
+
 // ── R1-R7: tui-sidebar-elapsed 侧边栏宽度填充+阶段耗时列（plan §4 T03 验收 1-7）──
 // 口径=墙钟·冻结：intake 起连续累计；done 冻结总耗时；进行中依赖调用点 now；存量降级 ·。
 // R6 见 P12 块（真渲染 width:50）；R7 静态守卫与 P4 结构守卫互补（禁新 timer）。

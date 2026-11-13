@@ -78,12 +78,88 @@ function textEl(s: string, fg?: any) {
   insert(t, [sanitize(s)]); // 数组形态（P0 实证）；文本恒非空
   return t;
 }
-function boxEl(children: unknown[]) {
+function boxEl(children: unknown[], height?: string) {
   const b = createElement("box");
   setProp(b, "width", "100%");
+  if (height) { try { setProp(b, "height", height); } catch { /* fail-soft：旧版宿主 prop 形态不符不杀 slot */ } }
   setProp(b, "flexDirection", "column");
   for (const c of children) if (c !== null && c !== undefined && c !== false) insert(b, c);
   return b;
+}
+// M16-r48c artifact-md-syntaxstyle：syntaxStyle 接线（真机 markdown 无着色/conceal 根因修复）。
+// core CodeRenderable 高亮路径直接用裸字段 this._syntaxStyle（无 fallback getter，chunk-bun:14987）
+// → undefined → treeSitterToTextChunks2 TypeError → 被内部 catch（"Code highlighting failed, falling
+// back to plain text"）→ 静默退化 raw 文本。宿主自身 markdown 组件总是显式传 theme 派生 syntaxStyle。
+// 宿主二进制含 runtime-module 映射 Zz=["@opentui/core","@opentui/core/testing"]→opentui:runtime-module:
+// → 动态 import 预期拿到宿主同份 core 实例（类身份一致）；vite external 同步（防打包第二份 core）。
+// 三层 fail-soft：import 失败/类缺失/create·setProp throw → 不传 → 现状 raw（不崩）。
+// 缓存按 nativeScene owner 分键（Map）：SyntaxStyle 资源绑定 owner（宿主二进制 "SyntaxStyle Context
+// owner mismatch" 佐证）——harness 每 testRender 新建 renderer，单一全局缓存会跨 context 误用致正文
+// 消失（P17a 红态实证）；真机单 renderer 仅一项，不泄漏（MarkdownRenderable destroy 不释放外部
+// syntaxStyle，宿主另有独立 destroyContextSyntaxStyle 佐证）。
+let SyntaxStyleClass: any = null;
+let syntaxStyleImportErr = "";
+const syntaxStyleCache = new Map<any, any>();
+import("@opentui/core").then(
+  (mod: any) => { SyntaxStyleClass = mod?.SyntaxStyle ?? null; },
+  (e: unknown) => { syntaxStyleImportErr = errMsg(e); }, // 异步回调执行时 errMsg 已初始化（无 TDZ）
+);
+// M16-r48 artifact-md-preview：markdown 正文构造器（流派 A 同构原语）。
+// catalogue 缺 markdown（旧版宿主）或构造/建块异常 → createElement/setProp 构造期同步 throw → 返回 null，
+// 调用方走纯文本逐行降级轨；onError 由 setup 闭包注入（probe 归因 hasMd）。
+// 注意：content 原文直喂，不经 sanitize——sanitize 折叠换行+截 200 字符会毁整篇块语义（表格/围栏必须完整行）。
+const hasMdCatalogue = (): boolean | "unknown" => {
+  try { return !!(ot as any).getComponentCatalogue?.().markdown; } catch { return "unknown"; }
+};
+function mdEl(content: string, onError?: (info: { err: string; hasMd: boolean | "unknown" }) => void, onStyle?: (info: Record<string, unknown>) => void) {
+  let m: any = null;
+  try {
+    m = createElement("markdown");
+    try { setProp(m, "width", "100%"); } catch { /* 旧版宿主 prop 形态不符：fail-soft 不杀主轨 */ }
+    // M16-r48c：syntaxStyle 必须先于 content——content setter 同步建块，子 CodeRenderable 构造时
+    // 捕获 this._syntaxStyle；缺失则异步 highlight throw 被吞、静默退化 raw（本次根因）。
+    if (SyntaxStyleClass) {
+      try {
+        const owner = m.ctx?.nativeScene;
+        let ss = syntaxStyleCache.get(owner);
+        if (ss === undefined) { ss = SyntaxStyleClass.create(owner); syntaxStyleCache.set(owner, ss); }
+        setProp(m, "syntaxStyle", ss);
+        onStyle?.({ evt: "syntax-style-ok" });
+      } catch (e2) {
+        onStyle?.({ evt: "syntax-style-err", err: errMsg(e2) });
+      }
+    } else if (syntaxStyleImportErr) {
+      onStyle?.({ evt: "syntax-style-import-err", err: syntaxStyleImportErr });
+    }
+    setProp(m, "content", content || " "); // 恒非空（textBuffer 语义与 textEl 对齐）
+    return m;
+  } catch (e) {
+    if (m && typeof m.destroy === "function") { try { m.destroy(); } catch { /* 次级清理错误忽略 */ } }
+    onError?.({ err: errMsg(e), hasMd: hasMdCatalogue() });
+    return null;
+  }
+}
+// M16-r48b artifact-preview-scroll：正文滚动容器构造器（宿主 2.2.6 plugin route 挂载链无滚动容器——
+// 取证 x1e→H0→UA 全程裸挂，自然高度溢出视口即裁剪；r46 纯文本轨同缺陷）。children 为滚动内容，
+// 头尾固定行由调用方留在外层。flexGrow 1 占满外层 column 剩余高度（外层 height 约束，不在本元素设
+// height:100%——那会挤出兄弟固定行）。catalogue 缺 scrollbox（旧宿主）→ 构造期同步 throw → null，
+// 调用方正文直挂（=现状行为）。
+const hasScrollCatalogue = (): boolean | "unknown" => {
+  try { return !!(ot as any).getComponentCatalogue?.().scrollbox; } catch { return "unknown"; }
+};
+function scrollEl(children: unknown[], onError?: (info: { err: string; hasScroll: boolean | "unknown" }) => void) {
+  let s: any = null;
+  try {
+    s = createElement("scrollbox");
+    try { setProp(s, "width", "100%"); } catch { /* fail-soft */ }
+    try { setProp(s, "flexGrow", 1); } catch { /* fail-soft */ }
+    for (const c of children) if (c !== null && c !== undefined && c !== false) insert(s, c);
+    return s;
+  } catch (e) {
+    if (s && typeof s.destroy === "function") { try { s.destroy(); } catch { /* 次级清理错误忽略 */ } }
+    onError?.({ err: errMsg(e), hasScroll: hasScrollCatalogue() });
+    return null;
+  }
 }
 
 const stageOf = (phase: any, order: string[] = STAGE_ORDER) => {
@@ -400,24 +476,40 @@ export default Plugin.define({
           render: (input: any) => {
             // 流派 A 同构：恒定容器 + 唯一 insert(accessor)；data 快照消费（navigate 时读好，零响应式依赖）
             probe({ evt: "route-render", keys: Object.keys(input ?? {}).slice(0, 8).join(",") }); // 探针①：render 入参形状取证
-            const container = boxEl([]);
+            const container = boxEl([], "100%"); // M16-r48b：外层高度=视口（scrollbox flexGrow 的前提；无 scroll 能力时 100% 无害）
             insert(container, () => {
               try {
                 const d: any = input?.data ?? input ?? {};
                 const T = context.theme ?? { text: { muted: "gray", base: "white", feedback: { error: "red" } } };
                 const body = String(d.text ?? "").split("\n");
                 const head = `  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`;
-                const rows = [
-                  "── wf 产物预览 ────────────────",
-                  head,
-                  `  ${str(d.path)}`,
-                  " ",
-                  ...body.slice(0, 200).map((ln: string) => "  " + ln),
-                  ...(body.length > 200 ? [`  …（共 ${body.length} 行，仅显示前 200 行）`] : []),
-                  " ",
-                  "  q 返回会话",
+                const fixedHead = [
+                  textEl("── wf 产物预览 ────────────────", T.text.muted),
+                  textEl(head, T.text.muted),
+                  textEl(`  ${str(d.path)}`, T.text.muted),
+                  textEl(" ", T.text.muted),
                 ];
-                return boxEl(rows.map((ln: string, i: number) => textEl(ln, i <= 2 || i === rows.length - 1 ? T.text.muted : T.text.base)));
+                const fixedFoot = [textEl(" ", T.text.muted), textEl("  q 返回会话", T.text.muted)];
+                // M16-r48 主轨：前 200 行原文喂 MarkdownRenderable（表格/代码块同步建块；标题/强调着色为异步高亮）。
+                // mdEl 返回 null（构造 throw）→ 下方纯文本逐行降级轨（行为=旧版）。
+                // M16-r48b：两轨正文均入 scrollbox（r48 边界「滚动区高度适配」补全）；scrollEl null → 正文直挂（=r48 行为）。
+                const md = mdEl(body.slice(0, 200).join("\n"), (info) => probe({ evt: "md-el-err", ...info }), (info) => probe(info));
+                if (md) {
+                  probe({ evt: "route-render-md-ok", lines: Math.min(body.length, 200) });
+                  const kids: unknown[] = [
+                    md,
+                    ...(body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行；截断可能落在代码块/表格中段）`, T.text.muted)] : []),
+                  ];
+                  const sc = scrollEl(kids, (info) => probe({ evt: "scroll-el-err", ...info }));
+                  return boxEl([...fixedHead, ...(sc ? [sc] : kids), ...fixedFoot], "100%");
+                }
+                // 降级轨（纯文本逐行）：正文行同样包 scrollbox，头尾固定在外
+                const kids: unknown[] = [
+                  ...body.slice(0, 200).map((ln: string) => textEl("  " + ln, T.text.base)),
+                  ...(body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行）`, T.text.muted)] : []),
+                ];
+                const sc2 = scrollEl(kids, (info) => probe({ evt: "scroll-el-err", ...info }));
+                return boxEl([...fixedHead, ...(sc2 ? [sc2] : kids), ...fixedFoot], "100%");
               } catch (e) {
                 probe({ evt: "route-render-ERR", err: errMsg(e) });
                 return boxEl([textEl(`wf 预览异常: ${errMsg(e)}`, "red")]);

@@ -23,6 +23,7 @@ export default defineConfig({
       external: [
         "@opencode/plugin/tui",
         "@opentui/solid",
+        "@opentui/core", // M16-r48c：宿主 runtime-module 映射提供同份实例（SyntaxStyle 接线；防打包第二份 core）
         "solid-js",
         "node:fs", // 探针写日志用（宿主 bun 运行时原生可用；不标 external 会被 vite 替换成 browser-external shim）
       ],

@@ -37,3 +37,4 @@
 - docs/HOST-CONTRACT.md 是真机契约结论（宿主契约备忘+已知边界，自 README 迁出），事故原始记录在 `.learnings/ERRORS.md`、`LEARNINGS.md`（.gitignore 排除但本机存在）。与该结论冲突的"常识修复"一律先查证再动手。
 - 注释、文档、提交信息用中文；提交格式 = 中文约定式提交 + emoji（见 git log）。
 - `.workflow/`（含运行态 `wf.db`）与 `.learnings/` 不入库；产物 md、overrides 约定见 README。
+- 长 ID 编排纪律（晋升自 LRN-20261112-003，M16-r48 B 层确证）：LLM 编排勿让模型凭记忆复述长不透明 ID——给别名或省略新建、服务端就地自愈改写截断前缀、任何模型可见文本绝不回显完整 ID（回显=转录燃料，抗 compaction 注入点使其常在场自我强化）；DB 审计记录不算回显。

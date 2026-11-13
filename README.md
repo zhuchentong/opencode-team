@@ -13,6 +13,7 @@
 - **越权阻断**：planning/review 阶段服务端 `execute.before` hook 拒绝 `edit/write/patch` 与 shell 重定向/写删命令改**项目内**业务文件（`.workflow/`、`.learnings/`、测试文件除外；M16-r28：项目外路径不构成越权，放行），阻断记账进审计轨迹
 - **抗 compaction 注入**：阶段 guidance 写入 session instructions entry（每次组装系统提示从存储重新渲染），消息历史压缩不丢阶段约束
 - **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；三模式（互斥）：content 首写 / patch 增量修订（严格未命中自动模糊回退）/ 两者皆缺=注册已原生落盘的产物（大产物分段写+微小注册，抗慢模型流中断）；test-report 输出按 verdict 指路下一步；slug 支持 Unicode（中文任务名原样保留）
+- **产物预览**：侧边栏产物清单点击（或 `/wf:open <名>`）打开 `wf-artifact` 预览 route，**markdown 渲染**（标题/表格/代码块/列表经 OpenTUI `markdown` 渲染器，标题/强调/行内代码着色并 conceal 语法标记；旧版宿主能力缺失时自动降级逐行纯文本），**正文可滚动**（scrollbox 包裹，头部信息与返回提示固定；无 scrollbox 能力时直挂降级），`q` 返回会话；详见 `docs/HOST-CONTRACT.md` r46/r48/r48b/r48c
 - **命令输出双轨**（宿主 2.2.6 契约 `execute(): Promise<void>` 返回值不显示）：**主轨**（TUI）return 键拦截 → RPC `exec` → 即时 toast，⚠️/❌/FAIL 附 `attention.notify` 系统级通知（终端后台可感知）；**降级轨**（Web/Desktop/无 TUI）`session.wait` + `prompt(resume:false)` 注入会话（不唤醒模型；context/compaction/generate hook 剥离报告消息，不污染模型上下文）
 - **可观测**：RPC + TUI 侧边栏（阶段/轮次/关卡实时刷新，事件推送 + 重连重拉 + 5s 轮询对账三通道）、`/wf:status` 审计轨迹、`/wf:diagnose` 诊断取证、`/wf:debug` 状态落盘
 - **自动激活**（superpowers 式）：用户消息命中工作流意图且会话无状态 → 注入一次性 `/wf:intake` 提示，不自动开任务
