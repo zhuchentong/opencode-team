@@ -190,6 +190,27 @@ var VERSION = "M16-r47";
 function redactIds(text) {
 	return String(text ?? "").replace(/ses_[A-Za-z0-9]+/g, "〔已隐去〕");
 }
+// shared/report.ts
+function reportId(sessionID, at) {
+	return `${sessionID}|${at}`;
+}
+function createDeduper(opts) {
+	const ttlMs = opts?.ttlMs ?? 6e4;
+	const cap = opts?.cap ?? 50;
+	const now = opts?.now ?? Date.now;
+	const map = /* @__PURE__ */ new Map();
+	return { seen(key, atMs = Date.now()) {
+		const t = now();
+		if (Number.isFinite(atMs) && t - atMs > ttlMs) return false;
+		if (map.has(key)) return false;
+		map.set(key, atMs);
+		if (map.size > cap) {
+			const first = map.keys().next().value;
+			if (first !== void 0) map.delete(first);
+		}
+		return true;
+	} };
+}
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
 var TUI_BUILD = VERSION;
@@ -570,7 +591,7 @@ var tui_default = Plugin.define({
 		});
 		const [snap, setSnap] = createSignal(null);
 		let latestSid = "";
-		const shown = /* @__PURE__ */ new Set();
+		const dedupe = createDeduper();
 		const ac = new AbortController();
 		const myDir = () => String(context?.location?.directory ?? "");
 		const rpc = () => context.client.rpc(Wf);
@@ -615,18 +636,13 @@ var tui_default = Plugin.define({
 						});
 						return;
 					}
-					const key = sid + "|" + at;
-					if (shown.has(key)) {
+					const key = reportId(sid, at);
+					if (!dedupe.seen(key, Date.parse(at))) {
 						probe({
 							reportEv: "dup-skipped",
 							chan
 						});
 						return;
-					}
-					shown.add(key);
-					if (shown.size > 50) {
-						const first = shown.values().next().value;
-						if (first !== void 0) shown.delete(first);
 					}
 				}
 				const brief = briefOf(d);

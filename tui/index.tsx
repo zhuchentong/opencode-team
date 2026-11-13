@@ -25,6 +25,7 @@ import { Wf } from "../shared/rpc.ts";
 import { STAGE_ORDER, FOLD, CANON, DAILY_STAGE_ORDER } from "../shared/phases.ts";
 import { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本归一（server/TUI 同源）
 import { redactIds } from "../shared/redact.ts"; // notification-brief-display T04：legacy 降级脱敏同源（G-1/A）
+import { createDeduper, reportId } from "../shared/report.ts"; // R3 T3.3：去重单实现（server/TUI 共用）
 
 const TUI_BUILD = VERSION;
 const ROWS = 20;
@@ -360,7 +361,8 @@ export default Plugin.define({
     // ── 数据层（全部拉取只发生在 timer/microtask/事件回调——追踪上下文之外）──
     const [snap, setSnap] = createSignal<any>(null); // { st, oth, othScope, err }
     let latestSid = "";
-    const shown = new Set<string>();
+    // R3 T3.3：三通道（exec/事件/轮询）共用同一 deduper 实例（语义与原 shown Set+60s 门+cap50 逐字等价）
+    const dedupe = createDeduper();
     const ac = new AbortController(); // P4③：事件订阅统一经 AbortSignal
     const myDir = () => String(context?.location?.directory ?? "");
     const rpc = () => context.client.rpc(Wf);
@@ -392,12 +394,11 @@ export default Plugin.define({
       try {
         if (sid !== latestSid || !text) return;
         if (at) {
+          // R3 T3.3：过期/重复/淘汰判定收敛进 createDeduper（probe 事件保持分型）
           const age = Date.now() - Date.parse(at);
           if (Number.isFinite(age) && age > 60000) { probe({ reportEv: "stale-skipped", chan }); return; }
-          const key = sid + "|" + at;
-          if (shown.has(key)) { probe({ reportEv: "dup-skipped", chan }); return; }
-          shown.add(key);
-          if (shown.size > 50) { const first = shown.values().next().value; if (first !== undefined) shown.delete(first); }
+          const key = reportId(sid, at);
+          if (!dedupe.seen(key, Date.parse(at))) { probe({ reportEv: "dup-skipped", chan }); return; }
         }
         // T04：toast 呈现 brief（3-4 行结构化，server 生成；旧行本地降级）——全文墙终结；
         // 全文回看通道不变（entry/inject、wf_command 返回值、reports 槽 text 照旧）

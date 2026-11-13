@@ -114,7 +114,9 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
   };
 
   // ── P2 双轨输出编排 ────────────────────────────────────────────────
-  // publishOutput：写 reports 表 + report 事件（机会性补充）+ 探针。两条入口共用。
+  // publishReport（R3 T3.3 Outbox 正名）：先持久化（reports 表=outbox 事实源）后广播（事件=机会性加速）
+  // 契约的单实现——两条入口（bus.exec 主轨/editor execute 轨）共用；四要素见 docs/HOST-CONTRACT.md
+  // 「Transactional Outbox」节。brief/level 生成逻辑不动（notification-brief-display T03 冻结）。
   // notification-brief-display T03（plan §4 冻结）：server 结构化判定 brief/level 随行/随事件
   // 传播（三通道之一）；text 全文通道一律不动（LLM 锚/降级轨 injectReport 仍喂全文）。
   // load fail-soft：无任务/读失败 → st=null → briefFor 分派自动落 briefFallback。

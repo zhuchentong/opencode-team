@@ -21,6 +21,18 @@
 - **subagent 续接形状（M16-r41 探针实证 `.workflow/_debug/subagent-probe.json`/`session-get-probe.json`）**：`execute.before` 对 `subagent` 工具**确触发**，input={tool,sessionID,agent,messageID,id,input}，工具入参 `input.input={agent,description,prompt,sessionID?}`（sessionID 可选，省略=新建；#43297「必填」不适用本宿主）；`input.agent`=调用方、`input.input.agent`=目标角色。`session.get({sessionID})` 返回 `time.{created,updated,busy,idle,viewed}`（**busy>idle=运行中**，可判存活）但**无 parentID 字段**——父归属由宿主原生 subagent 校验（「not a child of the current session」），插件侧无需亦无法经 parentID 复核
 - **guidance 易变区纪律（M16-r42，借鉴 my-opencode-deepseek-config 字节稳定前缀）**：`entryValue` 静态指引在前，轮次行/reuseLines（sessionID）/head 行殿后——同阶段重入（r+1）与子会话登记瞬间只打穿尾部，静态指引段保 prompt cache；收益量级有限不夸大。`roles/` 模板与 `wf_command` description 属字节稳定前缀面，改动须有意识（版本升级即换前缀，属预期）
 
+## Transactional Outbox（R3 T3.3 正名，关联 r29e 事故）
+
+r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约，R3 起以 **Transactional Outbox** 名义固化
+（实现：`shared/report.ts` + `server/commands.ts publishOutput` + TUI `createDeduper` 消费）：
+
+1. **reports 表 = 事实源（outbox）**：`publishOutput` 先持久化（putReport）后广播——写槽失败即无报告，事件只是加速。
+2. **事件 = 机会性加速通道**：`emitReport` 尽力投递，丢事件不丢报告（轮询兜底）。
+3. **TUI 轮询 = 对账投递**：5s 轮询 `state.lastReport`，任何存活窗口内报告最迟 5s 被捞到且仍在新鲜度门内——轮询必达成对设计。
+4. **`sessionID|at` = 幂等消费键**：`shared/report.ts reportId()` 单一生成点；TUI 三通道（exec/事件/轮询）共用同一 `createDeduper` 实例（60s 新鲜度门 + FIFO cap50，语义与手写 shown Set 逐字等价）。
+
+**wire 不变量**：report 事件 / exec output / state.lastReport 的 required 数组零变化（rpc-drift 快照锁）；旧 TUI/旧 server 交叉兼容。
+
 ## 已知边界（测试锁定现状）
 
 - verdict 解析正则带 `i`：小写 `pass` 也判 PASS；`PASSED` 因 `\b` 边界不判
