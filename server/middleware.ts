@@ -54,9 +54,9 @@ export function createCommandGuard(deps: GuardDeps) {
   // （host.models.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
   // 项目级 agent 文件（.opencode/agents/wf/<role>.md）。基座变化 → 审计 tier-model-switch +
   // 清空 roleSessions（旧子会话=旧模型，防混模型续用）+ 返回提示句（guarded 附加到返回文本）。
-  // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认关（opt-in）。
+  // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认开（显式 false 关闭）。
   const tierCheck = async (cmd: string, a: any): Promise<string> => {
-    if (host.options.tierAgents !== true) return "";
+    if (host.options.tierAgents === false) return "";
     if (!TIER_TRIGGERS.has(cmd)) return "";
     const sid = String(a?.sessionID ?? "");
     const st = await load(sid);
@@ -128,7 +128,7 @@ export function createCommandGuard(deps: GuardDeps) {
   const tierSync = (name: string): CommandMiddleware => (next) => async (a: any) => {
     const out = await next(a);
     // M16-r43：动态档位跟随——流转/intake 成功后校验会话基座模型并同步项目级档位文件。
-    // fail-open：任何异常不阻断流转（与 r29 告警不阻断同模式）；options.tierAgents 默认关。
+    // fail-open：任何异常不阻断流转（与 r29 告警不阻断同模式）；options.tierAgents 默认开（显式 false 关）。
     try {
       const note = await tierCheck(name, a);
       if (note && typeof out === "string") return `${out}\n${note}`;

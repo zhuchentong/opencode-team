@@ -102,7 +102,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | `allowRegexps` | `[]` | 追加放行正则（字符串形式） |
 | `limits` | — | 覆盖循环上限，如 `{ "plan_review": 2 }`（仅正整数生效，guidance/状态/诊断同步显示） |
 | `hint` | `true` | 自动激活：用户消息命中工作流意图关键词且会话无 wf 状态时，注入一次性 `/wf:intake` 提示 |
-| `tierAgents` | `false` | 动态档位跟随（M16-r43）：流转时读会话所选模型，按 `tiers` 为各流程角色写项目级 `.opencode/agents/wf/<role>.md`。**前置：基座模型须在宿主 opencode.jsonc 声明 variants（body 直注 `reasoning_effort`——openai-compatible 包不转发 settings.reasoningEffort，真机抓包实证）** |
+| `tierAgents` | `true` | 动态档位跟随（M16-r43）：流转时读会话所选模型，按 `tiers` 为各流程角色写项目级 `.opencode/agents/wf/<role>.md`。显式 `false` 关闭。**前置：基座模型须在宿主 opencode.jsonc 声明 variants（body 直注 `reasoning_effort`——openai-compatible 包不转发 settings.reasoningEffort，真机抓包实证）；未声明 variants 的基座自动跳写=继承会话默认档，行为等同关闭** |
 | `tiers` | TIER_MAP | 档位映射覆盖（默认 planner/planner-reviewer/tester/builder-reviewer/fixer=`high`，builder/learner=`off`） |
 
 ## 项目级角色定制（overrides）
@@ -126,7 +126,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 ## 角色档位跟随（M16-r43 动态路由）
 
-`options.tierAgents: true` 启用后：流转时读会话所选模型，按档位映射为各流程角色写**项目级** `.opencode/agents/wf/<role>.md`（`model: <基座>#<档位>`；frontmatter 仅 mode+model，空 body 保留全局角色提示词），宿主热载即效。**切模型即全角色跟随**（5h 用量上限场景：下一次 `wf_command` 后新委派自动用新基座对应档位）；基座变化审计 `tier-model-switch` 并清空 roleSessions，提示句附加到命令文本（旧子会话=旧模型，重委派一律新建）。
+`tierAgents` **默认开启**（显式 `false` 关闭）：流转时读会话所选模型，按档位映射为各流程角色写**项目级** `.opencode/agents/wf/<role>.md`（`model: <基座>#<档位>`；frontmatter 仅 mode+model，空 body 保留全局角色提示词），宿主热载即效。**切模型即全角色跟随**（5h 用量上限场景：下一次 `wf_command` 后新委派自动用新基座对应档位）；基座变化审计 `tier-model-switch` 并清空 roleSessions，提示句附加到命令文本（旧子会话=旧模型，重委派一律新建）。
 
 - **默认档位映射**：见上表 `tiers` 行（`options.tiers` 可覆盖）；workflow（primary）天然跟随会话模型，不接线
 - **降级链**：请求档不在基座 variants 集合 → 强度序（off<low<medium<high<xhigh<max）向下取最近；无更低 → 继承会话默认档；**variants 为空 → 跳写**（纯继承，少 7 个派生文件）
@@ -142,7 +142,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
     { "id": "high", "body": { "reasoning_effort": "high" } },
     { "id": "max",  "body": { "reasoning_effort": "max" } } ] } } }
 }
-// 插件 options：{ "tierAgents": true, "tiers": { "wf/builder": "off" } }
+// 插件 options（tierAgents 默认开，仅覆盖档位映射时）：{ "tiers": { "wf/builder": "off" } }
 ```
 
 > **写法陷阱（借鉴 my-opencode-deepseek-config 真机实证，DeepSeek 场景验证）**：agent frontmatter 的 `options.*` 装不下 provider 设置（如 `reasoningEffort` 无效——`options` 只落到 `request.body`），思考档位须在**模型层**声明；headless `opencode run` 不读 `agent.model`（主会话按全局 `model` 解析）；子会话/命令绑定的一次性调用按 `agent.model` 解析。将来启用 `options.agentModels` 落地本表时，须先真机核验 GLM 的对应参数面再写 frontmatter。

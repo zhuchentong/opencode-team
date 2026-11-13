@@ -238,7 +238,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             const st = await load(sid);
             const dir = await resolveProjectDir(st, sid);
             const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
-            if (host.options.tierAgents === true) {
+            if (host.options.tierAgents !== false) {
               // P0-B：每角色生效 variant 回显（含 inherit/未派生角色=`(基座默认)`——防「没列出=没生效」误读；
               // 判定读派生文件实况（readTierAgents）=reconstructing reality，与 options.tiers 配置解耦）。
               const got = new Map(rows.map((r) => [r.split("=")[0], r.split("=")[1]] as const));
