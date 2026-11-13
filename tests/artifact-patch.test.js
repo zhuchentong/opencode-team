@@ -196,7 +196,7 @@ test("M16-r33 patch：test-plan patch 保持 testPlanWritten；轮次编号文�
   dispose?.();
 });
 
-test("M16-r33 tier：S 级预算收紧——6KB plan 在 S 级告警、M 级不告警（字节计）", async () => {
+test("M16-r33 tier：S 级预算收紧——11KB plan 在 S 级告警、M 级不告警（字节计）", async () => {
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   // S 级任务：intake 前缀 [S]
@@ -205,16 +205,16 @@ test("M16-r33 tier：S 级预算收紧——6KB plan 在 S 级告警、M 级不�
   assert.match(rS, /slug=small-task/);
   assert.equal(stOf(sidS).size, "S");
   await cmd(m, "wf:plan").execute({ sessionID: sidS, prompt: {} });
-  const sixKb = "x".repeat(6 * 1024);
-  const wS = await tool(m).execute({ kind: "plan", content: sixKb }, { sessionID: sidS, agent: "wf/planner" });
-  assert.match(wS.content, /超瘦身预算/, "S 级 plan 预算 5KB，6KB 应告警");
+  const elevenKb = "x".repeat(11 * 1024);
+  const wS = await tool(m).execute({ kind: "plan", content: elevenKb }, { sessionID: sidS, agent: "wf/planner" });
+  assert.match(wS.content, /超瘦身预算/, "S 级 plan 预算 10KB，11KB 应告警");
   // M 级对照：同体积不告警（M 预算 15KB）
   const sidM = "ses_pm";
   await cmd(m, "wf:intake").execute({ sessionID: sidM, prompt: { text: "mid-task" } });
   assert.equal(stOf(sidM).size, "M", "缺省体量=M");
   await cmd(m, "wf:plan").execute({ sessionID: sidM, prompt: {} });
-  const wM = await tool(m).execute({ kind: "plan", content: sixKb }, { sessionID: sidM, agent: "wf/planner" });
-  assert.ok(!/超瘦身预算/.test(wM.content), "M 级 6KB 在预算内不告警");
+  const wM = await tool(m).execute({ kind: "plan", content: elevenKb }, { sessionID: sidM, agent: "wf/planner" });
+  assert.ok(!/超瘦身预算/.test(wM.content), "M 级 11KB 在预算内不告警");
   // S 级 guidance 渲染 S 预算 + 从简指引
   assert.match(rS, /\[S\]\/\[M\]\/\[L\]|体量/, "intake guidance 应含体量分级指引");
   dispose?.();

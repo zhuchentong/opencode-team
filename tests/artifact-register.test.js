@@ -187,10 +187,10 @@ test("M16-r47 register：超预算产物注册仍告警（字节计，不阻断�
   const sid = "ses_r5";
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] register-budget" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  nativeWrite("register-budget", "plan.md", "x".repeat(6 * 1024));
+  nativeWrite("register-budget", "plan.md", "x".repeat(11 * 1024));
   const w = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(w.content, /已注册/);
-  assert.match(w.content, /超瘦身预算/, "S 级 plan 预算 5KB，盘上 6KB 注册应告警不阻断");
+  assert.match(w.content, /超瘦身预算/, "S 级 plan 预算 10KB，盘上 11KB 注册应告警不阻断");
   assert.ok(stOf(sid).artifacts["plan.md"], "告警不阻断记账");
   dispose?.();
 });

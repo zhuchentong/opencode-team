@@ -599,8 +599,9 @@ export const ARTIFACT_BUDGET_KB: Record<string, number> = {
 };
 // M16-r33 P2：S 级（简易/演示任务）收紧预算——真机取证 todolist 简易任务 plan 26KB/test-plan 22KB
 // 杀鸡用牛刀。L 级用 M 预算（体量标记只驱动从简指引，不放宽体积）。单位=KB（字节计，中文×~1.5）。
+// M16-r49：S 级 plan 5→10KB——5KB 对正常方案过紧，频繁超预算触发精简重写反而费工；10KB 仍严于 M。
 export const ARTIFACT_BUDGET_S_KB: Record<string, number> = {
-  plan: 5,
+  plan: 10,
   "plan-review": 3,
   "test-plan": 3,
   "build-review": 3,
