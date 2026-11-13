@@ -8,7 +8,7 @@
 
 **写入者契约（提速铁律，M/L 与完整模式）**：产物一律由**子代理自行落盘**——小产物 `wf_write_artifact(kind=…, content)` 单次写；大产物（>2KB）分段：首段原生 write（到委派 prompt 指定的产物路径）、后续段 edit 追加（每段≤2KB），调用失败先 read 尾部断点续写，**全部落盘后**才 `wf_write_artifact(kind=…)`（不带 content=注册）记账。你**禁止代写**（代写=双倍生成），也**禁止要求子代理「把全文作为最终回复返回由你写入」**。子代理回执只带摘要+路径+证据。委派 prompt 必须携带本阶段产物预算（字节计）与**产物目标路径**；修订用原生 edit 或 patch 模式只输出变更段。**S 级日常模式例外：你亲自实现并自写产物（覆盖本契约）。**
 
-**续接契约（防截断/防分叉，M16-r45 别名优先）**：重派优先续用同一子会话——subagent 的 `sessionID` 参数写 **`"auto"`** 即续用该角色已登记会话（多 lane 场景写 `"@Tnn"`；guidance 渲染的完整 sessionID 亦可逐字复制，插件已自动登记，勿凭记忆复述长 ID）；**仅续用已完成的子会话**（运行中的不得续接，防静默分叉）；未给出 ID 或续用失败 → 立即新建，勿反复重试。
+**续接契约（防截断/防分叉，M16-r45 别名优先）**：重派优先续用同一子会话——subagent 的 `sessionID` 参数写 **`"auto"`** 即续用该角色已登记会话（多 lane 场景写 `"@Tnn"`，插件已自动登记）；不确定时省略 sessionID 新建（插件对截断前缀自动自愈改写）；**绝不凭记忆粘贴长 ID**。**仅续用已完成的子会话**（运行中的不得续接，防静默分叉）；续用失败 → 立即新建，勿反复重试。
 
 **Session 查询路由（M16-r45）**：涉及查询/引用/诊断 opencode session（列会话、读消息、sessionID、SessionNotFoundError）→ 先加载 `session-lookup` skill 走管道闭环；勿凭记忆复述 session ID。
 
@@ -33,7 +33,7 @@ F0 必做（两模式通用）：
 完整模式委派规则（仅 `[FULL]`）：
 - F1 `subagent wf/planner`
 - F2 **并行**：`subagent wf/planner-reviewer` ∥ `subagent wf/tester`（提示注明 mode=feasibility：仅产出 test-plan.md，不写代码）
-  循环重派优先续用同一子会话：**`sessionID="auto"` 续用登记会话**（多 lane 用 `@Tnn`；guidance 完整 ID 亦可逐字复制，勿凭记忆复述长 ID）；未给出或续用失败 → 立即新建，勿反复重试
+  循环重派优先续用同一子会话：**`sessionID="auto"` 续用登记会话**（多 lane 用 `@Tnn`）；不确定时省略 sessionID 新建（插件对截断前缀自动自愈改写），绝不凭记忆粘贴长 ID；续用失败 → 立即新建，勿反复重试
   任一不过 → 带意见重派 wf/planner 回 F1，plan_review 最多 3 轮；超限停下来问用户
 - F3 test_design（assign 已并入）：你审核 plan.md 的任务清单（T01…），**冻结接口**；按 T<nn> 排好**串行顺序**（默认一次处理一个任务）
   **硬关卡：计划审核未通过或 test-plan.md 缺失，无法通过 wf:test-design**

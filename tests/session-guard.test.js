@@ -1,12 +1,13 @@
-// M16-r41：会话复用可靠化（B 层）——subagent 续接自愈守卫。
-// 根因：A 层已自动登记 roleSessions + guidance 渲染完整 ID，但 leader 仍可能凭记忆复述→截断。
-//   B 层在续接入口（execute.before 的 subagent 分支）对「截断/非法」sessionID 一次性纠正（附完整 ID），
-//   把「3 次盲试→冷启动」压成「1 次纠正→暖续用」。
-// 关键约束（验证报告 S1/I2/I3/B1/B2）：
-//   S1 纠正 throw 必须含 GATE_ERR="[wf-workflow]"，否则被 fail-open 吞掉→静默 no-op；
-//   I2 分支置于 edit/shell 过滤之前；I3 仅「形状非法 OR 登记 ID 真前缀」才纠正，全形状非前缀不符→放行（多 lane 安全）；
+// M16-r41 B 层：subagent 续接自愈守卫（leader 专属）。
+// fix-sid-truncation-echo-loop T01 行为反转：守卫**不再 throw 回显登记 ID**——「回显→再转录→
+//   死循环」燃料在此拆除：真前缀（含非法形状 "ses"/"ses_"）→ 存活探针后就地改写放行（已完成/
+//   探不到/异常）或 throw 警示不回显（运行中）；fuzzy/非法非前缀 → throw 指路别名/省略新建（不回显）。
+// 关键约束（验证报告 S1/I2/I3/B1/B2 + T01 冻结）：
+//   S1 拒绝消息必须含 GATE_ERR="[wf-workflow]"，否则被 fail-open 吞掉→静默 no-op；
+//   S2 拒绝消息不得含登记完整 ID（防转录燃料）——审计 detail 含 ID 合规（wf.db 不进模型上下文）；
+//   I2 分支置于 edit/shell 过滤之前；I3 仅「形状非法 OR 登记 ID 真前缀/近似」才干预，全形状非前缀不符→放行（多 lane 安全）；
 //   B1 用 isLeader（workflow + wf/leader 双别名）；B2 审计 cmd=session:correct。
-// 覆盖：截断前缀/形状非法/正确放行/新建放行/多 lane 放行/无登记放行/非 leader 放行/别名/审计/不干扰 edit 闸门。
+// 覆盖：截断前缀改写/非法拒绝无回显/正确放行/新建放行/多 lane 放行/无登记放行/非 leader 放行/别名/审计/存活探针/闭环。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -30,7 +31,7 @@ const mkCtx = () => {
       instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
     },
     tool: {
-      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
+      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; } ,
       hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; },
     },
     command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
@@ -47,7 +48,7 @@ const stOf = (sid) => {
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(`${DIR}/src`, { recursive: true });
 
-// 建 leader 任务并经 A 层登记 wf/planner 子会话（完整 ID=ses_planFull123）
+// 建 leader 任务并经 A 层登记 wf/planner 子会话（登记 ID=ses_planFull123，仅供断言引用，不进拒绝文案）
 const FULL = "ses_planFull123";
 const setupLeader = async (leader) => {
   const m = mkCtx(); await plugin.setup(m.ctx);
@@ -59,29 +60,40 @@ const setupLeader = async (leader) => {
 // leader 调 subagent（callerAgent 默认 workflow；input 为 subagent 工具入参）
 const callSub = (m, leader, input, callerAgent = "workflow") =>
   m.hook()({ tool: "subagent", sessionID: leader, agent: callerAgent, input }, {});
-const isCorrect = (full) => (e) => {
+// T01 S2：拒绝必须含 GATE_ERR（穿透 fail-open）且**不含登记 ID**（防回显燃料）
+const rejectsWithoutEcho = (e) => {
   const msg = String(e?.message ?? e);
-  return msg.includes("[wf-workflow]") && msg.includes(full); // S1：GATE_ERR 穿透 + 附完整 ID
+  return msg.includes("[wf-workflow]") && !msg.includes(FULL);
 };
 
-// ── 拦截：截断/非法 → 一次性纠正附完整 ID ─────────────────────────────
-test("B层：形状合法的截断前缀 → 拦截，附完整 ID + GATE_ERR", async () => {
+// ── T01：截断前缀 → 就地改写放行（A1/A2：合法形状前缀 / "ses" / "ses_"）──
+test("T01：形状合法的截断前缀 → 就地改写 args.sessionID 放行（不 throw）", async () => {
   const leader = "ses_leadG1"; const m = await setupLeader(leader);
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }), isCorrect(FULL));
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
+  await callSub(m, leader, input);
+  assert.equal(input.sessionID, FULL, "入参应被服务端改写为登记会话 ID（仿别名分支）");
 });
 
-test("B层：'ses' / 'ses_' 形状非法前缀 → 拦截附完整 ID", async () => {
+test("T01：'ses' / 'ses_' 截断前缀（非法形状真前缀）→ 就地改写放行", async () => {
   const leader = "ses_leadG2"; const m = await setupLeader(leader);
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses" }), isCorrect(FULL));
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_" }), isCorrect(FULL));
+  const i1 = { agent: "wf/planner", sessionID: "ses" };
+  await callSub(m, leader, i1);
+  assert.equal(i1.sessionID, FULL);
+  const i2 = { agent: "wf/planner", sessionID: "ses_" };
+  await callSub(m, leader, i2);
+  assert.equal(i2.sessionID, FULL);
 });
 
-test("B层：形状非法非前缀（幻觉 'bogus'）→ 拦截附完整 ID", async () => {
+// ── T01：拒绝类仍拒但无回显（A5）────────────────────────────────────
+test("T01：形状非法非前缀（幻觉 'bogus'）→ 拒绝，无登记 ID 回显 + auto 指路", async () => {
   const leader = "ses_leadG3"; const m = await setupLeader(leader);
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "bogus" }), isCorrect(FULL));
+  await assert.rejects(
+    () => callSub(m, leader, { agent: "wf/planner", sessionID: "bogus" }),
+    (e) => rejectsWithoutEcho(e) && String(e.message).includes("auto"),
+  );
 });
 
-// ── 放行：正确 / 新建 / 多 lane / 无登记 / 非 leader ──────────────────
+// ── 放行：正确 / 新建 / 多 lane / 无登记 / 非 leader（A4/A7/A8 回归保护）──
 test("B层：正确完整 ID → 放行", async () => {
   const leader = "ses_leadG4"; const m = await setupLeader(leader);
   await callSub(m, leader, { agent: "wf/planner", sessionID: FULL }); // 不 throw 即通过
@@ -109,15 +121,19 @@ test("B层：非 leader 调用（build / wf/builder）→ 放行", async () => {
   await callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }, "wf/builder");
 });
 
-test("B层：leader 别名 wf/leader 同样管辖", async () => {
+test("B层：leader 别名 wf/leader 同样管辖（前缀 → 改写放行）", async () => {
   const leader = "ses_leadG9"; const m = await setupLeader(leader);
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }, "wf/leader"), isCorrect(FULL));
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
+  await callSub(m, leader, input, "wf/leader");
+  assert.equal(input.sessionID, FULL, "wf/leader 别名的续用同样受管辖并改写");
 });
 
 // ── 审计 + 不干扰既有闸门 ────────────────────────────────────────────
-test("B层：纠正落审计 session:correct（供 /wf:diagnose 取证）", async () => {
+test("T01：截断前缀改写落审计 session:correct（detail 含 ID 合规——wf.db 不进模型上下文）", async () => {
   const leader = "ses_leadG10"; const m = await setupLeader(leader);
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }), isCorrect(FULL));
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
+  await callSub(m, leader, input);
+  assert.equal(input.sessionID, FULL);
   const st = stOf(leader);
   assert.ok(st.log.some((l) => l.cmd === "session:correct"), "审计含 session:correct");
   const ev = st.log.find((l) => l.cmd === "session:correct");
@@ -137,31 +153,47 @@ test("B层：不吞 edit 闸门——planning 阶段 wf/builder 越权 edit 仍�
   );
 });
 
-// ── probe 4 增强：纠正附子会话存活状态（time.busy/idle；防续用运行中会话→静默分叉）──
-test("B层增强：运行中子会话（busy>idle）→ 纠正附「仍在运行」警示", async () => {
+// ── 存活探针（time.busy/idle；防续用运行中会话→静默分叉）──────────────
+test("T01：前缀 + 运行中（busy>idle）→ 拒绝警示「仍在运行」，无登记 ID 回显（A3）", async () => {
   const leader = "ses_leadG13"; const m = await setupLeader(leader);
   m.ctx.session.get = async ({ sessionID }) => sessionID === FULL
     ? { time: { busy: 200, idle: 100 } } // busy>idle → 运行中
     : { projectID: "pi1", location: { directory: DIR } };
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
   await assert.rejects(
-    () => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }),
-    (e) => isCorrect(FULL)(e) && /仍在运行/.test(String(e.message)),
+    () => callSub(m, leader, input),
+    (e) => rejectsWithoutEcho(e) && /仍在运行/.test(String(e.message)) && /勿续用运行中会话/.test(String(e.message)),
   );
+  assert.equal(input.sessionID, "ses_planFull", "运行中拒绝：入参未被改写（防静默分叉，仅警示）");
 });
 
-test("B层增强：已完成子会话（idle>=busy）→ 纠正附「可安全续用」", async () => {
+test("T01：前缀 + 已完成（idle>=busy）→ 就地改写放行（A4，liveNote 路径弃用）", async () => {
   const leader = "ses_leadG14"; const m = await setupLeader(leader);
   m.ctx.session.get = async ({ sessionID }) => sessionID === FULL
     ? { time: { busy: 100, idle: 200 } } // idle>=busy → 已完成
     : { projectID: "pi1", location: { directory: DIR } };
-  await assert.rejects(
-    () => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }),
-    (e) => isCorrect(FULL)(e) && /可安全续用/.test(String(e.message)),
-  );
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
+  await callSub(m, leader, input);
+  assert.equal(input.sessionID, FULL);
 });
 
-test("B层增强：session.get 无 time（取不到存活）→ 仍纠正、不附注、不报错", async () => {
+test("T01：前缀 + session.get 异常（探不到存活）→ 改写放行不 throw（A4）", async () => {
   const leader = "ses_leadG15"; const m = await setupLeader(leader);
   m.ctx.session.get = async () => { throw new Error("session.get unavailable"); };
-  await assert.rejects(() => callSub(m, leader, { agent: "wf/planner", sessionID: "ses_planFull" }), isCorrect(FULL));
+  const input = { agent: "wf/planner", sessionID: "ses_planFull" };
+  await callSub(m, leader, input);
+  assert.equal(input.sessionID, FULL);
+});
+
+// ── T04 端到端死循环锚：截断转录不再产生回显燃料即闭环 ────────────────
+test("T01 闭环：'ses' 连续两次转录截断 → 均就地改写放行（零回显，无死循环）", async () => {
+  const leader = "ses_leadG16"; const m = await setupLeader(leader);
+  const i1 = { agent: "wf/planner", sessionID: "ses" };
+  await callSub(m, leader, i1);
+  assert.equal(i1.sessionID, FULL);
+  const i2 = { agent: "wf/planner", sessionID: "ses" };
+  await callSub(m, leader, i2);
+  assert.equal(i2.sessionID, FULL);
+  const st = stOf(leader);
+  assert.ok(st.log.filter((l) => l.cmd === "session:correct").length >= 2, "两次改写均落审计");
 });

@@ -12,8 +12,8 @@ description: >
 ## 何时使用 / 何时不用
 
 - ✅ 用：列会话、读会话消息、按前缀找 sessionID、诊断 SessionNotFoundError、跨会话取报告/诊断。
-- ❌ 不用：wf 工作流内的子会话续接——用 guidance 渲染的完整 sessionID 或
-  `sessionID="auto"`（多 lane `@Tnn`），无需查列表。
+- ❌ 不用：wf 工作流内的子会话续接——用 `sessionID="auto"`（多 lane `@Tnn`），
+  无需转录长 ID。
 
 ## 铁律
 
@@ -53,5 +53,5 @@ opencode api get /api/session/$(cat /tmp/opencode/target-ses.txt)/message
 ## 与 wf 插件的边界（M16-r45 起）
 
 - 流程内续接：`sessionID="auto"`（该角色唯一登记时）或 `sessionID="@Tnn"`
-  （多 lane 从 lanes 反查）；guidance 渲染的完整 ID 仍兼容逐字复制。
+  （多 lane 从 lanes 反查）；不确定时省略 sessionID 新建；插件对截断前缀自愈改写，勿粘贴长 ID。
 - 本 skill 仅覆盖流程外场景：手动查询、诊断、跨项目会话检查。

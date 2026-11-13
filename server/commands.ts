@@ -459,13 +459,13 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
               ...Object.values(st0.lanes ?? {}).map((v) => v?.sessionID).filter(Boolean),
             ] as string[])];
             const comp = completeSidPrefix(raw, known);
-            if (comp.kind === "ambiguous") return `❌ 子会话 ID 前缀不唯一（${(comp.candidates ?? []).join(", ")}）——请用完整 ID 或加长前缀；lane 未变更。`;
+            if (comp.kind === "ambiguous") return "❌ 前缀命中多个登记会话——改用 @Tnn 或 @wf/xx 别名区分；lane 未变更。";
             sid = comp.kind === "completed" ? (comp.sid as string) : raw;
             if (comp.kind === "completed") setNote = `｜前缀补全 ${raw} → ${sid}`;
             // 宿主存在性校验（fail-open：宿主 API 不可用时不拦截，交由续接时的归属校验兜底）
             if (typeof ctx?.session?.get === "function") {
               const sess = await ctx.session.get({ sessionID: sid }).catch(() => null);
-              if (!sess) return `❌ 子会话不存在：「${sid}」（截断/已清库？重取完整 ID 或用 @别名）；lane 未变更。`;
+              if (!sess) return `❌ 子会话不存在：「${sid}」（截断/已清库——经 session-lookup 管道重取，或 @别名续接）；lane 未变更。`;
             }
           }
         }

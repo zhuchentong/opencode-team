@@ -192,7 +192,7 @@ bun run lint     # oxlint（correctness=error，warnings 不阻塞）
 | superpowers 会话诊断 | `/wf:diagnose`：拒绝分类计数 + 阻断取证 + 磁盘对账 | ✅ 采纳 |
 | omo-slim 每角色模型路由 | README 候选表 + `/wf:ping` 查看生效模型；`options.agentModels` 未启用 | ⏳ 待选型 |
 | omo-slim 项目级自定义 | `.workflow/overrides/` 约定 | ✅ 采纳 |
-| omo-slim 续接不靠模型抄 ID + terminal-gate | roleSessions 自动登记 + guidance 渲染完整 ID（A 层 r40）+ subagent 截断自愈守卫 + 存活附注（B 层 r41） | ✅ 采纳（父归属宿主原生已校验，不借 adoption/lease/job-board） |
+| omo-slim 续接不靠模型抄 ID + terminal-gate | roleSessions 自动登记 + guidance 渲染续用指引零回显（A 层 r40，回显燃料已拆——截断前缀服务端就地自愈改写 + 别名/省略新建指路）+ subagent 续接守卫 + 存活探针（B 层 r41） | ✅ 采纳（父归属宿主原生已校验，不借 adoption/lease/job-board） |
 | znlgis/my-opencode-deepseek-config（omo-slim 同源纯配置实践） | 两级审查+升级触发+线索确认（roles + guidance）；角色拒绝契约；guidance 易变区纪律（易变殿后）；docs/UPGRADE.md 升级核对流程 | ✅ 采纳（M16-r42）；thinking tiers / skill 名册预算 / 权限基线属宿主层，不引入 |
 | 同上·thinking tiers（静态模型层档位） | M16-r43 动态档位跟随：会话所选基座 + TIER_MAP 派生项目级 agents（variants body 直注 reasoning_effort） | ✅ 变体采纳（5h 上限切模型场景驱动；档位词汇同源 off/low/high/max；非 DeepSeek 静态钉死） |
 | Council 共识 / marketplace / multiplexer | — | ❌ 不照搬（场景/宿主不符） |

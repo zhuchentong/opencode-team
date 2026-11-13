@@ -48,9 +48,10 @@ export function registerGuardHook(ctx: any, deps: any) {
       // 无 sessionID/agent 无法按会话管辖；tool hook 对 tool=="shell" 携带 input.input.command + 会话身份）
       const toolName = String(input?.tool);
       // ── M16-r41 B 层：subagent 续接自愈守卫（leader 专属；必须置于 edit/shell 过滤之前）──
-      // 根因：leader 凭记忆复述长 ses_ ID→截断→宿主拒→反复重试→冷启动。A 层已自动登记 roleSessions
-      //   并在 guidance 渲染完整 ID；此处在续接入口对「截断/非法」的 sessionID 一次性纠正（附完整 ID）。
-      // 收窄（多 lane 安全）：仅「形状非法 OR 登记 ID 的真前缀」才纠正；全形状非前缀的不符→放行交宿主归属校验。
+      // 根因：转录/复述长 ses_ ID 本身即失真源，回显登记 ID 又会诱导再转录→死循环。A 层已自动登记
+      //   roleSessions；此处（fix-sid-truncation-echo-loop T01）对截断前缀**就地改写自愈**（零回显），
+      //   对非法形状/近似错位拒绝并指路别名或省略新建（同样零回显）。
+      // 收窄（多 lane 安全）：全形状合法且非前缀非近似→不干预，放行交宿主归属校验。
       if (toolName === "subagent" || toolName === "task") {
         // probe 1：subagent 首次接入 hook，一次性取证「触发 + 入参形状」（best-effort，不影响守卫）
         if (!subagentProbed) {
@@ -140,22 +141,26 @@ export function registerGuardHook(ctx: any, deps: any) {
         const isPrefix = tracked.startsWith(passed); // passed≠tracked 且非空 → startsWith 即真前缀
         const fuzzy = shapeOk && !isPrefix && isNearTruncation(passed, tracked); // M16-r45：中间/尾部错位复述
         if (shapeOk && !isPrefix && !fuzzy) return; // 全形状非前缀非近似→宿主归属校验（多 lane/幻觉兜底）
-        // 形状非法 OR 真前缀截断 OR 近似截断 → 一次性纠正：附完整 ID（GATE_ERR 标记确保穿透 fail-open，S1）
+        // 形状非法 OR 真前缀截断 OR 近似截断 → 前缀自愈改写分支（GATE_ERR 标记确保穿透 fail-open，S1）。
+        // T01：拒绝文案不回显登记 ID（拆「回显→再转录→死循环」燃料）；审计 detail 含 ID 合规（wf.db 不进上下文）。
         logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: fuzzy ? "corrected-fuzzy" : "corrected" });
         try { await save(st); } catch { /* 取证 best-effort，不影响纠正 */ }
-        // probe 4 增强：session.get 返回 time.busy/idle（无 parentID，归属由宿主原生校验）→ 纠正时附存活状态，
-        //   防「续用运行中子会话→静默分叉」。best-effort：取不到 time 则不附注（不影响纠正本身）。
-        let liveNote = "";
-        try {
-          const child = await ctx.session.get({ sessionID: tracked });
-          const busy = Number(child?.time?.busy ?? 0); const idle = Number(child?.time?.idle ?? 0);
-          if (busy > 0 && idle > 0) liveNote = busy > idle
-            ? " ⚠ 该子会话仍在运行：请等其完成或直接新建，勿续用运行中会话（防静默分叉）。"
-            : " 该子会话已完成，可安全续用。";
-        } catch { /* 存活取证 best-effort */ }
-        throw new Error(
-          `${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」截断/非法${fuzzy ? "（近似匹配命中登记会话）" : ""}。请改用别名续接：${SID_ALIAS_USAGE}，或逐字改用完整 ID 重试一次：sessionID=${tracked}（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。${liveNote}`
-        );
+        if (isPrefix) {
+          // 存活探针（session.get time.busy/idle）：明确运行中→throw 警示（防静默分叉，不静默改写）；
+          //   已完成/探不到 time/异常→改写放行（best-effort 同旧 liveNote 判据）。
+          let running = false;
+          try {
+            const child = await ctx.session.get({ sessionID: tracked });
+            const busy = Number(child?.time?.busy ?? 0); const idle = Number(child?.time?.idle ?? 0);
+            if (busy > 0 && idle > 0) running = busy > idle;
+          } catch { /* 存活取证 best-effort */ }
+          if (running) throw new Error(`${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」命中登记会话前缀，但该子会话仍在运行：勿续用运行中会话（防静默分叉）。请待其完成后再续用，或省略 sessionID 新建（勿凭记忆复述长 ID）。`);
+          args.sessionID = tracked; // 前缀自愈：就地改写（仿别名分支），零回显放行
+          return;
+        }
+        // fuzzy（形状合法非前缀近似）→ 仍拒绝（防指错会话，基线批准仅 isPrefix 改写）；非法形状非前缀→拒绝。均不回显登记 ID。
+        if (fuzzy) throw new Error(`${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」近似匹配登记会话但非前缀（疑似转录失真，防指错会话不自动改写）。请改用别名续接：${SID_ALIAS_USAGE}，或省略 sessionID 新建（勿凭记忆复述；仅续用已完成的子会话，续用失败立即新建）。`);
+        throw new Error(`${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」形状非法且非登记会话前缀。请改用别名续接：${SID_ALIAS_USAGE}，或省略 sessionID 新建（勿凭记忆复述长 ID）。`);
       }
       // ── M16-r44：方案确认交互观察（L2 硬关卡记账）────────────────────
       // leader 在确认窗口（review/test_design）调用宿主 question 工具、且选项含锚定批准标签

@@ -169,12 +169,12 @@ test("r45-A：auto + lanes 非空 → loud-fail 指路 @Tnn", async () => {
   );
 });
 
-test("r45-B：尾部单字符错位（形状合法非前缀）→ 近似截断纠正附完整 ID，审计 corrected-fuzzy", async () => {
+test("T03/r45-B：尾部单字符错位（形状合法非前缀）→ 拒绝但零回显，审计 corrected-fuzzy 保留", async () => {
   const leader = "ses_r45b1"; const m = await setupLeader(leader);
   const bad = `${FULL.slice(0, -1)}X`; // 尾字符替换：公共前缀 14/15≥9、距离 1
   await assert.rejects(
     () => callSub(m, leader, { agent: "wf/planner", sessionID: bad }),
-    (e) => { const msg = String(e?.message ?? e); return msg.includes(FULL) && /近似匹配/.test(msg); },
+    (e) => { const msg = String(e?.message ?? e); return msg.includes("[wf-workflow]") && !msg.includes(FULL) && /近似/.test(msg); },
   );
   const st = stOf(leader);
   assert.ok((st.log ?? []).some((e) => e.cmd === "session:correct" && e.note === "corrected-fuzzy"));
@@ -216,6 +216,22 @@ test("r45-C：lane set auto（无目标角色语义）→ 解析失败拒绝", a
   assert.match(String(out), /别名解析失败/);
 });
 
+test("T03/r45-C：lane set 前缀命中多个登记会话 → 拒绝且零回显（指路 @别名）", async () => {
+  const leader = "ses_r45c5"; const m = await setupLeader(leader);
+  await tool(m).execute({ kind: "plan", content: "# plan T02" }, { sessionID: "ses_planFull456", agent: "wf/tester" }); // 第二登记，与 FULL 共享 "ses_plan" 前缀
+  const out = String(await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: "set T01 ses_plan" } }));
+  assert.match(out, /前缀命中多个登记会话/);
+  assert.match(out, /别名区分/);
+  assert.ok(!out.includes(FULL) && !out.includes("ses_planFull456"), "不回显 candidates 登记 ID（wf:lane 返回值直进模型上下文）");
+});
+
+test("T03/r45-C：lane set 未知 ID 拒绝文案指路 session-lookup 管道（旧「重取完整 ID」措辞已拆）", async () => {
+  const leader = "ses_r45c6"; const m = await setupLeader(leader);
+  const out = String(await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: "set T01 ses_ghost" } }));
+  assert.match(out, /session-lookup 管道/);
+  assert.ok(!out.includes("重取完整"), "转录诱导措辞已拆");
+});
+
 // ── skills.ts：托管同步（临时目录）──────────────────────────────────
 const HOST = `${ROOT}/skills-host`;
 test("r45-D：syncSkills create → frontmatter 居首 + 末行标记；二次 skip", () => {
@@ -254,17 +270,22 @@ test("r45-D：registerSkillSync 默认开启；syncSkills:false 显式关闭", (
   assert.ok(!fs.existsSync(`${d2}/session-lookup/SKILL.md`), "显式关闭不得写盘");
 });
 
-// ── 内容锚：别名语法/路由行/唯一性纪律（防文案漂移丢行）─────────────
-test("r45-E：内容锚——skill 管道纪律；leader 别名契约与 Session 查询路由行", () => {
+// ── 内容锚：别名语法/路由行/唯一性纪律（防文案漂移丢行）+ T03 燃料清除 ────
+test("r45-E：内容锚——skill 管道纪律；leader 别名契约与 Session 查询路由行；托管文案零回显燃料", () => {
   const skill = renderSkill("session-lookup");
   assert.match(skill, /不唯一，请加长/);
   assert.match(skill, /xargs -r/);
   assert.match(skill, /与 wf 插件的边界/);
   assert.match(skill, /sessionID="auto"/);
+  assert.ok(!skill.includes("仍兼容逐字复制"), "SKILL.md 渲染 guidance 完整 ID 的引导已拆（:51 管道纪律除外）");
   const leader = renderRole("leader");
   assert.match(leader, /Session 查询路由/);
   assert.match(leader, /session-lookup/);
   assert.match(leader, /sessionID="auto"/);
   assert.match(leader, /@Tnn/);
+  assert.ok(!leader.includes("逐字复制"), "leader.md 逐字复制引导已拆");
+  assert.ok(!leader.includes("完整 sessionID") && !leader.includes("完整 ID"), "leader.md 完整 ID 回显引导已拆");
   assert.ok(SID_ALIAS_USAGE.includes("auto"), "别名用法常量同源");
+  assert.ok(SID_ALIAS_USAGE.includes(`sessionID="auto"`) && SID_ALIAS_USAGE.includes("@Tnn"), "常量保留三锚子串（C1）");
+  assert.ok(SID_ALIAS_USAGE.includes("无 lane 登记"), "常量新语义：auto 默认单会话形态即生效");
 });

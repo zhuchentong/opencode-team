@@ -56,7 +56,8 @@ export interface WfState {
   prev?: { slug?: string; phase?: string | null; at?: string };
   lanes?: Record<string, { sessionID?: string; worktree?: string | null; at?: string }>; // M16-r39 T06：worktree 可 null（lane set 无 worktree 时写 null，形状同源）
   // M16-r40：角色→最新子会话自动登记（agent→{sessionID,at}）。子代理调 wf_write_artifact /
-  //   edit 时插件自动捕获其 sessionID，guidance 重委派点渲染完整 ID 供 leader 逐字续用——
+  //   edit 时插件自动捕获其 sessionID；guidance 重委派点按登记存在性渲染续用指引（指路别名/省略新建，
+  //   不回显 ID——回显即转录燃料，fix-sid-truncation-echo-loop T02），守卫对截断前缀就地自愈改写（T01）——
   //   修「leader 凭记忆复述长随机 ses_ ID 被截断→重试→冷启动」。仅服务默认单会话形态；多 builder 并行走 lanes。
   roleSessions?: Record<string, { sessionID: string; at: string }>;
   // M16-r43：档位跟随上次记录的会话基座（Session.Info.model 的 providerID/id）——切模型检测依据，
@@ -388,7 +389,7 @@ export function trackRoleSession(st: WfState, agent: unknown, sessionID: unknown
 // 多 lane 安全：lanes 非空即多 lane 语境 → auto 一律拒绝，强制 @Tnn 显式指定（防续错 lane 静默分叉）。
 export const SID_ALIAS_AUTO = "auto";
 // 别名用法提示（guidance/错误文案同源；leader.md 与 SKILL.md 为静态托管文件，靠测试内容锚对齐）
-export const SID_ALIAS_USAGE = `sessionID="auto"（多 lane 场景用 "@Tnn"）`;
+export const SID_ALIAS_USAGE = `sessionID="auto"（无 lane 登记时即续用该角色唯一登记会话；"@Tnn" 仅限 wf:lane 已登记的 lane 使用）`;
 
 export interface SidAliasInput {
   role?: string; // 目标角色（auto 只解析该角色自身登记，杜绝跨角色误续）

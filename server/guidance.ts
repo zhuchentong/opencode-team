@@ -49,15 +49,14 @@ function leanLine(st: WfState): string | null {
   return st.size === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
 }
 
-// ── M16-r40：会话复用可靠化——重委派点渲染自动登记的完整子会话 ID ──────────────
-// 根因：旧指引只说「续用上轮 sessionID」却不递 ID，leader 凭记忆复述长随机 ses_ 串→截断→
-//   重试→冷启动。此处把插件自动登记的完整 ID 新鲜、权威地渲染进 guidance（entry 抗 compaction），
-//   leader 逐字复制即可；无登记→不渲染（首次委派自然新建）。仅续用已完成的子会话（防静默分叉）；续用失败立即新建，勿反复重试。
+// ── M16-r40：会话复用可靠化——重委派点渲染续用指引（T02：零回显）──────────
+// 根因：旧渲染把登记 ID 新鲜递进上下文诱导转录——「转录→截断→守卫回显→再转录」死循环燃料。
+//   现仅以登记做存在性判断：有登记即指路别名/省略新建（sid 不进渲染文本）；无登记→不渲染（首次委派自然新建）。
+//   仅续用已完成的子会话（防静默分叉）；续用失败立即新建，勿反复重试。
 function reuseLine(st: WfState, agent: string): string | null {
   const sid = st.roleSessions?.[agent]?.sessionID;
-  if (!sid) return null;
-  // M16-r45：别名优先（零转录）——完整 ID 保留渲染作后备（guidance/entry 抗 compaction 语义不变）
-  return `续用 ${agent} 子会话：subagent 传 ${SID_ALIAS_USAGE} 即续用登记会话（完整 ID=${sid} 亦可逐字复制；仅续用已完成的子会话；续用失败立即新建，勿反复重试）。`;
+  if (!sid) return null; // 无登记→不渲染；sid 仅作存在性检查，不进渲染文本（防回显燃料）
+  return `续用 ${agent} 子会话：优先 subagent 传 ${SID_ALIAS_USAGE}；不确定时省略 sessionID（新建，天然免疫截断）；绝不逐字粘贴长 ID（仅续用已完成的子会话；续用失败立即新建，勿反复重试）。`;
 }
 function reuseLines(st: WfState, ...agents: string[]): string[] {
   return agents.map((a) => reuseLine(st, a)).filter((x): x is string => x !== null);

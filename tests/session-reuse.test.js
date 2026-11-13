@@ -1,9 +1,8 @@
-// M16-r40：会话复用可靠化（A 层）——角色→子会话自动登记 + guidance 重委派点渲染完整 ID。
-// 根因：旧指引只说「续用上轮 sessionID」却不递 ID，leader 凭记忆复述长随机 ses_ 串→截断→
-//   3 次重试→冷启动新建（真机实证）。修复：插件在子代理调 wf_write_artifact / edit 时自动捕获
-//   其 sessionID（已验证 API：context.sessionID/agent、hook input.sessionID/agent），记入
-//   st.roleSessions；guidance 在重委派点渲染完整 ID 供 leader 逐字复制。
-// 覆盖：trackRoleSession 纯函数 / intake 重置清空 / guidance 渲染 / 产物写入登记 /
+// M16-r40：会话复用可靠化（A 层）——角色→子会话自动登记 + guidance 重委派点渲染续用指引。
+// fix-sid-truncation-echo-loop T02 行为反转：渲染文本不再回显登记 sid 字面量（「完整 ID=」燃料已拆）——
+//   有登记仅指路别名（SID_ALIAS_USAGE）/省略新建；无登记→不渲染。
+// 根因：旧渲染把登记 ID 新鲜递到上下文诱导转录→截断→守卫回显→再转录死循环。
+// 覆盖：trackRoleSession 纯函数 / intake 重置清空 / guidance 渲染（无回显）/ 产物写入登记 /
 //   guard-hook builder 登记（非阻断阶段也登记、不干扰闸门、非 wf 不登记）/ wf:status 取证。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -83,45 +82,50 @@ test("intake 重置清 roleSessions（新任务不得复用旧任务子会话）
   assert.deepEqual(st.roleSessions, {}, "intake 重置清空角色会话登记");
 });
 
-// ── guidance：重委派点渲染完整 ID ────────────────────────────────────
+// ── guidance：重委派点渲染续用指引（T02：零回显）─────────────────────
 const rs = (agent, sid) => ({ [agent]: { sessionID: sid, at: "t" } });
 
-test("guidance daily planning：有 planner 登记 → 渲染完整 ID+逐字复制；无登记 → 不渲染", () => {
+test("T02/B1：guidance daily planning 有登记 → 指路别名+省略新建，零回显；无登记 → 不渲染", () => {
   const withSess = guidance("planning", blank({ mode: "daily", size: "M", roleSessions: rs("wf/planner", "ses_plan123") }));
-  assert.match(withSess, /ses_plan123/, "完整 sessionID 必须出现在指引");
-  assert.match(withSess, /逐字复制/, "要求逐字复制");
-  assert.match(withSess, /续用失败立即新建/, "失败立即新建，勿反复重试");
+  assert.ok(!withSess.includes("ses_plan123"), "登记 sid 字面量不得进渲染文本（防回显燃料）");
+  assert.ok(!withSess.includes("完整 ID="), "「完整 ID=」字面量已删");
+  assert.ok(!withSess.includes("逐字复制"), "「逐字复制」引导已删");
+  assert.match(withSess, /sessionID="auto"/, "指路别名（经 SID_ALIAS_USAGE 插值，B3）");
+  assert.match(withSess, /省略 sessionID/, "指路省略新建（天然免疫截断）");
+  assert.match(withSess, /勿反复重试/, "既有纪律子串保留（B3）");
   const noSess = guidance("planning", blank({ mode: "daily", size: "M" }));
-  assert.ok(!/sessionID=ses_/.test(noSess), "首次委派无登记 → 不渲染 ID");
+  assert.ok(!/续用 wf\/planner 子会话/.test(noSess), "无登记 → reuseLine 返回 null 不渲染（B2）");
   // S 级零 sub-agent：不渲染委派续用
   const s = guidance("planning", blank({ mode: "daily", size: "S", roleSessions: rs("wf/planner", "ses_plan123") }));
-  assert.ok(!/ses_plan123/.test(s), "S 级不委派，不渲染 planner 续用");
+  assert.ok(!/续用 wf\/planner 子会话/.test(s), "S 级不委派，不渲染 planner 续用");
 });
 
-test("guidance daily review r≥2：渲染 reviewer 完整 ID；r1 不渲染", () => {
+test("T02：guidance daily review r≥2 → 渲染 reviewer 续用指引（零回显）；r1 不渲染", () => {
   const r2 = guidance("review", blank({ mode: "daily", size: "M", rounds: { plan_review: 2, build_review: 0, test_fix: 0 }, roleSessions: rs("wf/planner-reviewer", "ses_rev456") }));
-  assert.match(r2, /ses_rev456/);
+  assert.match(r2, /续用 wf\/planner-reviewer 子会话/);
+  assert.ok(!r2.includes("ses_rev456"), "零回显");
   const r1 = guidance("review", blank({ mode: "daily", size: "M", rounds: { plan_review: 1, build_review: 0, test_fix: 0 }, roleSessions: rs("wf/planner-reviewer", "ses_rev456") }));
-  assert.ok(!/ses_rev456/.test(r1), "r1 非增量复审，不渲染续用");
+  assert.ok(!/续用 wf\/planner-reviewer 子会话/.test(r1), "r1 非增量复审，不渲染续用");
 });
 
-test("guidance daily building：builder 登记 → 渲染完整 ID（返工续用）", () => {
+test("T02：guidance daily building 返工 → 渲染 builder 续用指引（零回显）", () => {
   const b = guidance("building", blank({ mode: "daily", size: "M", rounds: { plan_review: 1, build_review: 0, test_fix: 1 }, roleSessions: rs("wf/builder", "ses_build789") }));
-  assert.match(b, /ses_build789/);
+  assert.match(b, /续用 wf\/builder 子会话/);
+  assert.ok(!b.includes("ses_build789"), "零回显");
 });
 
-test("guidance full：planning/review r2/test_design/build_review/fixing 各重委派点渲染对应 ID", () => {
+test("T02：guidance full 各重委派点渲染续用指引（零回显）", () => {
   const p = guidance("planning", blank({ mode: "full", roleSessions: rs("wf/planner", "ses_fp1") }));
-  assert.match(p, /ses_fp1/);
+  assert.match(p, /续用 wf\/planner 子会话/); assert.ok(!p.includes("ses_fp1"), "零回显");
   const rv = guidance("review", blank({ mode: "full", rounds: { plan_review: 2, build_review: 0, test_fix: 0 }, roleSessions: rs("wf/planner-reviewer", "ses_fr2") }));
-  assert.match(rv, /ses_fr2/);
+  assert.match(rv, /续用 wf\/planner-reviewer 子会话/); assert.ok(!rv.includes("ses_fr2"), "零回显");
   const td = guidance("test_design", blank({ mode: "full", roleSessions: rs("wf/tester", "ses_ft3") }));
-  assert.match(td, /ses_ft3/);
+  assert.match(td, /续用 wf\/tester 子会话/); assert.ok(!td.includes("ses_ft3"), "零回显");
   const br = guidance("build_review", blank({ mode: "full", roleSessions: { ...rs("wf/builder", "ses_fb4"), ...rs("wf/builder-reviewer", "ses_fbr5") } }));
-  assert.match(br, /ses_fb4/);
-  assert.match(br, /ses_fbr5/);
+  assert.match(br, /续用 wf\/builder 子会话/); assert.match(br, /续用 wf\/builder-reviewer 子会话/);
+  assert.ok(!br.includes("ses_fb4") && !br.includes("ses_fbr5"), "零回显");
   const fx = guidance("fixing", blank({ mode: "full", rounds: { plan_review: 1, build_review: 1, test_fix: 1 }, roleSessions: rs("wf/builder", "ses_fx6") }));
-  assert.match(fx, /ses_fx6/);
+  assert.match(fx, /续用 wf\/builder 子会话/); assert.ok(!fx.includes("ses_fx6"), "零回显");
 });
 
 // ── 集成：产物写入自动登记（planner/reviewer/tester 等）────────────────
@@ -134,11 +138,12 @@ test("wf_write_artifact：wf/planner 子会话写 plan → 管辖状态自动登
   await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_plannerChild", agent: "wf/planner" });
   const st = stOf(leader);
   assert.equal(st.roleSessions["wf/planner"].sessionID, "ses_plannerChild", "产物写入自动登记子会话");
-  // 重委派点（回 planning 修订）guidance 渲染该完整 ID
+  // 重委派点（回 planning 修订）guidance 渲染续用指引——零回显（T02）
   await cmd(m, "wf:review").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: FAIL\n问题" }, { sessionID: "ses_reviewerChild", agent: "wf/planner-reviewer" });
   const back = await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
-  assert.match(back, /ses_plannerChild/, "回 planning 的 guidance 渲染 planner 完整 ID");
+  assert.ok(!String(back).includes("ses_plannerChild"), "回 planning 的 guidance 不得回显登记 sid");
+  assert.match(String(back), /sessionID="auto"/, "指路别名续用");
   assert.equal(stOf(leader).roleSessions["wf/planner-reviewer"].sessionID, "ses_reviewerChild");
 });
 
@@ -173,11 +178,12 @@ test("guard-hook：wf/builder 子会话 edit（building 非阻断阶段）→ �
   // 非 wf agent（build）edit → 不登记
   await m.hook()({ tool: "edit", sessionID: "ses_buildAgent", agent: "build", input: { path: `${DIR}/src/b.ts` } }, {});
   assert.equal(stOf(leader).roleSessions?.["build"], undefined, "普通 agent 不登记");
-  // 返工指引渲染 builder 完整 ID
+  // 返工指引渲染续用指引（零回显，T02）
   await cmd(m, "wf:test").execute({ sessionID: leader, prompt: {} });
   await tool(m).execute({ kind: "test-report", content: "**结论**: FAIL\n缺陷" }, { sessionID: "ses_testerChild", agent: "wf/tester" });
   const rework = await cmd(m, "wf:fix").execute({ sessionID: leader, prompt: {} });
-  assert.match(rework, /ses_builderChild/, "daily 返工 building guidance 渲染 builder 完整 ID");
+  assert.ok(!String(rework).includes("ses_builderChild"), "daily 返工 guidance 不得回显登记 sid");
+  assert.match(String(rework), /sessionID="auto"/, "返工指路别名续用");
 });
 
 test("guard-hook：登记不干扰闸门——planning 阶段 wf/builder 越权 edit 仍被阻断，且登记照常", async () => {
@@ -194,7 +200,7 @@ test("guard-hook：登记不干扰闸门——planning 阶段 wf/builder 越权 
 });
 
 // ── wf:status 取证 ──────────────────────────────────────────────────
-test("wf:status：输出含 roleSessions 行（真机续用取证）", async () => {
+test("wf:status：输出含 roleSessions 行（真机续用取证；诊断命令非 guidance 渲染，登记 ID 显示保留）", async () => {
   const m = mkCtx(); await plugin.setup(m.ctx);
   const leader = "ses_lead5";
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] status" } });
