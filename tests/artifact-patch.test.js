@@ -9,17 +9,7 @@ import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
 import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 
-// 虚拟模块占位包自举（与 integration.test.js 同源）
-const mockDir = `${import.meta.dirname}/../node_modules/@opencode/plugin`;
-if (!fs.existsSync(mockDir)) {
-  fs.mkdirSync(mockDir, { recursive: true });
-  fs.writeFileSync(`${mockDir}/package.json`, JSON.stringify({
-    name: "@opencode/plugin", version: "0.0.0-local-mock", private: true, type: "module",
-    exports: { "./tui": "./mock-tui.js", "./rpc": "./mock-rpc.js" },
-  }));
-  fs.writeFileSync(`${mockDir}/mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
-  fs.writeFileSync(`${mockDir}/mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
-}
+// 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
 
 const DIR = "/tmp/opencode/wf-patch";
 const DB = `${DIR}/.workflow/wf.db`;
