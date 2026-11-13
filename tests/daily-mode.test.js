@@ -12,6 +12,7 @@ import {
   FLOWS, FLOWS_DAILY, GATES_DAILY, NEXT_DAILY, evaluateTransition, flowFor, isDaily,
 } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
+import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
 const DIR = "/tmp/opencode/wf-daily";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -40,7 +41,7 @@ const stOf = (sid = "ses_d") => {
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
   finally { try { d.close(); } catch { } }
 };
-const blank = (over = {}) => ({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
+const blank = (over = {}) => withVerdicts({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
 
@@ -182,11 +183,11 @@ test("r34 全链路 M：plan-review verdict 关卡 + FAIL→wf:fix 返工", asyn
   assert.match(rej, /验证关卡未过/);
   // reviewer 写 plan-review FAIL → 仍拒
   await tool(m).execute({ kind: "plan-review", content: "**结论**: FAIL\n问题清单" }, { sessionID: sid, agent: "wf/planner-reviewer" });
-  assert.equal(stOf(sid).planReviewVerdict, "FAIL");
+  assert.equal(stOf(sid).verdicts?.planReview, "FAIL"); // R3 T3.1 子步 B
   assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /验证关卡未过/);
   // 修订后 PASS → 放行
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
-  assert.equal(stOf(sid).planReviewVerdict, "PASS");
+  assert.equal(stOf(sid).verdicts?.planReview, "PASS"); // R3 T3.1 子步 B
   assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /building/);
   await cmd(m, "wf:test").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "test-report", content: "**结论**: FAIL\n缺陷" }, { sessionID: sid, agent: "wf/tester" });

@@ -5,7 +5,7 @@
 //   T2.2 State Object：NEXT/NEXT_DAILY 五处阶段映射中的 next/blocking 并入 PhaseDef 单点注册，
 //        NEXT/NEXT_DAILY 降为派生导出（值逐字节不变，tests/daily-mode/brief-level 锚零改动）；
 //   T2.3 Specification：GATES 表值=Gate 对象（id/isSatisfiedBy/explain 判定与解释分离），
-//        拒绝文案迁 shared/prompts/gates.ts（字节级），gate 判定快照写 st.gateStatus，
+//        拒绝文案迁 shared/prompts/gates.ts（字节级），gate 判定快照写 st.verdicts.gateStatus（R3 T3.1 分组），
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
 import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
@@ -71,19 +71,19 @@ export const NEXT_DAILY: Record<string, string> = fromPhases(PHASES_DAILY);
 export const GATES: Record<string, Gate> = {
   "wf:test-design": {
     id: "dual-channel",
-    isSatisfiedBy: (st) => !!st.testPlanWritten,
+    isSatisfiedBy: (st) => !!st.verdicts?.testPlanWritten, // R3 T3.1 子步 B：verdicts 子对象读点
     explain: () => GATE_DUAL_CHANNEL_MSG,
   },
   // M16-r44：方案确认关卡（full 模式；daily 用 GATES_DAILY["wf:build"] 同源校验）
   "wf:build": {
     id: "plan-confirm",
-    isSatisfiedBy: (st) => !!st.planConfirmedAt,
+    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt,
     explain: () => CONFIRM_GATE_MSG,
   },
   "wf:done": {
     id: "acceptance",
-    isSatisfiedBy: (st) => st.testReportVerdict === "PASS",
-    explain: (st) => gateAcceptanceMsg(st.testReportVerdict),
+    isSatisfiedBy: (st) => st.verdicts?.testReport === "PASS",
+    explain: (st) => gateAcceptanceMsg(st.verdicts?.testReport),
   },
 };
 
@@ -108,8 +108,8 @@ export const FLOWS_DAILY: Record<string, FlowDef> = {
 export const GATES_DAILY: Record<string, Gate> = {
   "wf:build": {
     id: "daily-build",
-    isSatisfiedBy: (st) => !!st.planConfirmedAt && (tierOf(st.size) === "S" || st.planReviewVerdict === "PASS"),
-    explain: (st) => (!st.planConfirmedAt ? CONFIRM_GATE_MSG : gateDailyVerifyMsg(st.planReviewVerdict)),
+    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt && (tierOf(st.size) === "S" || st.verdicts?.planReview === "PASS"), // R3 T3.1 子步 B
+    explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG : gateDailyVerifyMsg(st.verdicts?.planReview)),
   },
   "wf:done": GATES["wf:done"],
 };
@@ -165,11 +165,11 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
   }
 
   // M5：进阶关卡（在轮次计数之前拒绝，不消耗循环额度）
-  // R2 T2.3：Gate 判定+快照记账（gateStatus 覆写=最近一次判定；levelFor 结构化输入）
+  // R2 T2.3：Gate 判定+快照记账（verdicts.gateStatus 覆写=最近一次判定；levelFor 结构化输入）
   const gate = p.gates[cmd];
   if (gate) {
     const ok = gate.isSatisfiedBy(st);
-    st.gateStatus = { id: gate.id, ok, at };
+    st.verdicts = { ...st.verdicts, gateStatus: { id: gate.id, ok, at } }; // R3 T3.1 子步 B：快照写点入 verdicts
     if (!ok) return { ok: false, note: REJECT_NOTES.GATE_REJECTED, msg: gate.explain(st), gate: gate.id };
   }
 
@@ -204,11 +204,8 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       st.artifacts = {};
       st.lanes = {};
       st.roleSessions = {}; // M16-r40：新任务不得复用旧任务的子会话
-      delete st.testPlanWritten;
-      delete st.testReportVerdict;
-      delete st.planReviewVerdict; // M16-r34：新任务清验证结论
-      delete st.planConfirmedAt; // M16-r44：新任务清方案确认记账
-      delete st.gateStatus; // R2 T2.3：关卡快照跨任务不残留
+      // R3 T3.1 子步 B：verdicts 家族整组重置（子对象内字段=组全集，覆写空组即逐字等价旧 5 行 delete）
+      st.verdicts = {};
       delete st.doneGit; // done-git T01：新任务不得残留旧交付提示
       delete st.selfMod; // selfmod-guard T01：自改记账按新任务目录重算
       // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
@@ -232,7 +229,7 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
   }
 
   // M16-r44：方案确认关卡——重开规划（wf:plan）即作废旧确认，wf:build 关卡要求重新交互确认
-  if (cmd === "wf:plan") delete st.planConfirmedAt;
+  if (cmd === "wf:plan") delete st.verdicts?.confirmedAt; // R3 T3.1 子步 B：确认作废改子对象字段
 
   return { ok: true };
 }

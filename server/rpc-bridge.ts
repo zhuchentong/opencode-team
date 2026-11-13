@@ -39,13 +39,13 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
             slug: st.slug ?? "",
             phase: st.phase ?? null,
             rounds: st.rounds ?? {},
-            testPlanWritten: !!st.testPlanWritten,
-            testReportVerdict: st.testReportVerdict ?? null,
+            testPlanWritten: !!st.verdicts?.testPlanWritten, // R3 T3.1 子步 B：投影层吸收形状差，wire 形状不变
+            testReportVerdict: st.verdicts?.testReport ?? null,
             // M16-r35：侧边栏模式感知三字段（存量任务为 null → TUI 按 full 旧视图渲染）
             mode: st.mode ?? null,
             size: st.size ?? null,
-            planReviewVerdict: st.planReviewVerdict ?? null,
-            planConfirmedAt: st.planConfirmedAt ?? null, // M16-r44：方案确认记账
+            planReviewVerdict: st.verdicts?.planReview ?? null,
+            planConfirmedAt: st.verdicts?.confirmedAt ?? null, // M16-r44：方案确认记账
             // tui-sidebar-elapsed T02（plan §3.3）：墙钟计时 4 字段（存量任务 null → TUI 降级 ·）
             // R3 T3.1 子步 A：改读 st.timing.*（wire schema 字段名与形状零变化——投影层吸收形状差）
             startedAt: st.timing?.startedAt ?? null,

@@ -65,7 +65,7 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   }
 
   // 3) 关卡记账
-  out.push(`  关卡：testPlan=${st.testPlanWritten ? "✅ 已产出" : "❌ 未产出"}  testReport=${st.testReportVerdict ?? "未产出"}`);
+  out.push(`  关卡：testPlan=${st.verdicts?.testPlanWritten ? "✅ 已产出" : "❌ 未产出"}  testReport=${st.verdicts?.testReport ?? "未产出"}`); // R3 T3.1 子步 B
 
   // 4) 产物对账（state 记账 vs 磁盘实际）
   const known = new Set(Object.values(KIND_FILES).map((fn) => fn(st)));

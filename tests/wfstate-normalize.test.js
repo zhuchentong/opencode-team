@@ -56,3 +56,52 @@ test("normalize 防御：null/非对象原样返回不抛", () => {
   assert.equal(normalizeState(undefined), undefined);
   assert.equal(normalizeState("x"), "x");
 });
+
+// ── 子步 B：verdicts 家族（5 字段，Verdict/plan 前缀剥除）─────────────────────
+test("normalize verdicts：旧平铺 5 字段搬入子对象并剥前缀（planReviewVerdict→planReview 等）", () => {
+  const st = {
+    sessionID: "ses_v", slug: "t", phase: "review",
+    planReviewVerdict: "PASS",
+    testReportVerdict: "FAIL",
+    testPlanWritten: true,
+    planConfirmedAt: "2026-11-13T00:00:00.000Z",
+    gateStatus: { id: "daily-build", ok: false, at: "2026-11-13T00:01:00.000Z" },
+  };
+  const out = normalizeState(st);
+  assert.deepEqual(out.verdicts, {
+    planReview: "PASS",
+    testReport: "FAIL",
+    testPlanWritten: true,
+    confirmedAt: "2026-11-13T00:00:00.000Z",
+    gateStatus: { id: "daily-build", ok: false, at: "2026-11-13T00:01:00.000Z" },
+  });
+  for (const k of ["planReviewVerdict", "testReportVerdict", "testPlanWritten", "planConfirmedAt", "gateStatus"]) {
+    assert.ok(!(k in out), `顶层 ${k} 应已 delete`);
+  }
+});
+
+test("normalize verdicts 幂等 + 混合形状收敛", () => {
+  const st = { verdicts: { planReview: "PASS" }, testReportVerdict: "PASS", planConfirmedAt: "x" };
+  const out = normalizeState(st);
+  assert.deepEqual(out.verdicts, { planReview: "PASS", testReport: "PASS", confirmedAt: "x" });
+  const snap1 = JSON.stringify(out);
+  assert.equal(snap1, JSON.stringify(normalizeState(out)), "幂等");
+});
+
+test("normalize A+B 混合：timing 与 verdicts 同时搬迁（旧最全平铺快照一次收敛）", () => {
+  const legacy = JSON.parse(JSON.stringify({
+    sessionID: "ses_full", slug: "r2-task", phase: "testing",
+    startedAt: "2026-11-12T10:00:00.000Z", phaseEnteredAt: "2026-11-12T11:00:00.000Z",
+    phaseDurations: { intake: 60 }, finishedAt: undefined,
+    planReviewVerdict: "PASS", testReportVerdict: "PASS", testPlanWritten: true, planConfirmedAt: "2026-11-12T10:30:00.000Z",
+    gateStatus: { id: "acceptance", ok: true, at: "2026-11-12T11:00:00.000Z" },
+  }));
+  const out = normalizeState(legacy);
+  assert.deepEqual(out.timing, { startedAt: "2026-11-12T10:00:00.000Z", phaseEnteredAt: "2026-11-12T11:00:00.000Z", phaseDurations: { intake: 60 } });
+  assert.deepEqual(out.verdicts, {
+    planReview: "PASS", testReport: "PASS", testPlanWritten: true,
+    confirmedAt: "2026-11-12T10:30:00.000Z",
+    gateStatus: { id: "acceptance", ok: true, at: "2026-11-12T11:00:00.000Z" },
+  });
+  assert.equal(Object.keys(out).filter((k) => Object.keys({ planReviewVerdict: 1, testReportVerdict: 1, testPlanWritten: 1, planConfirmedAt: 1, gateStatus: 1, startedAt: 1, phaseEnteredAt: 1, phaseDurations: 1, finishedAt: 1 }).includes(k)).length, 0, "顶层无任何旧平铺键残留");
+});

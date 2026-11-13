@@ -79,7 +79,7 @@ test("M16-r47 register：原生落盘 plan-review → 注册记账 verdict/artif
   assert.match(w.content, /已注册/, "register 回执应为「已注册」");
   assert.match(w.content, /plan-review-r1\.md/);
   const st = stOf(sid);
-  assert.equal(st.planReviewVerdict, "PASS", "verdict 应从盘上全文解析");
+  assert.equal(st.verdicts?.planReview, "PASS", "verdict 应从盘上全文解析");
   assert.equal(st.artifacts["plan-review-r1.md"].bytes, fs.statSync(fileOf("register-review", "plan-review-r1.md")).size);
   const last = st.log.filter((e) => e.cmd === "tool:wf_write_artifact").at(-1);
   assert.equal(String(last.note), "plan-review-r1.md mode=register", "审计打 mode=register");
@@ -115,7 +115,7 @@ test("M16-r47 register：test-report 注册 PASS → wf:done 关卡放行（与 
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   nativeWrite("register-done", "test-plan.md", "# 用例\n");
   await tool(m).execute({ kind: "test-plan" }, { sessionID: sid, agent: "wf/tester" });
-  assert.equal(stOf(sid).testPlanWritten, true, "test-plan 注册置旗标");
+  assert.equal(stOf(sid).verdicts?.testPlanWritten, true, "test-plan 注册置旗标");
   await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} });
   await confirm(m, sid);
   await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
@@ -124,7 +124,7 @@ test("M16-r47 register：test-report 注册 PASS → wf:done 关卡放行（与 
   await cmd(m, "wf:test").execute({ sessionID: sid, prompt: {} });
   nativeWrite("register-done", "test-report.md", "**结论**: PASS\n\n全部用例绿。\n");
   const w = await tool(m).execute({ kind: "test-report" }, { sessionID: sid, agent: "wf/tester" });
-  assert.equal(stOf(sid).testReportVerdict, "PASS");
+  assert.equal(stOf(sid).verdicts?.testReport, "PASS");
   assert.match(w.content, /验收 PASS/, "verdict 指路基于盘上解析");
   const ok = await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} });
   assert.match(ok, /【wf 工作流｜done】/);
@@ -143,16 +143,16 @@ test("M16-r47 register：plan 幂等守卫——bytes 未变重放 no-op 不清�
   nativeWrite("register-plan", "test-plan.md", "# 用例\n");
   await tool(m).execute({ kind: "test-plan" }, { sessionID: sid, agent: "wf/tester" });
   await confirm(m, sid);
-  assert.equal(stOf(sid).planReviewVerdict, "PASS");
-  assert.equal(stOf(sid).planConfirmedAt !== undefined, true);
+  assert.equal(stOf(sid).verdicts?.planReview, "PASS");
+  assert.equal(stOf(sid).verdicts?.confirmedAt !== undefined, true);
   // 误重放 register(kind=plan)：盘上 bytes 与记账一致 → no-op，review 账不清
   const before = stOf(sid);
   const noop = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(noop.content, /已注册且内容未变化/);
   const after = stOf(sid);
-  assert.equal(after.planReviewVerdict, "PASS", "no-op 不得清 review 结论");
-  assert.equal(after.testPlanWritten, true, "no-op 不得清 test-plan 旗标");
-  assert.equal(after.planConfirmedAt, before.planConfirmedAt, "no-op 不得清方案确认");
+  assert.equal(after.verdicts?.planReview, "PASS", "no-op 不得清 review 结论");
+  assert.equal(after.verdicts?.testPlanWritten, true, "no-op 不得清 test-plan 旗标");
+  assert.equal(after.verdicts?.confirmedAt, before.verdicts?.confirmedAt, "no-op 不得清方案确认");
   assert.equal(after.log.filter((e) => e.cmd === "tool:wf_write_artifact").length,
     before.log.filter((e) => e.cmd === "tool:wf_write_artifact").length, "no-op 不追加审计");
   // 原生 edit 修订（bytes 变化）→ 注册清账（镜像 plan-invalidate 语义）
@@ -160,9 +160,9 @@ test("M16-r47 register：plan 幂等守卫——bytes 未变重放 no-op 不清�
   const rev = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(rev.content, /已注册/);
   const st2 = stOf(sid);
-  assert.equal(st2.planReviewVerdict, undefined, "修订注册须清 review 结论");
-  assert.equal(st2.testPlanWritten, undefined, "修订注册须清 test-plan 旗标");
-  assert.equal(st2.planConfirmedAt, undefined, "修订注册须清方案确认");
+  assert.equal(st2.verdicts?.planReview, undefined, "修订注册须清 review 结论");
+  assert.equal(st2.verdicts?.testPlanWritten, undefined, "修订注册须清 test-plan 旗标");
+  assert.equal(st2.verdicts?.confirmedAt, undefined, "修订注册须清方案确认");
   assert.match(rev.content, /plan 已修订/, "清账指路保留");
   // 再重放 → 又 no-op（记账 bytes 已同步为 v2）
   const noop2 = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });

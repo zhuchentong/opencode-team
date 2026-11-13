@@ -314,10 +314,10 @@ export function briefForTransition(st: WfState, limits: Limits = LIMITS): string
   const r: Record<string, number> = st.rounds ?? {};
   // L3 后缀仅在对应字段非空时追加（plan §3.1）
   const suffix = [
-    st.planReviewVerdict ? `｜planReview=${st.planReviewVerdict}` : "",
-    st.testReportVerdict ? `｜test=${st.testReportVerdict}` : "",
-    st.planConfirmedAt ? "｜确认=✅" : "",
-    st.testPlanWritten ? "｜testPlan=✅" : "",
+    st.verdicts?.planReview ? `｜planReview=${st.verdicts.planReview}` : "", // R3 T3.1 子步 B
+    st.verdicts?.testReport ? `｜test=${st.verdicts.testReport}` : "",
+    st.verdicts?.confirmedAt ? "｜确认=✅" : "",
+    st.verdicts?.testPlanWritten ? "｜testPlan=✅" : "",
   ].join("");
   return [
     `【wf 工作流｜${st.phase}·${modeLabel}·${st.size ?? "M"}】slug=${st.slug || "(未定)"}`,

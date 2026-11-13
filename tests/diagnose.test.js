@@ -40,7 +40,7 @@ test("diagnoseReport：拒绝分类计数 + 阻断取证 + 上限告警 + 关卡
     slug: "demo", phase: "review", updatedAt: "2026-11-10T00:00:00Z",
     rounds: { plan_review: 3, build_review: 0, test_fix: 0 },
     artifacts: { "plan.md": { at: "t", bytes: 100 }, "test-plan.md": { at: "t", bytes: 50 } },
-    testPlanWritten: false, testReportVerdict: null,
+    verdicts: { testPlanWritten: false, testReport: null }, // R3 T3.1 子步 B
     log: mkLog(),
   };
   const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["plan.md"] });
@@ -59,7 +59,7 @@ test("diagnoseReport：产物对账一致 + 注入异常上报", () => {
   const st = {
     slug: "demo", phase: "testing", rounds: {},
     artifacts: { "test-report.md": { at: "t", bytes: 10 } },
-    testReportVerdict: "UNKNOWN", entryErr: "entry API down",
+    verdicts: { testReport: "UNKNOWN" }, entryErr: "entry API down", // R3 T3.1 子步 B
     log: [],
   };
   const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["test-report.md"] });

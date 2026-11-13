@@ -10,8 +10,9 @@ import {
 } from "../server/lib.ts";
 import { briefForTransition, briefFor, guidance } from "../server/guidance.ts";
 import { redactIds } from "../shared/redact.ts";
+import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
-const mkSt = (over = {}) => ({
+const mkSt = (over = {}) => withVerdicts({
   sessionID: "ses_01AbCdEfGhIjKlMnOp", slug: "demo-task", phase: "planning",
   mode: "daily", size: "M", rounds: { plan_review: 1, build_review: 0, test_fix: 0 }, ...over,
 });
@@ -206,8 +207,8 @@ test("R2 T2.3：levelFor R0——gateStatus fail + 关卡命令 → warn（不�
   const st = mkSt({ phase: "building", gateStatus: { id: "daily-build", ok: false, at: "t" } });
   // 合成无 ❌ 前缀文本：R0 结构化命中（真实路径 gate.explain 恒 ❌，R0/R1 双保险同命中）
   assert.equal(levelFor("wf:build", "【合成】非拒绝形状文本", st), "warn");
-  assert.equal(levelFor("wf:test-design", "x", { ...st, gateStatus: { id: "dual-channel", ok: false, at: "t" } }), "warn");
-  assert.equal(levelFor("wf:done", "x", { ...st, gateStatus: { id: "acceptance", ok: false, at: "t" } }), "warn");
+  assert.equal(levelFor("wf:test-design", "x", { ...st, verdicts: { ...st.verdicts, gateStatus: { id: "dual-channel", ok: false, at: "t" } } }), "warn");
+  assert.equal(levelFor("wf:done", "x", { ...st, verdicts: { ...st.verdicts, gateStatus: { id: "acceptance", ok: false, at: "t" } } }), "warn");
 });
 
 test("R2 T2.3：levelFor R0 不误伤——gateStatus ok / 非关卡命令 / 无快照 → 走原规则", () => {

@@ -10,6 +10,7 @@ import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
 import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 import { GATES, evaluateTransition, flowFor } from "../server/lib.ts";
+import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
 const DIR = "/tmp/opencode/wf-plan-confirm";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -39,7 +40,7 @@ const stOf = (sid) => {
 const ask = (m, sid, agent = "workflow", labels = ["批准执行", "修改方案", "终止任务"]) =>
   m.hook()({ tool: "question", sessionID: sid, agent,
     input: { questions: [{ question: "方案确认", header: "方案确认", options: labels.map((label) => ({ label })) }] } }, {});
-const blank = (over = {}) => ({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
+const blank = (over = {}) => withVerdicts({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });
 const advance = (st, cmdName, text) => {
   const r = evaluateTransition(cmdName, st, text);
   if (r.ok) st.phase = flowFor(st, cmdName).to;
@@ -64,7 +65,7 @@ test("M16-r44 清零：wf:plan 重开规划作废确认（纯函数）", () => {
   const st = blank({ mode: "daily", phase: "review", planConfirmedAt: "2026-01-01T00:00:00Z" });
   const r = advance(st, "wf:plan", "");
   assert.equal(r.ok, true);
-  assert.equal(st.planConfirmedAt, undefined, "wf:plan 推进即作废旧确认");
+  assert.equal(st.verdicts?.confirmedAt, undefined, "wf:plan 推进即作废旧确认");
   assert.equal(st.phase, "planning");
 });
 
@@ -72,7 +73,7 @@ test("M16-r44 清零：intake ! 强制重置作废确认（纯函数）", () => 
   const st = blank({ mode: "daily", phase: "testing", slug: "old", planConfirmedAt: "2026-01-01T00:00:00Z" });
   const r = advance(st, "wf:intake", "! new-task");
   assert.equal(r.ok, true);
-  assert.equal(st.planConfirmedAt, undefined, "新任务清方案确认记账");
+  assert.equal(st.verdicts?.confirmedAt, undefined, "新任务清方案确认记账");
   assert.equal(st.slug, "new-task");
 });
 
@@ -80,7 +81,7 @@ test("M16-r44 拒绝不误清：wf:plan 非法来源被拒时确认保留", () =
   const st = blank({ mode: "daily", phase: "building", planConfirmedAt: "2026-01-01T00:00:00Z" });
   const r = advance(st, "wf:review", ""); // daily 无此边（building 来源非法）
   assert.equal(r.ok, false);
-  assert.equal(st.planConfirmedAt, "2026-01-01T00:00:00Z", "拒绝路径不清记账");
+  assert.equal(st.verdicts?.confirmedAt, "2026-01-01T00:00:00Z", "拒绝路径不清记账");
 });
 
 // ── harness：question 观察分支 ───────────────────────────────────────
@@ -96,7 +97,7 @@ test("M16-r44 观察：review 窗口批准选项 → 记账 + 审计 plan:confir
   const sid = "ses_pc1"; const m = await setupAtReview(sid);
   await ask(m, sid);
   const st = stOf(sid);
-  assert.ok(st.planConfirmedAt, "planConfirmedAt 已记账");
+  assert.ok(st.verdicts?.confirmedAt, "planConfirmedAt 已记账");
   const ev = st.log.find((l) => l.cmd === "plan:confirm");
   assert.ok(ev, "审计含 plan:confirm");
   assert.equal(ev.note, "question-observed");
@@ -105,15 +106,15 @@ test("M16-r44 观察：review 窗口批准选项 → 记账 + 审计 plan:confir
 test("M16-r44 观察：不含批准类选项（澄清问）不记账", async () => {
   const sid = "ses_pc2"; const m = await setupAtReview(sid);
   await ask(m, sid, "workflow", ["继续澄清", "跳过"]);
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "无锚定批准标签不记账");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "无锚定批准标签不记账");
   await ask(m, sid, "workflow", ["不批准执行", "终止任务"]); // 锚定：不批准 ≠ 批准
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "「不批准」不误记账");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "「不批准」不误记账");
 });
 
 test("M16-r44 观察：approve 标签同样记账（英文锚定）", async () => {
   const sid = "ses_pc3"; const m = await setupAtReview(sid);
   await ask(m, sid, "workflow", ["Approve", "Revise"]);
-  assert.ok(stOf(sid).planConfirmedAt, "approve（大小写不敏感）记账");
+  assert.ok(stOf(sid).verdicts?.confirmedAt, "approve（大小写不敏感）记账");
 });
 
 test("M16-r44 观察：planning 窗口外不记账；test_design 窗口记账（full）", async () => {
@@ -121,22 +122,22 @@ test("M16-r44 观察：planning 窗口外不记账；test_design 窗口记账（
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] pc-window" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} }); // planning
   await ask(m, sid);
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "planning 澄清问不记账");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "planning 澄清问不记账");
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_pc4p", agent: "wf/planner" });
   await ask(m, sid); // review 窗口
-  assert.ok(stOf(sid).planConfirmedAt, "review 窗口记账");
+  assert.ok(stOf(sid).verdicts?.confirmedAt, "review 窗口记账");
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: "ses_pc4t", agent: "wf/tester" });
   await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} }); // test_design 窗口
-  assert.ok(stOf(sid).planConfirmedAt, "test_design 仍在窗口（不重复记账也无副作用）");
+  assert.ok(stOf(sid).verdicts?.confirmedAt, "test_design 仍在窗口（不重复记账也无副作用）");
 });
 
 test("M16-r44 观察：非 leader / 无活动任务不记账", async () => {
   const sid = "ses_pc5"; const m = await setupAtReview(sid);
   await ask(m, "ses_pc5", "wf/planner", ["批准执行"]); // 子会话 question 不记账
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "非 leader 不记账");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "非 leader 不记账");
   await ask(m, "ses_pc5", "build", ["批准执行"]); // 普通主会话 agent 不记账
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "普通 agent 不记账");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "普通 agent 不记账");
   const m2 = mkCtx(); await plugin.setup(m2.ctx);
   await ask(m2, "ses_ghost", "workflow", ["批准执行"]); // 无任务会话：不崩、不落盘
   assert.equal(stOf("ses_ghost"), undefined, "无任务不落状态行");
@@ -148,7 +149,7 @@ test("M16-r44 观察：重复批准幂等（审计恰一条）", async () => {
   await ask(m, sid);
   const st = stOf(sid);
   assert.equal(st.log.filter((l) => l.cmd === "plan:confirm").length, 1, "重复 question 不重复审计");
-  assert.ok(st.planConfirmedAt, "记账仍在");
+  assert.ok(st.verdicts?.confirmedAt, "记账仍在");
 });
 
 // ── harness：三路清零 + 关卡 e2e ─────────────────────────────────────
@@ -163,7 +164,7 @@ test("M16-r44 e2e：full 链——未确认 wf:build 拒；确认后放行；确
   const rejB = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rejB, /方案确认关卡未过/, "未确认 wf:build 被拒");
   await ask(m, sid); // test_design 窗口补确认
-  assert.ok(stOf(sid).planConfirmedAt);
+  assert.ok(stOf(sid).verdicts?.confirmedAt);
   assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /building/, "确认后放行");
   assert.match(await cmd(m, "wf:reconcile").execute({ sessionID: sid, prompt: {} }), /reconcile/);
   assert.match(await cmd(m, "wf:review-build").execute({ sessionID: sid, prompt: {} }), /build_review/);
@@ -179,10 +180,10 @@ test("M16-r44 e2e：plan 内容修订（content 全量）作废确认（artifact
   await tool(m).execute({ kind: "plan", content: "# plan\n旧方案" }, { sessionID: "ses_pc8p", agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await ask(m, sid);
-  assert.ok(stOf(sid).planConfirmedAt);
+  assert.ok(stOf(sid).verdicts?.confirmedAt);
   // planner content 全量重写 plan → 确认作废（与 planReviewVerdict/testPlanWritten 同点）
   await tool(m).execute({ kind: "plan", content: "# plan v2\n新方案" }, { sessionID: "ses_pc8p", agent: "wf/planner" });
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "kind=plan 写入清 planConfirmedAt");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "kind=plan 写入清 planConfirmedAt");
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /方案确认关卡未过/, "作废后 wf:build 重新被确认关卡拒");
 });

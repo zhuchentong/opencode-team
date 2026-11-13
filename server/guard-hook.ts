@@ -199,9 +199,9 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           return label.startsWith("批准") || /^approve$/i.test(label); // 锚定：排除「不批准」
         }));
         if (!approvedC) return; // 无批准类选项的澄清问不记账
-        if (stC.planConfirmedAt) return; // 已记账不重复 save（防抖动）
-        stC.planConfirmedAt = new Date().toISOString();
-        logAdd(stC, { at: stC.planConfirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
+        if (stC.verdicts?.confirmedAt) return; // 已记账不重复 save（防抖动）
+        stC.verdicts = { ...stC.verdicts, confirmedAt: new Date().toISOString() }; // R3 T3.1 子步 B
+        logAdd(stC, { at: stC.verdicts.confirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
         try { await save(stC); } catch (e) { swallow(e, "guard-hook:confirm-save-fail"); }
         return;
       }

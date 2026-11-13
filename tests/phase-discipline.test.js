@@ -4,8 +4,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARTIFACT_PHASE, artifactPhaseWarning } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts"; // M16-r39 T08：guidance 拆分
+import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
-const mkSt = (phase, extra = {}) => ({
+const mkSt = (phase, extra = {}) => withVerdicts({
   sessionID: "ses_pd", slug: "demo", phase,
   rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
   lanes: {}, artifacts: {}, ...extra,

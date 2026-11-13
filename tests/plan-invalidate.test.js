@@ -47,14 +47,14 @@ test("T02 daily M：plan-review PASS 后 patch 改 plan → 验证结论被清�
   await tool(m).execute({ kind: "plan", content: "# plan\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
-  assert.equal(stOf(sid).planReviewVerdict, "PASS");
+  assert.equal(stOf(sid).verdicts?.planReview, "PASS");
   await confirm(m, sid); // M16-r44：build 关卡须方案确认
-  assert.ok(stOf(sid).planConfirmedAt, "question 观察记账 planConfirmedAt");
+  assert.ok(stOf(sid).verdicts?.confirmedAt, "question 观察记账 planConfirmedAt");
   // plan 修订（patch）→ 旧 PASS 结论必须被清；M16-r44：确认记账同点作废
   const p = await tool(m).execute({ kind: "plan", patch: [{ old: "旧方案", new: "新方案" }] }, { sessionID: sid, agent: "wf/planner" });
   assert.match(p.content, /已写入/);
-  assert.equal(stOf(sid).planReviewVerdict, undefined, "plan 修订清 planReviewVerdict");
-  assert.equal(stOf(sid).planConfirmedAt, undefined, "plan 修订清 planConfirmedAt");
+  assert.equal(stOf(sid).verdicts?.planReview, undefined, "plan 修订清 planReviewVerdict");
+  assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "plan 修订清 planConfirmedAt");
   await confirm(m, sid); // 重新确认后再验 verdict 关卡
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /验证关卡未过/, "修订后旧 PASS 不得蒙混 wf:build");
@@ -70,11 +70,11 @@ test("T02 full：test-plan 已写后 content 改 plan → 记账被清，wf:test
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });
-  assert.equal(stOf(sid).testPlanWritten, true);
+  assert.equal(stOf(sid).verdicts?.testPlanWritten, true);
   // plan 修订（content 全量重写）→ 旧 test-plan 记账必须被清
   const w = await tool(m).execute({ kind: "plan", content: "# plan v2\n方案变更\n" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(w.content, /已写入/);
-  assert.equal(stOf(sid).testPlanWritten, undefined, "plan 修订清 testPlanWritten");
+  assert.equal(stOf(sid).verdicts?.testPlanWritten, undefined, "plan 修订清 testPlanWritten");
   const rej = await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /双通道关卡未过/, "修订后旧 test-plan 不得蒙混 wf:test-design");
   // 恢复：重写 test-plan → 放行
@@ -112,13 +112,13 @@ test("T02 边界：full 双记账并存（PASS+testPlanWritten）→ patch 改 p
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });
   const before = stOf(sid);
-  assert.equal(before.planReviewVerdict, "PASS");
-  assert.equal(before.testPlanWritten, true);
+  assert.equal(before.verdicts?.planReview, "PASS");
+  assert.equal(before.verdicts?.testPlanWritten, true);
   const p = await tool(m).execute({ kind: "plan", patch: [{ old: "旧方案", new: "新方案" }] }, { sessionID: sid, agent: "wf/planner" });
   assert.match(p.content, /已写入/);
   const after = stOf(sid);
-  assert.equal(after.planReviewVerdict, undefined, "patch 修订同清 planReviewVerdict");
-  assert.equal(after.testPlanWritten, undefined, "patch 修订同清 testPlanWritten");
+  assert.equal(after.verdicts?.planReview, undefined, "patch 修订同清 planReviewVerdict");
+  assert.equal(after.verdicts?.testPlanWritten, undefined, "patch 修订同清 testPlanWritten");
   assert.match(await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} }), /双通道关卡未过/);
   await tool(m).execute({ kind: "test-plan", content: "# 用例 v2" }, { sessionID: sid, agent: "wf/tester" });
   assert.match(await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} }), /test_design/);

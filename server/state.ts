@@ -74,7 +74,7 @@ export type SaveResult = { ok: boolean; reason?: string; rev?: number };
 export interface ReportRow { sessionID: string; text: string; at: string | null; brief: string | null; level: ReportLevel | null }
 export interface StateListItem {
   sessionID: string; slug: string; phase: string | null;
-  rounds: Record<string, number>; testPlanWritten: boolean;
+  rounds: Record<string, number>; testPlanWritten: boolean; // 投影形状不变（R3 T3.1 子步 B：取值改读 verdicts 子对象）
   testReportVerdict: string | null; updatedAt: string | null;
 }
 export interface Store {
@@ -373,8 +373,8 @@ export function createStore(host: Host): Store {
           slug: v.slug ?? "",
           phase: v.phase ?? null,
           rounds: v.rounds ?? {},
-          testPlanWritten: !!v.testPlanWritten,
-          testReportVerdict: v.testReportVerdict ?? null,
+          testPlanWritten: !!v.verdicts?.testPlanWritten,
+          testReportVerdict: v.verdicts?.testReport ?? null,
           updatedAt: v.updatedAt ?? null,
         });
       }

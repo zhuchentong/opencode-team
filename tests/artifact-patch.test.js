@@ -154,13 +154,13 @@ test("M16-r33 patch：test-report verdict 从结果重解析——FAIL→patch �
   await cmd(m, "wf:test").execute({ sessionID: sid, prompt: {} });
   // 首写 FAIL
   await tool(m).execute({ kind: "test-report", content: "**结论**: FAIL\n\n用例 X 失败\n" }, { sessionID: sid, agent: "wf/tester" });
-  assert.equal(stOf(sid).testReportVerdict, "FAIL");
+  assert.equal(stOf(sid).verdicts?.testReport, "FAIL");
   const rej = await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /验收关卡未过/);
   // patch 只改结论行 → verdict 必须从结果重解析为 PASS
   const p = await tool(m).execute({ kind: "test-report", patch: [{ old: "**结论**: FAIL", new: "**结论**: PASS" }] }, { sessionID: sid, agent: "wf/tester" });
   assert.match(p.content, /已写入/);
-  assert.equal(stOf(sid).testReportVerdict, "PASS", "patch 后 verdict 应从结果重解析");
+  assert.equal(stOf(sid).verdicts?.testReport, "PASS", "patch 后 verdict 应从结果重解析");
   assert.match(p.content, /验收 PASS/, "verdict 指路应基于重解析结果");
   const ok = await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} });
   assert.match(ok, /【wf 工作流｜done】/);
@@ -176,7 +176,7 @@ test("M16-r33 patch：test-plan patch 保持 testPlanWritten；轮次编号文�
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "test-plan", content: "# 用例\n\n旧用例\n" }, { sessionID: sid, agent: "wf/tester" });
   await tool(m).execute({ kind: "test-plan", patch: [{ old: "旧用例", new: "新用例" }] }, { sessionID: sid, agent: "wf/tester" });
-  assert.equal(stOf(sid).testPlanWritten, true, "test-plan patch 后旗标保持");
+  assert.equal(stOf(sid).verdicts?.testPlanWritten, true, "test-plan patch 后旗标保持");
   assert.match(read("patch-round", "test-plan.md"), /新用例/);
   // 轮次编号文件：review r1 写 plan-review-r1.md 后 patch
   await tool(m).execute({ kind: "plan-review", content: "# 审核\n\n问题A\n" }, { sessionID: sid, agent: "wf/planner-reviewer" });

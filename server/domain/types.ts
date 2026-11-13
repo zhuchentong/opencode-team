@@ -38,10 +38,20 @@ export interface WfState {
   //   存量无 mode 字段 → full（兼容在途任务）。daily 内 size 决定委派与否（S=leader 串行零 sub-agent）。
   mode?: string;
   // M16-r34：日常模式 M/L 独立验证结论（plan-review 首行 **结论** 解析记账），wf:build 关卡校验
-  planReviewVerdict?: string;
+  //   R3 T3.1 子步 B：verdicts 家族 5 字段分组进子对象（读兼容：normalizeState 在 load 出口搬平铺字段）
+  //   命名注意：子对象内字段去掉 Verdict/plan 前缀（planReview/testReport/confirmedAt）
   // M16-r44：方案确认记账——leader 经 question 工具呈现含「批准执行」选项的确认卡片时由 guard-hook 记录；
   //   plan 修订（wf:plan 推进 / wf_write_artifact kind=plan）与新任务 intake 即作废，wf:build 关卡校验
-  planConfirmedAt?: string;
+  verdicts?: {
+    planReview?: string;        // ← planReviewVerdict
+    testReport?: string;        // ← testReportVerdict
+    testPlanWritten?: boolean;  // 同名迁入
+    confirmedAt?: string;       // ← planConfirmedAt
+    // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
+    // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）；
+    // intake 重置块清除（跨任务不残留）。保持 R2 形状（id/ok/at）整体迁入。
+    gateStatus?: { id: string; ok: boolean; at: string };
+  };
   // done-git-delivery-confirm T01：wf:done 流转时检测项目 git 环境记账（commands.ts detectDoneGit，
   //   fail-open=异常不记账）；guidance/entry 据此条件渲染交付确认指令——leader 必须 question 询问
   //   用户「提交并推送/仅提交/跳过」（无 remote 隐藏推送），批准前不得 commit/push。新任务 intake 清除。
@@ -68,12 +78,6 @@ export interface WfState {
   // M16-r39 T01：log 单调序号（logAdd 递增）——save 按序号差增量追 events，
   // 50 条截断不再使审计停追；存量快照无此字段 → length 回退
   logSeq?: number;
-  testPlanWritten?: boolean;
-  testReportVerdict?: string;
-  // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
-  // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）。
-  // intake 重置块清除（跨任务不残留）。形状纪律同 verdicts 家族：R3 分组迁移候选（gate→verdicts 域）。
-  gateStatus?: { id: string; ok: boolean; at: string };
   entryErr?: string;
   // tui-sidebar-elapsed T01（plan §3.1）：墙钟计时记账——全部可选，存量快照自然缺省 → TUI 降级 ·
   // R3 T3.1 子步 A：4 字段分组进 timing 子对象（读兼容：normalizeState 在 load 出口搬平铺字段，内存恒新形）
@@ -89,15 +93,32 @@ export interface WfState {
 // R3 T3.1（arch-r3-state-shape-migration）：旧平铺快照 → 新分组形状的归一（load 出口调用）。
 // 幂等：已是新形原样通过；平铺字段搬入子对象后从顶层 delete（避免双份）；混合形状正确收敛。
 // 只搬形状不磨语义：不补缺省、不改值。零依赖叶子（domain-acyclic），供 state.ts 与测试 stub 同源复用。
+// 子步 A：timing 4 字段；子步 B：verdicts 家族 5 字段（Verdict/plan 前缀在子对象内剥除）。
+const VERDICT_RENAMES = {
+  planReviewVerdict: "planReview",
+  testReportVerdict: "testReport",
+  testPlanWritten: "testPlanWritten",
+  planConfirmedAt: "confirmedAt",
+  gateStatus: "gateStatus",
+} as const;
+
 export function normalizeState(st: WfState): WfState {
   const s = st as any;
   if (!s || typeof s !== "object") return st;
-  const hadSub = s.timing != null;
+  // timing（子步 A）
+  const hadTiming = s.timing != null;
   const timing = { ...s.timing };
   for (const k of ["startedAt", "phaseEnteredAt", "phaseDurations", "finishedAt"] as const) {
     if (s[k] !== undefined) { timing[k] = s[k]; delete s[k]; }
   }
-  if (hadSub || Object.keys(timing).length > 0) s.timing = timing;
+  if (hadTiming || Object.keys(timing).length > 0) s.timing = timing;
+  // verdicts（子步 B）
+  const hadVerdicts = s.verdicts != null;
+  const verdicts = { ...s.verdicts };
+  for (const [flat, inner] of Object.entries(VERDICT_RENAMES)) {
+    if (s[flat] !== undefined) { verdicts[inner] = s[flat]; delete s[flat]; }
+  }
+  if (hadVerdicts || Object.keys(verdicts).length > 0) s.verdicts = verdicts;
   return st;
 }
 

@@ -3,8 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FLOWS, LIMITS, evaluateTransition } from "../server/lib.ts";
 import { mkWiringHarness as mkWiring } from "./helpers/wiring.js"; // T04：装配同源（harness 参数化包装）
+import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
-const mkSt = (phase = null, extra = {}) => ({
+const mkSt = (phase = null, extra = {}) => withVerdicts({
   sessionID: "ses_test",
   slug: "",
   phase,
@@ -25,9 +26,9 @@ test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并
   const steps = ["wf:intake", "wf:plan", "wf:review", "wf:test-design",
     "wf:build", "wf:reconcile", "wf:review-build", "wf:test", "wf:done"];
   for (const cmd of steps) {
-    if (cmd === "wf:test-design") st.testPlanWritten = true; // gate 前置条件
-    if (cmd === "wf:build") st.planConfirmedAt = "2026-01-01T00:00:00Z"; // M16-r44：方案确认关卡前置条件
-    if (cmd === "wf:done") st.testReportVerdict = "PASS"; // gate 前置条件
+    if (cmd === "wf:test-design") (st.verdicts ??= {}).testPlanWritten = true; // gate 前置条件（R3 T3.1 子步 B）
+    if (cmd === "wf:build") (st.verdicts ??= {}).confirmedAt = "2026-01-01T00:00:00Z"; // M16-r44：方案确认关卡前置条件
+    if (cmd === "wf:done") (st.verdicts ??= {}).testReport = "PASS"; // gate 前置条件
     const r = advance(st, cmd, "[FULL] demo-task"); // M16-r34：本测试验证完整 9 阶段流，显式 [FULL]
     assert.equal(r.ok, true, `${cmd} 应通过：${JSON.stringify(r)}`);
   }
@@ -57,9 +58,9 @@ test("gate-rejected：review 未产出 test-plan 时 wf:test-design 被拒（不
   assert.equal(r.ok, false);
   assert.equal(r.note, "gate-rejected");
   assert.equal(r.gate, "dual-channel", "R2 T2.3：拒绝附 gate.id（审计细分维度）");
-  assert.equal(st.gateStatus.id, "dual-channel");
-  assert.equal(st.gateStatus.ok, false, "R2 T2.3：gateStatus 快照记账（fail）");
-  assert.equal(typeof st.gateStatus.at, "string");
+  assert.equal(st.verdicts.gateStatus.id, "dual-channel");
+  assert.equal(st.verdicts.gateStatus.ok, false, "R2 T2.3：gateStatus 快照记账（fail）");
+  assert.equal(typeof st.verdicts.gateStatus.at, "string");
   assert.match(r.msg, /test-plan\.md/);
   assert.match(r.msg, /wf_command\(name="wf:test-design"\)/, "拒绝文案指路新命令名");
   assert.deepEqual(st.rounds, before, "拒绝不得改变计数器");
@@ -121,7 +122,7 @@ test("计数器独立：build_review 与 test_fix 各自计数", () => {
   assert.equal(st.rounds.plan_review, 0, "plan_review 不受影响");
   // testing → fixing → testing → fixing：test_fix 递增
   assert.equal(advance(st, "wf:test").ok, true);
-  st.testReportVerdict = "FAIL";
+  st.verdicts.testReport = "FAIL";
   assert.equal(advance(st, "wf:fix").ok, true);
   assert.equal(st.rounds.test_fix, 1);
   assert.equal(advance(st, "wf:test").ok, true);
@@ -152,8 +153,8 @@ test("intake 强制（! 前缀）：重置 rounds/artifacts/gate 记账并留 pr
   assert.equal(st.slug, "new-task", "slugify 后小写连字符");
   assert.deepEqual(st.rounds, { plan_review: 0, build_review: 0, test_fix: 0 }, "计数器重置");
   assert.deepEqual(st.artifacts, {}, "产物记账重置");
-  assert.equal(st.testPlanWritten, undefined, "test-plan 记账清除");
-  assert.equal(st.testReportVerdict, undefined, "verdict 记账清除");
+  assert.equal(st.verdicts?.testPlanWritten, undefined, "test-plan 记账清除");
+  assert.equal(st.verdicts?.testReport, undefined, "verdict 记账清除");
   assert.deepEqual(st.prev, { slug: "old-task", phase: "building", at: "2026-11-09T00:00:00.000Z" });
 });
 
@@ -162,7 +163,7 @@ test("intake 从 done 重开：允许且重置", () => {
   const r = advance(st, "wf:intake", "next-thing");
   assert.equal(r.ok, true);
   assert.equal(st.slug, "next-thing");
-  assert.equal(st.testReportVerdict, undefined);
+  assert.equal(st.verdicts?.testReport, undefined);
   assert.equal(st.prev.slug, "finished");
   assert.equal(st.prev.phase, "done");
   assert.ok(st.prev.at, "prev.at 记录时间");
@@ -187,7 +188,7 @@ test("intake 非重置分支下 slug 仍被新 text 覆盖（锁定现状：slug
   assert.equal(r.ok, true);
   assert.equal(st.slug, "ignored", "现状：slug 无条件覆盖");
   assert.equal(st.rounds.plan_review, 2, "计数器保留");
-  assert.equal(st.testPlanWritten, undefined, "记账字段未被动过");
+  assert.equal(st.verdicts?.testPlanWritten, undefined, "记账字段未被动过");
 });
 
 test("返工边完整覆盖：fixing→reconcile 合法（M10-a 返工边）", () => {

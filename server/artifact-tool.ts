@@ -131,13 +131,15 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             trackRoleSession(row, context?.agent, context?.sessionID);
             row.artifacts = row.artifacts ?? {};
             row.artifacts[file] = { at: new Date().toISOString(), bytes };
-            if (kind === "test-plan") row.testPlanWritten = true;
-            if (kind === "test-report") row.testReportVerdict = verdict;
-            if (kind === "plan-review") row.planReviewVerdict = verdict; // M16-r34：日常 M/L 验证关卡记账
+            // R3 T3.1 子步 B：verdicts 记账改子对象写点（row 经 load 已 normalize，内存恒新形）
+            row.verdicts = row.verdicts ?? {};
+            if (kind === "test-plan") row.verdicts.testPlanWritten = true;
+            if (kind === "test-report") row.verdicts.testReport = verdict;
+            if (kind === "plan-review") row.verdicts.planReview = verdict; // M16-r34：日常 M/L 验证关卡记账
             // M16-r39 T02：plan 修订（content/patch、任何 mode）清双通道记账——
             // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡；
             // M16-r44：方案确认记账同点作废（plan 内容变更=旧确认失效的最强锚点）
-            if (kind === "plan") { delete row.planReviewVerdict; delete row.testPlanWritten; delete row.planConfirmedAt; }
+            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // R3 T3.1 子步 B：plan 修订清双通道+确认记账
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}` });
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
@@ -172,15 +174,15 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           }
           // P4 公告：verdict 指路（与 GATES["wf:done"] 拒绝文案同语义，agent 在 tool output 直接看到）
           if (kind === "test-report") {
-            note += st.testReportVerdict === "PASS"
+            note += st.verdicts?.testReport === "PASS"
               ? `\n→ 验收 PASS：请 leader 调用 wf_command(name="wf:done") 推进（验收关卡放行；用户手敲亦可）`
-              : `\n→ 验收 ${st.testReportVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲；UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
+              : `\n→ 验收 ${st.verdicts?.testReport ?? "UNKNOWN"}：FAIL → 请 leader 推进 /wf:fix 修复后重跑 /wf:test（wf_command 或用户手敲；UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
           }
           // M16-r34：plan-review verdict 指路（日常模式 M/L 独立验证 → wf:build 关卡）
           if (kind === "plan-review") {
-            note += st.planReviewVerdict === "PASS"
+            note += st.verdicts?.planReview === "PASS"
               ? `\n→ 验证 PASS：请 leader 调用 wf_command(name="wf:build") 推进（日常模式验证关卡放行）`
-              : `\n→ 验证 ${st.planReviewVerdict ?? "UNKNOWN"}：FAIL → 请 leader 推进 wf:plan 带意见修订后再验（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
+              : `\n→ 验证 ${st.verdicts?.planReview ?? "UNKNOWN"}：FAIL → 请 leader 推进 wf:plan 带意见修订后再验（UNKNOWN 需先补首行「**结论**: PASS|FAIL」）`;
           }
           // M16-r39 T02：plan 修订清双通道记账——模式感知的重新验证指路
           if (kind === "plan") {

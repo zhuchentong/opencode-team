@@ -130,7 +130,7 @@ test("T04 mkWiringHarness 端到端：intake→plan 真实流转 + 返回面冻�
   await h.run("wf:review");
   assert.equal(h.st().phase, "review");
   h.patch({ planConfirmedAt: "x", planReviewVerdict: "PASS" }); // 关卡记账 fixture（daily M 级双条件）
-  assert.equal(h.st().planConfirmedAt, "x", "patch(obj) 记账 fixture");
+  assert.equal(h.st().verdicts?.confirmedAt, "x", "patch(obj) 记账 fixture（verdicts 子对象翻译）"); // R3 T3.1 子步 B
   await h.run("wf:build");
   assert.equal(h.st().phase, "building", "harness 装配可过真实关卡（e2e 有效性）");
   assert.equal(typeof h.dispose, "function");

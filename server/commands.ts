@@ -197,7 +197,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           `wf 工作流(${VERSION})状态｜session=${st.sessionID}`,
           `slug=${st.slug || "(未定)"}  phase=${st.phase}  mode=${st.mode ?? "full"}  size=${st.size ?? "M"}`,
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
-          `gates: testPlan=${st.testPlanWritten ? "✅" : "❌"}  testReport=${st.testReportVerdict ?? "-"}  planReview=${st.planReviewVerdict ?? "-"}  planConfirm=${st.planConfirmedAt ? "✅" : "❌"}`,
+          `gates: testPlan=${st.verdicts?.testPlanWritten ? "✅" : "❌"}  testReport=${st.verdicts?.testReport ?? "-"}  planReview=${st.verdicts?.planReview ?? "-"}  planConfirm=${st.verdicts?.confirmedAt ? "✅" : "❌"}`, // R3 T3.1 子步 B
           `lanes: ${JSON.stringify(st.lanes ?? {})}`,
           `roleSessions: ${JSON.stringify(st.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,

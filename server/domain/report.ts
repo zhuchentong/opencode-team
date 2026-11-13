@@ -23,11 +23,11 @@ export function isRejectReport(text: string): boolean {
 // 使 level 判定不再单赖文案前缀（文案字节纪律仍在，双保险）。
 const GATED_CMDS = new Set(["wf:test-design", "wf:build", "wf:done"]);
 export function levelFor(cmd: string, text: string, st: WfState | null): ReportLevel {
-  if (st?.gateStatus && !st.gateStatus.ok && GATED_CMDS.has(cmd)) return "warn"; // R0 结构化关卡
+  if (st?.verdicts?.gateStatus && !st.verdicts.gateStatus.ok && GATED_CMDS.has(cmd)) return "warn"; // R0 结构化关卡（R3 T3.1 子步 B 读 verdicts）
   if (isRejectReport(text)) return "warn"; // R1
   if (cmd === "wf:fix") return "warn"; // R2
-  if ((cmd === "wf:test" && st?.testReportVerdict === "FAIL") ||
-      (cmd === "wf:review" && st?.planReviewVerdict === "FAIL")) return "warn"; // R3
+  if ((cmd === "wf:test" && st?.verdicts?.testReport === "FAIL") ||
+      (cmd === "wf:review" && st?.verdicts?.planReview === "FAIL")) return "warn"; // R3
   if (cmd === "wf:done" && st?.phase === "done" && st?.doneGit?.isGit) return "warn"; // R4
   return "info"; // R5
 }
