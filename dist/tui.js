@@ -33,6 +33,10 @@ var Wf = Rpc.define({
 						type: "object",
 						additionalProperties: true
 					},
+					tiers: {
+						type: ["object", "null"],
+						additionalProperties: true
+					},
 					updatedAt: { type: ["string", "null"] }
 				},
 				required: ["active"],
@@ -480,6 +484,24 @@ var buildRows = (s, err, oth, othScope, T, now, w) => {
 	c[2] = T.text.action.primary;
 	const totalSec = s.finishedAt && s.startedAt ? (Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1e3 : s.startedAt && now ? (now - Date.parse(s.startedAt)) / 1e3 : null;
 	if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
+	const roleOf = (ph) => ({
+		planning: "wf/planner",
+		review: "wf/planner-reviewer",
+		test_design: "wf/tester",
+		building: "wf/builder",
+		reconcile: "wf/builder",
+		build_review: "wf/builder-reviewer",
+		testing: "wf/tester",
+		fixing: "wf/fixer",
+		done: "wf/learner",
+		retrospect: "wf/learner"
+	})[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
+	const curRole = roleOf(s.phase);
+	const curVar = curRole ? s.tiers?.[curRole] : null;
+	if (curRole && curVar) {
+		t[3] = `  ⚡ 档位 ${curRole.replace("wf/", "")}:${str(curVar)}`;
+		c[3] = T.text.action.primary;
+	}
 	t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}  ${padS("耗时", 6)}`;
 	c[4] = T.text.muted;
 	t[5] = " " + "─".repeat(W - 1);
