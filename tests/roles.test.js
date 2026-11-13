@@ -200,9 +200,10 @@ test("roleSyncStatus：managed/stale/unmanaged/missing 四态判定（漂移守�
 });
 
 test("M16-r32 瘦身预算：各产物的体积/结构约束写入对应角色模板（防回归）", () => {
-  // planner：plan.md ≤15KB + 返工增量修订
+  // planner：plan.md ≤20KB（M16-r50 分级 S10/M20/L30）+ 返工增量修订
   const planner = renderRole("planner");
-  assert.match(planner, /≤15KB/, "planner 应含 plan.md 体积预算");
+  assert.match(planner, /≤20KB/, "planner 应含 plan.md 体积预算");
+  assert.match(planner, /≤30KB/, "planner 应含 L 级 plan.md 体积预算");
   assert.match(planner, /增量修订|只重产受影响/, "planner 应含返工增量修订指引");
   // planner-reviewer：plan-review ≤8KB + findings 表格化
   const pr = renderRole("planner-reviewer");

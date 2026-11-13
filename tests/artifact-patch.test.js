@@ -208,7 +208,7 @@ test("M16-r33 tier：S 级预算收紧——11KB plan 在 S 级告警、M 级不
   const elevenKb = "x".repeat(11 * 1024);
   const wS = await tool(m).execute({ kind: "plan", content: elevenKb }, { sessionID: sidS, agent: "wf/planner" });
   assert.match(wS.content, /超瘦身预算/, "S 级 plan 预算 10KB，11KB 应告警");
-  // M 级对照：同体积不告警（M 预算 15KB）
+  // M 级对照：同体积不告警（M 预算 20KB）
   const sidM = "ses_pm";
   await cmd(m, "wf:intake").execute({ sessionID: sidM, prompt: { text: "mid-task" } });
   assert.equal(stOf(sidM).size, "M", "缺省体量=M");
