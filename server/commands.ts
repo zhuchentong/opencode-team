@@ -20,7 +20,8 @@ import {
 import { guidance, entryValue, briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
 import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
 import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, scanActiveTasks, type Store } from "./state.ts";
-import { type Observer } from "./observe.ts";
+import { type Observer, swallow, listSwallows } from "./observe.ts";
+import { type Host } from "./host.ts"; // T03：registerCommands 收 Host（原 ctx:any；入口 setup(ctx) 签名不变） // T01：swallow 记账 + diagnose 摘要接线
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
 import {
   TIER_MAP, TIER_TRIGGERS, TIER_ROLES, syncTierAgents, readTierAgents,
@@ -71,10 +72,10 @@ export interface CommandDeps {
 const PLUGIN_REPO_ROOT = (() => {
   try { return fs.realpathSync(join(import.meta.dirname, "..")); } catch { return ""; }
 })();
-// 生效探测根：options.selfModRoot 覆盖（测试/特殊安装布局）> 模块仓库根。运行时读 ctx.options
-// （与 leaderOnly 同模式——setup 期捕获会丢失测试与热载后的选项变更）。
-const selfModRootFor = (ctx: any): string => {
-  const o = ctx?.options?.selfModRoot;
+// 生效探测根：options.selfModRoot 覆盖（测试/特殊安装布局）> 模块仓库根。运行时活读 options
+// （T03：调用方传 host.options——与 leaderOnly 同模式，setup 期捕获会丢失测试与热载后的选项变更）。
+const selfModRootFor = (opt: Record<string, any>): string => {
+  const o = opt?.selfModRoot;
   if (typeof o === "string" && o) { try { return fs.realpathSync(o); } catch { return o; } }
   return PLUGIN_REPO_ROOT;
 };
@@ -127,8 +128,7 @@ export function detectDoneGit(dir: string): { isGit: boolean; hasRemote: boolean
   } catch { return { isGit: true, hasRemote: false }; }
 }
 
-export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ dispose: () => void }> {
-  const E = ctx?.session?.instructions?.entry;
+export async function registerCommands(host: Host, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
     putReport, removeState, dumpStates, runner } = deps;
 
@@ -137,7 +137,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
       // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
       const ov = st.directory ? listOverrides(st.directory) : [];
-      await E.put({ sessionID: st.sessionID, key: ENTRY_KEY, value: entryValue(st, LIMS, ov) });
+      await host.instructions.put({ sessionID: st.sessionID as string, key: ENTRY_KEY, value: entryValue(st, LIMS, ov) });
       delete st.entryErr;
     } catch (e) {
       st.entryErr = String((e as Error)?.message ?? e);
@@ -177,7 +177,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         const r = evaluateTransition(cmd, st, text, at, LIMS);
         if (!r.ok) {
           logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
-          if (lastLoaded) { try { await save(st); } catch { /* 审计 best-effort */ } } // T02：无前行不落盘
+          if (lastLoaded) { try { await save(st); } catch (e) { swallow(e, "commands:reject-audit-save-fail"); } } // T02：无前行不落盘
           return r.msg; // halt：不重试
         }
 
@@ -199,10 +199,10 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
         if (!st.projectID) {
           try {
-            const s = await ctx.session.get({ sessionID });
+            const s = await host.sessions.get({ sessionID });
             st.projectID = s?.projectID ?? null;
             st.directory = s?.location?.directory ?? null;
-          } catch { }
+          } catch (e) { swallow(e, "commands:session-project-fill-fail"); }
         }
         // done-git-delivery-confirm T01：进 done 即检测 git 环境（置于 directory 补全后、inject 前，
         // 使 done entry 渲染即含交付确认指令）；fail-open：任何异常=不记账=零提示，绝不阻断流转。
@@ -214,7 +214,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
               // 非 git 项目不记账且清旧账（重复推 done 幂等）：state 零污染，done 行为与旧版逐字节一致
               if (g.isGit) st.doneGit = g; else delete st.doneGit;
             }
-          } catch { /* fail-open */ }
+          } catch (e) { swallow(e, "commands:done-git-detect-fail"); }
         }
         logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
         // selfmod-guard T01（F2 v2）：intake 引擎自改检测（fail-open=判不出按非自改）——任务目录=插件仓库根
@@ -224,11 +224,11 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         if (cmd === "wf:intake") {
           try {
             const dir = realDir(st.directory ?? (await resolveProjectDir(st, sessionID)));
-            if (isSelfModDir(dir, selfModRootFor(ctx))) {
+            if (isSelfModDir(dir, selfModRootFor(host.options))) {
               st.selfMod = true;
               selfModNote = selfModWarnLine(scanActiveTasks(sessionID));
             } else delete st.selfMod;
-          } catch { /* fail-open */ }
+          } catch (e) { swallow(e, "commands:selfmod-detect-fail"); }
         }
         await inject(st);
         return null;
@@ -239,7 +239,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       if (res.reason === "halt") return res.msg ?? "";
       // T09：entry 回滚到 DB 现势——消除「系统提示已进新阶段、DB 未动」的矛盾信号
       if (lastLoaded) await inject(lastLoaded);
-      else { try { await E.remove({ sessionID, key: ENTRY_KEY }); } catch { } } // 新建会话建行失败：无行则清指引
+      else { try { await host.instructions.remove({ sessionID, key: ENTRY_KEY }); } catch (e) { swallow(e, "commands:entry-remove-fail"); } } // 新建会话建行失败：无行则清指引
       return `❌ 状态保存失败（${res.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
     }
     const st = res.st;
@@ -264,7 +264,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       const dir = `${await debugDirFor(String(sessionID ?? ""))}/.workflow/_debug`;
       fs.mkdirSync(dir, { recursive: true });
       fs.appendFileSync(`${dir}/cmd-report.jsonl`, JSON.stringify({ at: new Date().toISOString(), ...data }) + "\n");
-    } catch { /* 探针失败不影响主流程 */ }
+    } catch (e) { swallow(e, "commands:report-probe-fail"); }
   };
 
   // ── P2 双轨输出编排 ────────────────────────────────────────────────
@@ -277,7 +277,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
     const brief = briefFor(cmdName, text, st, LIMS);
     const level = levelFor(cmdName, text, st);
     let slotOk = false;
-    try { await putReport({ sessionID: sid, text, at, brief, level }); slotOk = true; } catch { /* 写槽失败降级 */ }
+    try { await putReport({ sessionID: sid, text, at, brief, level }); slotOk = true; } catch (e) { swallow(e, "commands:report-slot-write-fail"); }
     if (emitReport) await emitReport(sid, text, at, { brief, level });
     await reportProbe(sid, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: cmdName, chars: text.length, hasChan: !!emitReport, level, hasBrief: !!brief });
     return { brief, level };
@@ -288,8 +288,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
   // 报告不进模型上下文（quota 全套范式）。
   const injectReport = async (sid: string, text: string, cmdName: string, at: string) => {
     try {
-      await ctx.session.wait?.({ sessionID: sid });
-      await ctx.session.prompt({ sessionID: sid, text: sanitizeText(text), delivery: "steer", resume: false,
+      await host.sessions.wait({ sessionID: sid }); // T03：旧 wait?.() 缺失即跳过→wrapper 缺失→resolved undefined，时序等价
+      await host.sessions.prompt({ sessionID: sid, text: sanitizeText(text), delivery: "steer", resume: false,
         metadata: { [REPORT_META]: { cmd: cmdName, at } } });
       await reportProbe(sid, { ev: "inject-ok", cmd: cmdName });
     } catch (e) {
@@ -306,28 +306,28 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
 
   // ── M16-r43：动态档位跟随 ──────────────────────────────────────────────
   // 流转/intake 成功后：读会话所选模型（Session.Info.model = Model.Ref）+ 该模型可用 variants
-  // （ctx.model.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
+  // （host.models.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
   // 项目级 agent 文件（.opencode/agents/wf/<role>.md）。基座变化 → 审计 tier-model-switch +
   // 清空 roleSessions（旧子会话=旧模型，防混模型续用）+ 返回提示句（guarded 附加到返回文本）。
   // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认关（opt-in）。
   const tierCheck = async (cmd: string, a: any): Promise<string> => {
-    if (ctx?.options?.tierAgents !== true) return "";
+    if (host.options.tierAgents !== true) return "";
     if (!TIER_TRIGGERS.has(cmd)) return "";
     const sid = String(a?.sessionID ?? "");
     const st = await load(sid);
     if (!st || !st.slug) return ""; // 无活动任务（含 reset 后）→ 整段跳过
-    const sess = await ctx.session.get({ sessionID: sid }).catch(() => null);
+    const sess = await host.sessions.get({ sessionID: sid }).catch(() => null);
     const ref = sess?.model as ModelRef | undefined;
     if (!ref?.id || !ref?.providerID) return "";
     let variantIds: string[] = [];
     try {
-      const ml = await ctx.model?.list?.();
+      const ml = await host.models.list();
       const arr: any[] = Array.isArray(ml) ? ml : (ml?.data ?? ml?.models ?? []);
       const hit = arr.find((m: any) => m?.id === ref.id && m?.providerID === ref.providerID)
         ?? arr.find((m: any) => m?.id === ref.id);
       variantIds = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
-    } catch { /* 空集 → resolveTierRef 返回 null → 跳写 */ }
-    const tiers = { ...TIER_MAP, ...ctx?.options?.tiers };
+    } catch (e) { swallow(e, "commands:model-list-variants-fail"); }
+    const tiers = { ...TIER_MAP, ...host.options.tiers };
     const dir = await resolveProjectDir(st, sid);
     const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
     const at = new Date().toISOString();
@@ -372,7 +372,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
     };
   }
 
-  const reg = ctx.command.transform((editor: any) => {
+  const reg = host.commands.transform((editor: any) => {
     // server 命令通道 = 降级轨：publish（reports 表，TUI 轮询兜底可见）+ inject（Web/Desktop 聊天可见）。
     // 返回值保留（tests 行为锚；宿主不消费）。
     const add = (def: any) => {
@@ -380,8 +380,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       // M16-r36：单一强制点——聊天命令/wf_command/TUI exec 三入口同调 byName，guarded 一处覆盖。
       // 变更类仅 leader（workflow，兼容 wf/leader；agent 经 a.agent ?? session.get 解析）；拒绝落审计 agent-rejected（有行才落盘，守 T02）。
       const guarded = async (a: any) => {
-        if (ctx?.options?.leaderOnly !== false) {
-          const agent = await resolveAgent(a, ctx.session.get);
+        if (host.options.leaderOnly !== false) {
+          const agent = await resolveAgent(a, (q: { sessionID: string }) => host.sessions.get(q));
           await probeOnce(a?.sessionID, "cmd-agent-probe", { cmd: def.name, aKeys: Object.keys(a ?? {}), agent });
           // F1（implant×build 卡死 1.5 天实证）：load 上提至拒绝判定前——会话持任务时拒绝文案给
           // 「切回 workflow 重跑 / reset 清账」两个准确出口（旧文案误导开新会话接管）。
@@ -395,7 +395,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
                 logAdd(rejSt, { at: new Date().toISOString(), cmd: def.name, from: rejSt.phase, to: rejSt.phase, ok: false, note: `agent-rejected:${agent || "(unknown)"}` });
                 await save(rejSt);
               }
-            } catch { /* 审计 best-effort，不影响拒绝 */ }
+            } catch (e) { swallow(e, "commands:agent-reject-audit-fail"); }
             return rej;
           }
         }
@@ -405,7 +405,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         try {
           const note = await tierCheck(def.name, a);
           if (note && typeof out === "string") return `${out}\n${note}`;
-        } catch { /* fail-open（审计在 tierCheck 内部 best-effort） */ }
+        } catch (e) { swallow(e, "commands:tier-check-fail"); }
         return out;
       };
       byName[def.name] = guarded;
@@ -467,8 +467,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
         // 产物对账：落盘目录三级回退（resolveProjectDir，与 wf_write_artifact 同源）
         const dir = await resolveProjectDir(st, a.sessionID);
         let artifactFiles: string[] = [];
-        try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch { /* 目录不存在按空处理 */ }
-        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS });
+        try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch (e) { swallow(e, "commands:diagnose-readdir-fail"); }
+        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows() });
       },
     });
     add({
@@ -476,8 +476,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       description: "健康检查：列出 wf/* 角色 agent 注册状态与模型（只读，fail-soft）",
       execute: async (a: any) => {
         try {
-          if (!ctx.agent?.list) return `wf 角色：宿主未提供 ctx.agent API（v2.2.6 实测以 agent-probe 为准）；可用 @<角色> 手动验证`;
-          const res = await ctx.agent.list();
+          const res = await host.agents.list(); // T03：缺失判定=wrapper 返回 undefined（旧 !ctx.agent?.list 分支；降级文案逐字不动，M1 裁决）
+          if (res === undefined) return `wf 角色：宿主未提供 ctx.agent API（v2.2.6 实测以 agent-probe 为准）；可用 @<角色> 手动验证`;
           await probeOnce(a?.sessionID, "agent-probe", { shape: Array.isArray(res) ? "array" : Object.keys(res ?? {}) });
           let tierLine = "";
           // M16-r43：档位跟随生效视图——读项目级派生文件（/api/agent 序列化不含 model，读文件为准）
@@ -487,8 +487,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
             const dir = await resolveProjectDir(st, sid);
             const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
             if (rows.length) tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
-          } catch { /* 无任务/无文件 → 不展示 */ }
-          return pingReport(res) + roleGuardText(ctx?.options) + tierLine;
+          } catch (e) { swallow(e, "commands:ping-tier-read-fail"); }
+          return pingReport(res) + roleGuardText(host.options) + tierLine;
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }
@@ -549,10 +549,11 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
             sid = comp.kind === "completed" ? (comp.sid as string) : raw;
             if (comp.kind === "completed") setNote = `｜前缀补全 ${raw} → ${sid}`;
             // 宿主存在性校验（fail-open：宿主 API 不可用时不拦截，交由续接时的归属校验兜底）
-            if (typeof ctx?.session?.get === "function") {
-              const sess = await ctx.session.get({ sessionID: sid }).catch(() => null);
+            // T03：旧 typeof 检查→wrapper 缺失=rejected 走外层 catch（fail-open 等价；记账入环）
+            try {
+              const sess = await host.sessions.get({ sessionID: sid }).catch(() => null);
               if (!sess) return `❌ 子会话不存在：「${sid}」（截断/已清库——经 session-lookup 管道重取，或 @别名续接）；lane 未变更。`;
-            }
+            } catch (e) { swallow(e, "commands:lane-session-probe-fail"); }
           }
         }
         // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm（≤3 次），
@@ -598,8 +599,8 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       description: "开发/中止用：清除本会话的工作流状态与阶段注入",
       execute: async (a: any) => {
         await removeState(a.sessionID); // P1：清任务行与报告槽（防新挂载重放旧 toast；events 流水保留审计）
-        try { await E.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch { }
-        try { await E.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch { }
+        try { await host.instructions.remove({ sessionID: a.sessionID, key: ENTRY_KEY }); } catch (e) { swallow(e, "commands:reset-entry-remove-fail"); }
+        try { await host.instructions.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch (e) { swallow(e, "commands:reset-hint-remove-fail"); }
         await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} } as WfState); // M10-a：A3，TUI 实时反映清除
         return "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。";
       },
@@ -610,31 +611,33 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       execute: async (a: any) => {
         const st = await load(a.sessionID);
         let entries = null;
-        if (!E?.list) entries = "no entry API";
-        else {
-          try { entries = await E.list({ sessionID: a.sessionID }); }
-          catch (e1) {
-            try { entries = await E.list({ sessionID: a.sessionID, key: ENTRY_KEY }); }
-            catch (e2) { entries = `ERR1:${(e1 as Error)?.message ?? e1} | ERR2:${(e2 as Error)?.message ?? e2}`; }
-          }
+        // T03：capability 信号=instructions.list 缺失返回 undefined（旧 !E?.list → "no entry API" 文案逐字；
+        // wrapper 缺失时不发底层调用）。两形态试探结构与旧一致：首形态 reject→key 形态→再 reject→ERR1|ERR2。
+        try {
+          const l1 = await host.instructions.list({ sessionID: a.sessionID });
+          entries = l1 === undefined ? "no entry API" : l1;
+        }
+        catch (e1) {
+          try { entries = await host.instructions.list({ sessionID: a.sessionID, key: ENTRY_KEY }); }
+          catch (e2) { entries = `ERR1:${(e1 as Error)?.message ?? e1} | ERR2:${(e2 as Error)?.message ?? e2}`; }
         }
         // M16-r39 T09：sessProbe 收敛——5 candidates 形状探测已完成历史使命（扁平形状真机实证），
-        // 改单一扁平 ctx.session.get({sessionID})；state.json 键名 sessProbe 不变
+        // 改单一扁平 host.sessions.get({sessionID})（T03）；state.json 键名 sessProbe 不变
         let sessProbe = null;
         try {
-          const r = await ctx.session.get({ sessionID: a.sessionID });
+          const r = await host.sessions.get({ sessionID: a.sessionID });
           sessProbe = { ok: true, topKeys: Object.keys(r ?? {}), location: r?.data?.location ?? r?.location ?? null };
         } catch (e) {
           sessProbe = { ok: false, err: String((e as Error)?.message ?? e).slice(0, 140) };
         }
         let rpcSelf = null;
-        try { rpcSelf = WfDef ? await ctx.rpc(WfDef).state({ sessionID: a.sessionID }) : "no-rpc-def"; }
+        try { rpcSelf = WfDef ? await host.rpc.client(WfDef).state({ sessionID: a.sessionID }) : "no-rpc-def"; }
         catch (e) { rpcSelf = `ERR:${String((e as Error)?.message ?? e)}`; }
         let rpcList = null;
-        try { rpcList = WfDef ? await ctx.rpc(WfDef).list({}) : "no-rpc-def"; }
+        try { rpcList = WfDef ? await host.rpc.client(WfDef).list({}) : "no-rpc-def"; }
         catch (e) { rpcList = `ERR:${String((e as Error)?.message ?? e)}`; }
         let rpcListMine = null;
-        try { rpcListMine = WfDef ? await ctx.rpc(WfDef).list(st?.projectID ? { projectID: String(st.projectID), ...(st.directory ? { directory: String(st.directory) } : {}) } : {}) : "no-rpc-def"; }
+        try { rpcListMine = WfDef ? await host.rpc.client(WfDef).list(st?.projectID ? { projectID: String(st.projectID), ...(st.directory ? { directory: String(st.directory) } : {}) } : {}) : "no-rpc-def"; }
         catch (e) { rpcListMine = `ERR:${String((e as Error)?.message ?? e)}`; }
         let scanRaw = null;
         try { scanRaw = await dumpStates(); } // P1：DB 转储（近似旧 storage scan 的 [{key,value}] 形状）
@@ -645,7 +648,7 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
           const p = `${dbg}/.workflow/_debug`;
           fs.mkdirSync(p, { recursive: true });
           fs.writeFileSync(`${p}/state.json`, JSON.stringify(out, null, 2));
-        } catch { /* ignore */ }
+        } catch (e) { swallow(e, "commands:state-dump-write-fail"); }
         return `wf 工作流状态已落盘：${dbg}/.workflow/_debug/state.json`;
       },
     });
@@ -654,10 +657,10 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
   const hookRegs: any[] = [];
   try {
     for (const h of ["context", "compaction", "generate"]) {
-      const r = await ctx.session?.hook?.(h, stripReports);
+      const r = await host.sessions.hook(h, stripReports);
       if (r) hookRegs.push(r);
     }
-    const rt = await ctx.session?.hook?.("title", (event: any) => {
+    const rt = await host.sessions.hook("title", (event: any) => {
       stripReports(event);
       const hasText = (event?.messages ?? []).some((m: any) => {
         const c = m?.content;
@@ -667,12 +670,12 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       if (!hasText) event.result = ""; // 首条消息仅报告：跳过标题生成（quota 先例）
     });
     if (rt) hookRegs.push(rt);
-  } catch { /* 宿主缺 hook API：降级为报告入上下文 */ }
+  } catch (e) { swallow(e, "commands:title-hook-missing"); }
 
   return {
     dispose: () => {
-      try { reg?.dispose?.(); } catch { }
-      for (const r of hookRegs) { try { r?.dispose?.(); } catch { } }
+      try { reg?.dispose?.(); } catch (e) { swallow(e, "commands:reg-dispose-fail"); }
+      for (const r of hookRegs) { try { r?.dispose?.(); } catch (e) { swallow(e, "commands:hook-reg-dispose-fail"); } }
     },
   };
 }

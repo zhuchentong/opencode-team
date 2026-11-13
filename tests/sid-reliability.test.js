@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+// T04：装配收敛 helpers/host-stub
+import { mkHostStub } from "./helpers/host-stub.js";
 import {
   SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, completeSidPrefix, isNearTruncation, diagnoseReport,
 } from "../server/lib.ts";
@@ -96,24 +98,18 @@ const DB = `${DIR}/.workflow/wf.db`;
 const FULL = "ses_planFull123"; // 15 字符；60% 阈值=9
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
-  const tools = []; const cmds = []; const entries = [];
+  const entries = [];
   let hookFn = null;
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（ses_ghost 不存在形态=sessions.get 覆盖；skill 同步隔离 skillsDir）
+  const host = mkHostStub({
     options: { probe: false, skillsDir: `${ROOT}/skills-guard` }, // skill 同步隔离到临时目录
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: {
-      get: async (q = {}) => (String(q?.sessionID ?? "") === "ses_ghost" ? null : { projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
-      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
-    },
-    tool: {
-      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
-      hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; },
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds, entries, hook: () => hookFn };
+    sessions: { get: async (q = {}) => (String(q?.sessionID ?? "") === "ses_ghost" ? null : { projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },
+    instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
+    tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
@@ -263,10 +259,10 @@ test("r45-D：内容漂移 → write + 备份 + 还原；无标记 → unmanaged
 
 test("r45-D：registerSkillSync 默认开启；syncSkills:false 显式关闭", () => {
   const d1 = `${ROOT}/skills-on`;
-  registerSkillSync({ log: { info() {}, warn() {} } }, { skillsDir: d1 });
+  registerSkillSync(mkHostStub(), { skillsDir: d1 });
   assert.ok(fs.existsSync(`${d1}/session-lookup/SKILL.md`), "默认应同步落盘");
   const d2 = `${ROOT}/skills-off`;
-  registerSkillSync({ log: { info() {}, warn() {} } }, { syncSkills: false, skillsDir: d2 });
+  registerSkillSync(mkHostStub(), { syncSkills: false, skillsDir: d2 });
   assert.ok(!fs.existsSync(`${d2}/session-lookup/SKILL.md`), "显式关闭不得写盘");
 });
 

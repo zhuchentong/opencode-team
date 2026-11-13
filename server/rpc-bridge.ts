@@ -3,9 +3,10 @@
 // 注册失败 fail-soft（rpcErr 记录，供 /wf:diagnose 显示；此时尚不含 tui/ 部件，server 侧可独立验证）。
 // P1：命令输出槽迁移至 SQLite reports 表（getReport 由 state.ts 注入，ctx.storage 不再参与）。
 import * as fs from "node:fs";
-import type { ReportLevel } from "./lib.ts"; // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
+import type { ReportLevel } from "./lib.ts";
+import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账 // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
 
-export async function createRpcBridge(ctx: any, { load, scanStates, getReport, runner, resolveProjectDir }: {
+export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, runner, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
   getReport: (sessionID: string) => Promise<any>;
@@ -17,17 +18,17 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
   let rpcErr = null;
   let WfDef = null;
   try {
-    if (ctx.rpc?.register) {
-      const mod = await import("../shared/rpc.ts");
-      WfDef = mod.Wf;
-      rpcReg = await ctx.rpc.register(WfDef, {
+    // T03：经 host.rpc.register 透传；wrapper 缺失→null=旧 !ctx.rpc?.register 分支（rpcErr 记账逐字，
+    // WfDef 仅在注册成功后置位=旧 if 块内赋值时序；impl 块零改动）
+    const mod = await import("../shared/rpc.ts");
+    const reg = await host.rpc.register(mod.Wf, {
         state: async (input: any) => {
           const st = await load(input?.sessionID);
           // P1 主通道：命令输出写 reports 表，state 输出附带 lastReport 供 TUI 轮询
           let lastReport = null;
           try {
             lastReport = (await getReport(String(input?.sessionID ?? ""))) ?? null;
-          } catch { /* 读槽失败按无报告处理 */ }
+          } catch (e) { swallow(e, "rpc-bridge:last-report-read-fail"); }
           // T03：active 收紧——幽灵行（无 slug 且无 phase，历史缺陷：拒绝分支对全新会话落盘）
           // 与已 reset 残留行一律报 inactive，让 TUI 走回退列表，不再锁死面板
           if (!st || (!st.slug && !st.phase)) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
@@ -106,7 +107,8 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
           }
         },
       });
-    } else rpcErr = "ctx.rpc 不可用";
+    if (reg === null) rpcErr = "ctx.rpc 不可用";
+    else { WfDef = mod.Wf; rpcReg = reg; }
   } catch (e) {
     rpcErr = String((e as Error)?.message ?? e);
   }
@@ -119,7 +121,7 @@ export async function createRpcBridge(ctx: any, { load, scanStates, getReport, r
         phase: st.phase ?? null,
         rounds: st.rounds ?? {},
       });
-    } catch { /* 事件失败不影响主流程 */ }
+    } catch (e) { swallow(e, "rpc-bridge:emit-updated-fail"); }
   };
 
   // 命令输出广播：宿主 execute 返回值不显示给用户（2.2.6 契约 Promise<void>）。

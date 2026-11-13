@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import plugin from "../server/index.ts";
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 import { READONLY_CMDS } from "../server/lib.ts";
 
 const DIR = "/tmp/opencode/wf-open";
@@ -13,9 +14,8 @@ const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const store = new Map();
-  const tools = [];
-  const cmds = [];
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（tools/cmds=stub 注册捕获数组；po1/workflow 形状=sessions.get 覆盖）
+  const host = mkHostStub({
     options: { probe: false },
     location: { directory: DIR },
     storage: {
@@ -24,20 +24,9 @@ const mkCtx = () => {
       remove: async (k) => { store.delete(k); },
       scan: async () => ({ entries: [] }),
     },
-    session: {
-      get: async () => ({ projectID: "po1", agent: "workflow", location: { directory: DIR } }),
-      wait: async () => {},
-      prompt: async () => {},
-      hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
-    },
-    tool: {
-      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
-      hook: () => ({ dispose() {} }),
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds };
+    sessions: { get: async () => ({ projectID: "po1", agent: "workflow", location: { directory: DIR } }) },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs };
 };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);

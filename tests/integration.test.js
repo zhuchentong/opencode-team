@@ -8,17 +8,18 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 
 // 虚拟模块占位包自举（node_modules 在 .gitignore，克隆后首次运行需生成；语义与 harness 一致）
 const mockDir = `${import.meta.dirname}/../node_modules/@opencode/plugin`;
 if (!fs.existsSync(mockDir)) {
   fs.mkdirSync(mockDir, { recursive: true });
-  fs.writeFileSync(`${mockDir}package.json`, JSON.stringify({
+  fs.writeFileSync(`${mockDir}/package.json`, JSON.stringify({
     name: "@opencode/plugin", version: "0.0.0-local-mock", private: true, type: "module",
     exports: { "./tui": "./mock-tui.js", "./rpc": "./mock-rpc.js" },
   }));
-  fs.writeFileSync(`${mockDir}mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
-  fs.writeFileSync(`${mockDir}mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
 }
 
 const DIR = "/tmp/opencode/wf-integ";
@@ -28,14 +29,14 @@ const mkCtx = (opts = {}) => {
   // 每个实例全新库：测试间零串扰（等价旧版 per-mkCtx 干净 Map）
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const store = new Map();
-  const tools = [];
-  const cmds = [];
   const entries = [];
   const removed = [];
   const prompts = []; // P2 降级轨：prompt(resume:false) 注入捕获
   const hooks = []; // P2 报告剥离 hook 注册捕获
   let hookFn = null;
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（options.probe=false 关探针避免写盘噪音；捕获数组语义不变；
+  // setChat=对 _ctx 活写——adaptHost 闭包持同一 ctx 引用，setup 前写入生效）
+  const host = mkHostStub({
     options: { probe: false, ...opts }, // 关探针避免写盘噪音
     location: { directory: DIR }, // P1：状态库路径按 location 解析
     storage: {
@@ -44,26 +45,20 @@ const mkCtx = (opts = {}) => {
       remove: async (k) => { store.delete(k); },
       scan: async () => ({ entries: [] }),
     },
-    session: {
+    sessions: {
       get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
       wait: async () => {}, // P2：降级轨排空等待（测试会话恒空闲）
       prompt: async (i) => { prompts.push(i); },
       hook: async (name, fn) => { hooks.push({ name, fn }); return { dispose() {} }; },
-      instructions: {
-        entry: {
-          put: async (i) => { entries.push(i); },
-          list: async () => entries,
-          remove: async (i) => { removed.push(i); },
-        },
-      },
     },
-    tool: {
-      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
-      hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; },
+    instructions: {
+      put: async (i) => { entries.push(i); },
+      list: async () => entries,
+      remove: async (i) => { removed.push(i); },
     },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, store, tools, cmds, entries, removed, prompts, hooks, hook: () => hookFn, setChat: (api) => { ctx.chat = api; } };
+    tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
+  });
+  return { ctx: host._ctx, store, tools: host._toolDefs, cmds: host._cmdDefs, entries, removed, prompts, hooks, hook: () => hookFn, setChat: (api) => { host._ctx.chat = api; } };
   };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);

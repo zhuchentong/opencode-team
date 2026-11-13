@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FLOWS, LIMITS, evaluateTransition } from "../server/lib.ts";
-import { registerCommands } from "../server/commands.ts";
+import { mkWiringHarness as mkWiring } from "./helpers/wiring.js"; // T04：装配同源（harness 参数化包装）
 
 const mkSt = (phase = null, extra = {}) => ({
   sessionID: "ses_test",
@@ -199,41 +199,10 @@ const TIMING_SID = "ses_timing";
 const isISO = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v) && Number.isFinite(Date.parse(v));
 
 const mkTimingHarness = async () => {
+  // T04：装配收敛 helpers/wiring（options/sessions/deps 缺省=旧内联 mock 等价；seed 为计时用例专属附加面）
   const store = new Map();
-  const cmds = [];
-  const ctx = {
-    options: { leaderOnly: false }, // 跳过 agent 解析（计时断言与 leader 关卡正交）
-    session: {
-      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: "/tmp/opencode/wf-elapsed" } }),
-      wait: async () => {},
-      prompt: async () => {},
-      hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  const deps = {
-    load: async (sid) => store.get(sid) ?? null,
-    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
-    resolveProjectDir: async () => "/tmp/opencode/wf-elapsed",
-    removeState: async (sid) => { store.delete(sid); },
-    putReport: async () => {},
-    dumpStates: async () => [],
-    debugDirFor: async () => "/tmp/opencode/wf-elapsed",
-    probeOnce: async () => {},
-    LIMS: { ...LIMITS },
-    emitUpdated: async () => {},
-    emitReport: async () => {},
-    WfDef: null, rpcErr: null, runner: { run: null },
-  };
-  const { dispose } = await registerCommands(ctx, deps);
-  return {
-    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: TIMING_SID, prompt: { text } }),
-    st: () => store.get(TIMING_SID),
-    patch: (obj) => Object.assign(store.get(TIMING_SID), obj), // 关卡记账 fixture（与计时正交）
-    seed: (st) => store.set(TIMING_SID, structuredClone(st)),
-    dispose,
-  };
+  const h = await mkWiring({ store, sessionID: TIMING_SID, dir: "/tmp/opencode/wf-elapsed" });
+  return { ...h, seed: (st) => store.set(TIMING_SID, structuredClone(st)) };
 };
 
 // daily 链推进至 done（关卡前置经 patch 置账；M 级须 planReviewVerdict PASS + 方案确认）
@@ -343,42 +312,9 @@ test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnt
 // ── notification-brief-display T03：publishOutput/runner 接线 + FLOW_COMMANDS 单一来源 ──
 // 捕获 mock（putReport/emitReport 记录载荷）驱动 commands.ts 真实 publishOutput；
 // 断言 plan §5-T03 验收表 1-4 + B 意见名单同源（L129）。
-const mkWiringHarness = async () => {
-  const store = new Map();
-  const cmds = [];
-  const reports = []; // putReport 捕获（行形状 = state.ts 契约）
-  const events = []; // emitReport 捕获（第 4 参 meta）
-  const ctx = {
-    options: { leaderOnly: false },
-    session: {
-      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: "/tmp/opencode/wf-brief-w" } }),
-      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  const deps = {
-    load: async (sid) => store.get(sid) ?? null,
-    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
-    resolveProjectDir: async () => "/tmp/opencode/wf-brief-w",
-    removeState: async (sid) => { store.delete(sid); },
-    putReport: async (r) => { reports.push(r); },
-    dumpStates: async () => [],
-    debugDirFor: async () => "/tmp/opencode/wf-brief-w",
-    probeOnce: async () => {},
-    LIMS: { ...LIMITS },
-    emitUpdated: async () => {},
-    emitReport: async (sid, text, at, meta) => { events.push({ sid, text, at, meta }); },
-    WfDef: null, rpcErr: null, runner: { run: null },
-  };
-  const { dispose } = await registerCommands(ctx, deps);
-  return {
-    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: "ses_w", prompt: { text } }),
-    reports, events, deps, cmds,
-    st: () => store.get("ses_w"),
-    dispose,
-  };
-};
+const mkWiringHarness = async () =>
+  // T04：装配收敛 helpers/wiring——reports=putReport 捕获（state.ts 行形状）、events=emitReport 捕获（meta 第 4 参）
+  mkWiring({ dir: "/tmp/opencode/wf-brief-w", sessionID: "ses_w" });
 const lastRow = (h) => h.reports[h.reports.length - 1];
 
 test("T03 成功流转：reports 行 = text 全文 + brief(【wf 开头) + level=info（LLM 全文锚不动）", async () => {

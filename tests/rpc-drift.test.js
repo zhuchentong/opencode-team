@@ -5,6 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Wf } from "../shared/rpc.ts";
 import { createRpcBridge } from "../server/rpc-bridge.ts";
+// T04：装配收敛 helpers/host-stub
+import { mkHostStub } from "./helpers/host-stub.js";
 
 test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
   assert.equal(Wf.id, "wf"); // wire 前缀 rpc.wf.<name> 的字符串来源
@@ -52,7 +54,7 @@ test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
 const TIMING_KEYS = ["startedAt", "phaseEnteredAt", "phaseDurations", "finishedAt"];
 const mkStateBridge = async (st, report = null) => {
   const impls = {};
-  const ctx = { rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async () => {} } }; } } };
+  const host = mkHostStub({ rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async () => {} } }; } } });
   const deps = {
     load: async () => st,
     scanStates: async () => [],
@@ -60,7 +62,7 @@ const mkStateBridge = async (st, report = null) => {
     runner: { run: null },
     resolveProjectDir: async () => "/tmp/opencode/wf-elapsed",
   };
-  await createRpcBridge(ctx, deps);
+  await createRpcBridge(host, deps);
   return impls;
 };
 
@@ -122,8 +124,8 @@ test("T01 bridge lastReport 透传 brief/level（新字段行原样送达 TUI）
 const mkEmitBridge = async (runnerRun) => {
   const emitted = [];
   const impls = {};
-  const ctx = { rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async (name, data) => { emitted.push({ name, data }); } } }; } } };
-  const bridge = await createRpcBridge(ctx, {
+  const host = mkHostStub({ rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async (name, data) => { emitted.push({ name, data }); } } }; } } });
+  const bridge = await createRpcBridge(host, {
     load: async () => null, scanStates: async () => [], getReport: async () => null,
     runner: { run: runnerRun ?? null }, resolveProjectDir: async () => "/tmp/opencode/wf-brief",
   });

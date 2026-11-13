@@ -1,18 +1,19 @@
-// wf-workflow — M16-r31：角色内容插件托管（B1 文件同步主路径）
-// 背景：宿主 wf/* 角色文件与插件版本漂移（r28 删 assign 后 leader.md 滞留 r27，r30 才手工同步）。
-// 机制：仓库 roles/ 单一来源 → setup 渲染全文 → 写宿主文件 body（保留 frontmatter/permissions）
-//       → 宿主文件热载（P0 真机实证：agent 文件 create/edit/delete 免重启即时生效）。
-// 安全：opt-in（options.syncRoles）+ 写前备份 + 版本标记区分托管/用户自有 + 无标记不覆盖 + hash 同跳过。
-// 结构事实（阶段链）从 shared/phases.ts 动态生成——流转语义变更自动传播到角色内容，根治漂移。
-// 注意：不调用 guidance()（它是状态依赖的每任务运行时指引，形状不符静态角色 system）。
-// M16-r39 T12：missing 自动创建——roles/fm/<name>.md 宿主 frontmatter 逐字快照 + renderRole body；
-// 已存在文件的 fm 绝不触碰（write/unmanaged/skip 语义不变）。
+// wf-workflow — M16-r31：角色内容插件托管（B1 文件同步主路径）——域门面。
+// T05（arch-r1-host-split）：通用决策+IO 已抽至 managed-sync.ts；本文件只留角色域语义：
+// phaseChain 结构事实渲染 / renderRole 全文（标记+body）/ fm 快照 / 标记解析 / 路径解析 / setup 接线。
+// 安全语义逐字保留：opt-in（options.syncRoles）+ 写前备份 + 标记区分托管/自有 + 无标记不覆盖 + hash 同跳过；
+// create 仅 missing 时读 fm 快照（惰性 getter，与旧「missing 分支才读」时序同源），已存在文件 fm 绝不触碰。
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createHash } from "node:crypto";
 import { PHASE_ORDER, FOLD } from "../shared/phases.ts";
 import { VERSION } from "./lib.ts";
+import { type Host } from "./host.ts"; // T03：registerRoleSync 收 Host
+import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
+import {
+  contentHash12, decideSync, syncAll, statusAll,
+  type SyncAction, type SyncStatus, type SyncReport, type SyncTarget,
+} from "./managed-sync.ts";
 
 // 8 角色（leader + 7 subagent）；与 lib.ts WF_ROLES 同源语义（WF_ROLES 不含 leader）
 export const ROLE_NAMES = [
@@ -20,6 +21,8 @@ export const ROLE_NAMES = [
   "builder", "builder-reviewer", "fixer", "learner",
 ] as const;
 export type RoleName = typeof ROLE_NAMES[number];
+export type { SyncAction, SyncReport };
+export type RoleStatus = SyncStatus; // 类型别名转发（旧联合值集相同：managed|stale|unmanaged|missing）
 
 // 模板目录：仓库 roles/（server 入口经 bun 直跑 TS，import.meta.dirname 可用）
 const ROLES_DIR = path.join(import.meta.dirname, "..", "roles");
@@ -36,13 +39,7 @@ export function phaseChain(): string {
   }).join("→");
 }
 
-// 内容 hash：对「去标记行的 body」取 sha256 前 12 位（标记含 hash，故计算时须剥离首行标记）
-function bodyHash(bodyWithoutMarker: string): string {
-  return createHash("sha256").update(bodyWithoutMarker).digest("hex").slice(0, 12);
-}
-
-// 模板 body（结构事实注入后）——hash 必须基于「替换占位符后」的最终内容，
-// 否则标记 hash 与实际写盘 body 不一致 → 每次 setup 都判 write（hash 跳过失效、无谓热载）。
+// 模板 body（结构事实注入后）——hash 必须基于「替换占位符后」最终内容（hash 跳过才有效，防无谓热载）
 function roleBody(name: RoleName): string {
   const tpl = fs.readFileSync(path.join(ROLES_DIR, `${name}.md`), "utf8");
   return tpl.replace(/\{\{PHASE_CHAIN\}\}/g, phaseChain());
@@ -50,7 +47,7 @@ function roleBody(name: RoleName): string {
 
 // 托管标记（body 首行）：version + hash。hash 覆盖标记行之后的全部内容。
 export function roleMarker(name: RoleName): string {
-  return `<!-- wf-workflow:managed version=${VERSION} hash=${bodyHash(roleBody(name))} -->`;
+  return `<!-- wf-workflow:managed version=${VERSION} hash=${contentHash12(roleBody(name))} -->`;
 }
 
 // 渲染角色全文 = 托管标记 + 模板 body（结构事实注入）。纯函数（读模板文件，无副作用）。
@@ -58,8 +55,7 @@ export function renderRole(name: RoleName): string {
   return `${roleMarker(name)}\n${roleBody(name)}`;
 }
 
-// M16-r39 T12：宿主 frontmatter 逐字快照（roles/fm/<name>.md，--- 块含尾换行；无 model 字段）。
-// 仅用于 missing 自动创建；已存在文件的 fm 绝不触碰。leader 快照源=宿主 agents/workflow.md。
+// M16-r39 T12：宿主 frontmatter 逐字快照（roles/fm/<name>.md）。仅 missing 自动创建消费。
 export function roleFrontmatter(name: RoleName): string {
   return fs.readFileSync(path.join(ROLES_DIR, "fm", `${name}.md`), "utf8");
 }
@@ -70,72 +66,33 @@ export function parseMarker(line: string): { version: string; hash: string } | n
   return m ? { version: m[1], hash: m[2] } : null;
 }
 
-export type SyncAction = "skip" | "write" | "unmanaged" | "missing" | "create";
-
-// 同步决策（纯函数）：给定宿主现有 body 与最新渲染全文 → 动作。
-// 关键：hash 须对「现有 body 去掉标记行后的实际内容」重算，再与渲染内容 hash 比——
-// 不能只比两个标记行的 hash（陈旧 body 往往仍带旧标记行，只比标记会漏判内容漂移）。
-// 已托管且实际内容 hash 一致→skip；已托管但内容陈旧→write；无标记（用户自有）→unmanaged（不覆盖）。
+// 同步决策转发（tests/roles.test.js 消费位零改动；语义=decideSync head 形，hash 对去标记行内容重算）
 export function syncDecision(existingBody: string, rendered: string): { action: SyncAction } {
-  const firstLine = existingBody.split("\n")[0] ?? "";
-  if (!parseMarker(firstLine)) return { action: "unmanaged" };
-  const existingContent = existingBody.split("\n").slice(1).join("\n");
-  const renderedContent = rendered.split("\n").slice(1).join("\n");
-  if (bodyHash(existingContent) === bodyHash(renderedContent)) return { action: "skip" };
-  return { action: "write" };
+  return { action: decideSync(existingBody, rendered, { markerPosition: "head", parseHashMarker: parseMarker }) };
 }
 
-// 拆分宿主文件 frontmatter 与 body（--- ... --- 包裹的头部原样保留）
-function splitFrontmatter(content: string): { fm: string; body: string } {
-  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
-  if (!m) return { fm: "", body: content };
-  return { fm: m[0], body: content.slice(m[0].length) };
-}
+// 目标清单构造：items 预渲染（render 留域门面，managed-sync 纯执行）；frontmatter 惰性 getter=仅 create 读快照
+const roleTarget = (rolesDir: string, backup: boolean): SyncTarget => ({
+  markerPrefix: "wf-workflow:managed",
+  markerPosition: "head",
+  parseHashMarker: parseMarker,
+  backup,
+  items: ROLE_NAMES.map((name) => ({
+    name,
+    file: roleHostFile(rolesDir, name),
+    rendered: renderRole(name),
+    get frontmatter() { return roleFrontmatter(name); },
+  })),
+});
 
-export interface SyncReport { name: string; action: SyncAction; detail?: string }
-
-// 文件同步（fs 副作用，可用临时目录测试）：对每个角色按 syncDecision 处理。
-// write 时保留 frontmatter、写前备份（.bak-<ts>）、body=渲染全文。
-// M16-r39 T12：missing 自动创建（fm 快照+渲染 body，action=create）——旧「保守不创建」翻转；
-// 已存在文件语义不变（write/unmanaged/skip，fm 绝不触碰）。
+// 文件同步（委托 managed-sync；旧「missing 保守不创建」翻转语义、fm 保留、备份、跳过均在对偶实现处）
 export function syncRoles(rolesDir: string, opts: { backup?: boolean } = {}): SyncReport[] {
-  const report: SyncReport[] = [];
-  for (const name of ROLE_NAMES) {
-    const file = roleHostFile(rolesDir, name);
-    if (!fs.existsSync(file)) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, roleFrontmatter(name) + renderRole(name));
-      report.push({ name, action: "create" });
-      continue;
-    }
-    const content = fs.readFileSync(file, "utf8");
-    const { fm, body } = splitFrontmatter(content);
-    const rendered = renderRole(name);
-    const { action } = syncDecision(body, rendered);
-    if (action === "write") {
-      if (opts.backup !== false) {
-        try { fs.writeFileSync(`${file}.bak-${Date.now()}`, content); } catch { /* 备份失败不阻塞 */ }
-      }
-      fs.writeFileSync(file, fm + rendered);
-    }
-    report.push({ name, action });
-  }
-  return report;
+  return syncAll([roleTarget(rolesDir, opts.backup !== false)]);
 }
 
-// 漂移守卫（wf:ping 用）：逐角色读宿主文件，比对「实际 body 内容 hash vs 仓库期望」。
-// managed=已托管且最新；stale=已托管但陈旧；unmanaged=无标记（用户自有）；missing=文件缺失。
-export type RoleStatus = "managed" | "stale" | "unmanaged" | "missing";
+// 漂移守卫（wf:ping 用）：managed=已托管且最新；stale=已托管但陈旧；unmanaged=无标记；missing=文件缺失
 export function roleSyncStatus(rolesDir: string): { name: string; status: RoleStatus }[] {
-  const out: { name: string; status: RoleStatus }[] = [];
-  for (const name of ROLE_NAMES) {
-    const file = roleHostFile(rolesDir, name);
-    if (!fs.existsSync(file)) { out.push({ name, status: "missing" }); continue; }
-    const { body } = splitFrontmatter(fs.readFileSync(file, "utf8"));
-    const { action } = syncDecision(body, renderRole(name));
-    out.push({ name, status: action === "skip" ? "managed" : action === "write" ? "stale" : "unmanaged" });
-  }
-  return out;
+  return statusAll([roleTarget(rolesDir, false)]);
 }
 
 // 宿主全局 agents/wf 目录解析：options.rolesDir 优先，回退 XDG_CONFIG_HOME 或 ~/.config/opencode/agents/wf
@@ -146,26 +103,23 @@ export function resolveRolesDir(opt: any): string {
 }
 
 // M16-r38：leader 宿主 agent ID=workflow（顶层 agents/workflow.md），其余 7 角色在 agents/wf/ 下。
-// agent ID 由文件相对 agents/ 的路径派生：agents/workflow.md→workflow、agents/wf/<name>.md→wf/<name>。
-// rolesDir 即 agents/wf；leader 目标取其上级目录的 workflow.md（模板仍 roles/leader.md，内部角色名不变）。
 export function roleHostFile(rolesDir: string, name: RoleName): string {
   if (name === "leader") return path.join(rolesDir, "..", "workflow.md");
   return path.join(rolesDir, `${name}.md`);
 }
 
-// setup 接线（fail-soft）：opt.syncRoles 开启时同步角色文件；异常不阻塞插件加载。
-// 返回 dispose（无资源占用，置空保持组装层一致）。
-export function registerRoleSync(ctx: any, opt: any): { dispose: () => void } {
+// setup 接线（fail-soft）：opt.syncRoles 开启时同步角色文件；异常不阻塞插件加载。返回 dispose（空保持组装一致）。
+export function registerRoleSync(host: Host, opt: any): { dispose: () => void } {
   try {
     if (opt?.syncRoles !== true) return { dispose() {} };
     const dir = resolveRolesDir(opt);
     const report = syncRoles(dir, { backup: true });
     const summary = report.map((r) => `${r.name}:${r.action}`).join(" ");
-    try { ctx?.log?.info?.(`[wf-workflow] 角色同步（${dir}）：${summary}`); } catch { }
+    host.notify("info", `[wf-workflow] 角色同步（${dir}）：${summary}`); // T03：旧 ctx.log 裸戳+try/catch→notify（缺失/抛错内部 swallow 静默降级）
     const unmanaged = report.filter((r) => r.action === "unmanaged").map((r) => r.name);
     if (unmanaged.length) {
-      try { ctx?.log?.warn?.(`[wf-workflow] 以下角色文件无托管标记，未覆盖（如需托管请移除自定义内容或手动加标记）：${unmanaged.join(", ")}`); } catch { }
+      host.notify("warn", `[wf-workflow] 以下角色文件无托管标记，未覆盖（如需托管请移除自定义内容或手动加标记）：${unmanaged.join(", ")}`);
     }
-  } catch { /* fail-soft：角色同步失败不阻塞插件 */ }
+  } catch (e) { swallow(e, "roles:sync-fail-soft"); }
   return { dispose() {} };
 }

@@ -80,3 +80,43 @@ test("diagnoseReport：非 .md 文件与 kind 外产物不参与对账噪音", (
   const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["notes.txt", "_debug"] });
   assert.match(r, /✅ 产物对账一致/);
 });
+
+// ── T01（arch-r1-host-split）：静默失败摘要节（facts.swallows 条件输出）──
+const mkSt = () => ({ slug: "demo", phase: "review", rounds: {}, artifacts: {}, log: [] });
+
+test("T01 摘要节：swallows 缺省与空数组 → 输出逐字相等（存量输出不变）", () => {
+  const st = mkSt();
+  const base = diagnoseReport(st, { version: "TEST" });
+  assert.equal(diagnoseReport(st, { version: "TEST", swallows: [] }), base);
+  assert.ok(!base.includes("🔇"), "空/缺省不得新增任何行");
+});
+
+test("T01 摘要节：非空 → 🔇 头行+按 code 聚合+明细，零回显（无裸 ses_）且 msg 截 120 码点", () => {
+  const st = mkSt();
+  const swallows = [
+    { code: "state:save-prev-read-fail", msg: "boom ses_Ab3x9QzKfT8pLm2wNv5rJd7h", at: "2026-11-13T01:02:03.000Z" },
+    { code: "hint:chat-message-fail", msg: "乙".repeat(150), at: "2026-11-13T04:05:06.000Z" },
+    { code: "state:save-prev-read-fail", msg: "again", at: "2026-11-13T07:08:09.000Z" },
+  ];
+  const r = diagnoseReport(st, { version: "TEST", swallows });
+  assert.match(r, /^  🔇 静默失败（环形采样≤200）：3 条 2 类$/m);
+  assert.match(r, /^    state:save-prev-read-fail ×2$/m, "按 code 计数（首现序）");
+  assert.match(r, /^    hint:chat-message-fail ×1$/m);
+  assert.match(r, /^    \[01:02:03\] state:save-prev-read-fail boom 〔已隐去〕$/m, "明细行：时间+code+脱敏 msg");
+  assert.match(r, /^    \[07:08:09\] state:save-prev-read-fail again$/m);
+  assert.ok(r.includes("乙".repeat(120)) && !r.includes("乙".repeat(121)), "msg 截 120 码点");
+  assert.ok(!r.includes("ses_"), "红线6：ses_ 不进模型可见文本");
+});
+
+test("T01 摘要节：>5 条 → 明细仅最近 5 条（时序末尾）", () => {
+  const st = mkSt();
+  const swallows = Array.from({ length: 7 }, (_, i) => ({
+    code: `t:c${i}`, msg: `m${i}x`.repeat(1), at: `2026-11-13T00:00:0${i}.000Z`,
+  }));
+  const r = diagnoseReport(st, { version: "TEST", swallows });
+  assert.match(r, /：7 条 7 类/);
+  const details = r.split("\n").filter((l) => /^    \[\d\d:\d\d:\d\d\] /.test(l));
+  assert.equal(details.length, 5, "明细行 ≤5");
+  assert.ok(details[0].includes("m2"), "明细=最近 5 条（丢弃最旧 m0/m1）");
+  assert.ok(details[4].includes("m6"), "末条=最新");
+});

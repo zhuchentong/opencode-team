@@ -12,6 +12,8 @@ import plugin from "../server/index.ts";
 import { isSelfModDir, selfModWarnLine, evaluateTransition, FLOWS, FLOWS_DAILY } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts";
 import { createStore, scanActiveTasks, projectsListFile } from "../server/state.ts";
+// T04：装配收敛 helpers/host-stub
+import { mkHostStub } from "./helpers/host-stub.js";
 
 const DIR = "/tmp/opencode/wf-selfmod";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -19,21 +21,18 @@ const PROJ2 = "/tmp/opencode/wf-selfmod-proj2";
 process.env.WF_PROJECTS_FILE = `${DIR}/projects.jsonl`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`, projectsListFile()]) { try { fs.rmSync(f, { force: true }); } catch { } }
-  const tools = []; const cmds = []; const entries = [];
+  const entries = [];
   let hookFn = null;
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（tools/cmds=stub 注册捕获数组；探测根=selfModRoot 注入）
+  const host = mkHostStub({
     options: { probe: false, selfModRoot: DIR }, // 注入探测根=任务目录 → 恒判自改
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: {
-      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
-      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
-    },
-    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds, entries, hook: () => hookFn };
+    sessions: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },
+    instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
+    tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const stOf = (sid) => {
@@ -45,11 +44,11 @@ const blank = (over = {}) => ({ slug: "t", phase: null, rounds: { plan_review: 0
 // 第二项目库（模拟休眠/活跃的其它任务）：直接 createStore 建真库，清单行手工 append（env 模式=只读清单）
 const mkProj = async (dir) => {
   fs.rmSync(dir, { recursive: true, force: true });
-  const s = createStore({
+  const s = createStore(mkHostStub({
     location: { directory: dir },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: { get: async () => ({ projectID: "pi2", agent: "wf/leader", location: { directory: dir } }) },
-  });
+    sessions: { get: async () => ({ projectID: "pi2", agent: "wf/leader", location: { directory: dir } }) },
+  }));
   await s.ready;
   return s;
 };

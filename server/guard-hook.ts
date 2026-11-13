@@ -12,6 +12,8 @@
 import * as fs from "node:fs";
 import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
 import { logAdd } from "./state.ts";
+import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
+import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
 // probe 4：session.get 返回形状摘要（模块级纯函数，避免每次调用重建；供一次性取证）
 const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentID ?? null, hasParentID: "parentID" in s, time: s.time ?? null } : null;
@@ -20,13 +22,13 @@ const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentI
 // M16-r34：mode 感知（daily 用 NEXT_DAILY）；模块级纯函数，只捕获模块 import，不依赖闭包
 const nextHint = (st: any, phase: string) => `当前阶段「${phase}」下一步：${nextFor(st, phase)}（leader 调用 wf_command(name=…) 推进，用户手敲亦可）。`;
 
-export function registerGuardHook(ctx: any, deps: any) {
+export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
   const { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir } = deps;
 
   // P1：阶段越权阻断记账（gate:block 进审计轨迹，供 /wf:diagnose 取证；落盘失败不影响阻断）
   const logBlock = async (st: any, tool: string, detail: string) => {
     logAdd(st, { at: new Date().toISOString(), cmd: "gate:block", tool, detail, from: st.phase, to: st.phase, ok: false, note: "blocked" });
-    try { await save(st); } catch { }
+    try { await save(st); } catch (e) { swallow(e, "guard-hook:block-log-save-fail"); }
   };
 
   // M16-r41 B 层：subagent 形状探针一次性开关（ERR-002 先探形状再使用；existsSync 自禁用，非 P6 常态探针）
@@ -37,7 +39,7 @@ export function registerGuardHook(ctx: any, deps: any) {
   let questionProbed = false;
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
-  return ctx.tool.hook("execute.before", async (input: any, output: any) => {
+  return host.tools.hook("execute.before", async (input: any, output: any) => {
     try {
       await probeOnce(input?.sessionID, "hook-probe", {
         inputKeys: Object.keys(input ?? {}),
@@ -58,7 +60,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           subagentProbed = true;
           try {
             let dir = process.cwd();
-            try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+            try { const s = await host.sessions.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch (e) { swallow(e, "guard-hook:session-dir-probe-fail"); }
             const dbg = `${dir}/.workflow/_debug`;
             if (!fs.existsSync(`${dbg}/subagent-probe.json`)) {
               fs.mkdirSync(dbg, { recursive: true });
@@ -69,19 +71,19 @@ export function registerGuardHook(ctx: any, deps: any) {
                 hasSessionID: input?.input ? "sessionID" in input.input : false,
               }, null, 2));
             }
-          } catch { /* 探针 best-effort */ }
+          } catch (e) { swallow(e, "guard-hook:subagent-probe-fail"); }
         }
         // probe 4：session.get 返回形状一次性取证（parentID/time.busy/idle → 归属+存活校验可行性）
         if (!sessionGetProbed) {
           sessionGetProbed = true;
           try {
             const callerSid = String(input?.sessionID ?? "");
-            const caller = await ctx.session.get({ sessionID: callerSid });
+            const caller = await host.sessions.get({ sessionID: callerSid });
             let dir4 = process.cwd();
             if (caller?.location?.directory) dir4 = String(caller.location.directory);
             const childSid = input?.input?.sessionID ? String(input.input.sessionID) : "";
             let child: any = null; let childErr: string | null = null;
-            if (childSid) { try { child = await ctx.session.get({ sessionID: childSid }); } catch (e) { childErr = String((e as Error)?.message ?? e); } }
+            if (childSid) { try { child = await host.sessions.get({ sessionID: childSid }); } catch (e) { childErr = String((e as Error)?.message ?? e); } }
             const dbg4 = `${dir4}/.workflow/_debug`;
             if (!fs.existsSync(`${dbg4}/session-get-probe.json`)) {
               fs.mkdirSync(dbg4, { recursive: true });
@@ -91,7 +93,7 @@ export function registerGuardHook(ctx: any, deps: any) {
                 child: childSid ? { sessionID: childSid, ...sessionShape(child), err: childErr } : null,
               }, null, 2));
             }
-          } catch { /* 探针 best-effort */ }
+          } catch (e) { swallow(e, "guard-hook:session-get-probe-fail"); }
         }
         if (!isLeader(String(input?.agent ?? ""))) return; // 仅 leader 的续接受管辖
         const st = await resolveState(input?.sessionID, input?.agent);
@@ -108,7 +110,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           const res = resolveSidAlias(passed, { role: target, roleSessions: st.roleSessions, lanes: st.lanes });
           if (!res.ok) {
             logAdd(st, { at: new Date().toISOString(), cmd: "session:alias", tool: toolName, detail: `${target}: ${passed} ✗ ${res.reason}`, from: st.phase, to: st.phase, ok: false, note: "alias-rejected" });
-            try { await save(st); } catch { /* 取证 best-effort */ }
+            try { await save(st); } catch (e) { swallow(e, "guard-hook:alias-reject-save-fail"); }
             throw new Error(`${GATE_ERR} 别名续接失败：${res.reason}${res.candidates?.length ? `（可用：${res.candidates.join(", ")}）` : ""}`);
           }
           // 一次性取证：记录改写尝试与形状——真机核对该文件 + 后续 subagent 是否命中改写后 sessionID
@@ -116,7 +118,7 @@ export function registerGuardHook(ctx: any, deps: any) {
             rewriteProbed = true;
             try {
               let dir = process.cwd();
-              try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+              try { const s = await host.sessions.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch (e) { swallow(e, "guard-hook:session-dir-probe-fail"); }
               const dbg = `${dir}/.workflow/_debug`;
               if (!fs.existsSync(`${dbg}/exec-rewrite-probe.json`)) {
                 fs.mkdirSync(dbg, { recursive: true });
@@ -126,10 +128,10 @@ export function registerGuardHook(ctx: any, deps: any) {
                   note: "验证宿主是否尊重 execute.before 的 input.input 就地改写（若不尊重→别名降级为 throw 纠正）",
                 }, null, 2));
               }
-            } catch { /* 探针 best-effort */ }
+            } catch (e) { swallow(e, "guard-hook:rewrite-probe-fail"); }
           }
           logAdd(st, { at: new Date().toISOString(), cmd: "session:alias", tool: toolName, detail: `${target}: ${passed} → ${res.sid}（${res.via}）`, from: st.phase, to: st.phase, ok: true, note: "aliased" });
-          try { await save(st); } catch { /* 取证 best-effort */ }
+          try { await save(st); } catch (e) { swallow(e, "guard-hook:alias-save-fail"); }
           args.sessionID = res.sid; // 就地改写
           return;
         }
@@ -144,16 +146,16 @@ export function registerGuardHook(ctx: any, deps: any) {
         // 形状非法 OR 真前缀截断 OR 近似截断 → 前缀自愈改写分支（GATE_ERR 标记确保穿透 fail-open，S1）。
         // T01：拒绝文案不回显登记 ID（拆「回显→再转录→死循环」燃料）；审计 detail 含 ID 合规（wf.db 不进上下文）。
         logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: fuzzy ? "corrected-fuzzy" : "corrected" });
-        try { await save(st); } catch { /* 取证 best-effort，不影响纠正 */ }
+        try { await save(st); } catch (e) { swallow(e, "guard-hook:correct-save-fail"); }
         if (isPrefix) {
           // 存活探针（session.get time.busy/idle）：明确运行中→throw 警示（防静默分叉，不静默改写）；
           //   已完成/探不到 time/异常→改写放行（best-effort 同旧 liveNote 判据）。
           let running = false;
           try {
-            const child = await ctx.session.get({ sessionID: tracked });
+            const child = await host.sessions.get({ sessionID: tracked });
             const busy = Number(child?.time?.busy ?? 0); const idle = Number(child?.time?.idle ?? 0);
             if (busy > 0 && idle > 0) running = busy > idle;
-          } catch { /* 存活取证 best-effort */ }
+          } catch (e) { swallow(e, "guard-hook:child-live-probe-fail"); }
           if (running) throw new Error(`${GATE_ERR} 续接自愈：传给 ${target} 的 sessionID「${passed}」命中登记会话前缀，但该子会话仍在运行：勿续用运行中会话（防静默分叉）。请待其完成后再续用，或省略 sessionID 新建（勿凭记忆复述长 ID）。`);
           args.sessionID = tracked; // 前缀自愈：就地改写（仿别名分支），零回显放行
           return;
@@ -174,7 +176,7 @@ export function registerGuardHook(ctx: any, deps: any) {
           questionProbed = true;
           try {
             let dir = process.cwd();
-            try { const s = await ctx.session.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch { }
+            try { const s = await host.sessions.get({ sessionID: String(input?.sessionID ?? "") }); if (s?.location?.directory) dir = String(s.location.directory); } catch (e) { swallow(e, "guard-hook:session-dir-probe-fail"); }
             const dbg = `${dir}/.workflow/_debug`;
             if (!fs.existsSync(`${dbg}/question-probe.json`)) {
               fs.mkdirSync(dbg, { recursive: true });
@@ -184,7 +186,7 @@ export function registerGuardHook(ctx: any, deps: any) {
                 hookAgent: input?.agent, args: input?.input ?? null,
               }, null, 2));
             }
-          } catch { /* 探针 best-effort */ }
+          } catch (e) { swallow(e, "guard-hook:question-probe-fail"); }
         }
         if (!isLeader(String(input?.agent ?? ""))) return; // 仅 leader 的确认受记账
         const stC = await resolveState(input?.sessionID, input?.agent);
@@ -200,7 +202,7 @@ export function registerGuardHook(ctx: any, deps: any) {
         if (stC.planConfirmedAt) return; // 已记账不重复 save（防抖动）
         stC.planConfirmedAt = new Date().toISOString();
         logAdd(stC, { at: stC.planConfirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
-        try { await save(stC); } catch { /* 记账 best-effort，不影响工具执行 */ }
+        try { await save(stC); } catch (e) { swallow(e, "guard-hook:confirm-save-fail"); }
         return;
       }
       if (!EDIT_TOOLS.has(toolName) && toolName !== "shell") return;
@@ -209,7 +211,7 @@ export function registerGuardHook(ctx: any, deps: any) {
       // M16-r40：角色→子会话自动登记——builder/fixer 只改码不写产物，在此捕获其 sessionID。
       // 仅 EDIT_TOOLS 且 sessionID 变化才落盘（每子会话一次，避免 save 抖动）；登记失败不阻断（fail-open）。
       if (EDIT_TOOLS.has(toolName) && trackRoleSession(st, input?.agent, input?.sessionID)) {
-        try { await save(st); } catch { /* 登记 best-effort，不影响闸门 */ }
+        try { await save(st); } catch (e) { swallow(e, "guard-hook:role-reg-save-fail"); }
       }
       if (!BLOCKING_PHASES.has(st.phase)) return;
       if (toolName === "shell") {

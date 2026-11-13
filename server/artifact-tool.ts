@@ -22,9 +22,9 @@ export interface ArtifactDeps {
   logToolsOnce: Observer["logToolsOnce"];
 }
 
-export function registerArtifactTool(ctx: any, deps: ArtifactDeps) {
+export function registerArtifactTool(host: import("./host.ts").Host, deps: ArtifactDeps) { // T03：ctx→Host
   const { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce } = deps;
-  return ctx.tool.transform((draft: any) => {
+  return host.tools.transform((draft: any) => {
     const namesPromise = Promise.resolve(draft.list?.()).catch(() => null);
     draft.add({
       name: "wf_write_artifact",

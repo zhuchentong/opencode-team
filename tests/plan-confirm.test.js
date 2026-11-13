@@ -8,27 +8,25 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 import { GATES, evaluateTransition, flowFor } from "../server/lib.ts";
 
 const DIR = "/tmp/opencode/wf-plan-confirm";
 const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
-  const tools = []; const cmds = []; const entries = [];
+  const entries = [];
   let hookFn = null;
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（tools/cmds=stub 注册捕获数组；question 取证=tools.hook 覆盖）
+  const host = mkHostStub({
     options: { probe: false },
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: {
-      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
-      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
-    },
-    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds, entries, hook: () => hookFn };
+    sessions: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },
+    instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
+    tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");

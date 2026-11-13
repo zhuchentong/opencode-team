@@ -14,6 +14,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { dirname, join } from "node:path";
 import { type ActiveOther, type FlowLogEntry, type ReportLevel, type WfState, isLeader } from "./lib.ts";
+import { type Host } from "./host.ts"; // T03：createStore 收 Host（原 ctx:any）
+import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
 // instructions.entry 的 key（非存储键——P1 不动 entry 通道）
 export const ENTRY_KEY = "wf.phase";
@@ -65,7 +67,7 @@ export function writeTaskRow(db: Database, row: TaskRow, expectedRev: number | n
   }
 }
 
-// ── M16-r39 T06：deps 类型化（Store 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）──
+// ── M16-r39 T06：deps 类型化（Store 契约）；T03：宿主入参 ctx→host（Host 防腐层），内部数据流用领域类型──
 export type SaveResult = { ok: boolean; reason?: string; rev?: number };
 // notification-brief-display T01：行形状扩 brief/level（nullable——旧行/未携新字段的写入为 null，
 // TUI 本地降级 briefOf 消费；wire 经 additionalProperties 透传）
@@ -141,7 +143,7 @@ export function registerProject(dir: string, dbFile: string): void {
     if (!f) return;
     fs.mkdirSync(dirname(f), { recursive: true });
     fs.appendFileSync(f, JSON.stringify({ dir, dbFile }) + "\n");
-  } catch { /* fail-open：持久化失败退化为纯内存表 */ }
+  } catch (e) { swallow(e, "state:projects-file-append-fail"); }
 }
 function readProjectsList(): string[] {
   try {
@@ -152,7 +154,7 @@ function readProjectsList(): string[] {
       try {
         const o = JSON.parse(line);
         if (o && typeof o.dbFile === "string" && o.dbFile) out.push(o.dbFile);
-      } catch { /* 坏行跳过 */ }
+      } catch (e) { swallow(e, "state:projects-line-bad"); }
     }
     return out;
   } catch { return []; }
@@ -179,8 +181,8 @@ export function scanActiveTasks(excludeSessionID: string): ActiveOther[] {
         if (!r?.slug || r.phase === "done") continue;
         out.push({ slug: String(r.slug), phase: r.phase ?? null, directory: r.directory ?? null, updatedAt: r.updated_at ?? null });
       }
-    } catch { /* 单库失败（锁死/损坏/无表）=跳过该库 */ }
-    finally { try { d?.close(); } catch { /* 句柄释放 best-effort */ } }
+    } catch (e) { swallow(e, "state:scan-db-skip"); }
+    finally { try { d?.close(); } catch (e) { swallow(e, "state:db-handle-close-fail"); } }
   }
   out.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
   return out;
@@ -220,15 +222,15 @@ const parse = (row: any): WfState | null => {
   try { return JSON.parse(row.state_json); } catch { return null; }
 };
 
-export function createStore(ctx: any): Store {
-  const dir = ctx?.location?.directory ?? process.cwd();
+export function createStore(host: Host): Store {
+  const dir = host.location.directory ?? process.cwd();
   const dbFile = join(dir, ".workflow", "wf.db");
   fs.mkdirSync(dirname(dbFile), { recursive: true });
   // git 防护：状态库与 WAL/SHM 文件不入 git（产物 md 不受影响，仍可提交）
   try {
     const gi = join(dirname(dbFile), ".gitignore");
     if (!fs.existsSync(gi)) fs.writeFileSync(gi, "wf.db\nwf.db-*\n");
-  } catch { /* 写入失败不阻塞（宿主项目自行管理 gitignore 亦可） */ }
+  } catch (e) { swallow(e, "state:gitignore-write-fail"); }
 
   const db: any = new Database(dbFile, { create: true });
   db.run("PRAGMA journal_mode=WAL");
@@ -242,7 +244,7 @@ export function createStore(ctx: any): Store {
     try {
       const cols = db.prepare("PRAGMA table_info(reports)").all() as { name: string }[];
       if (!cols.some((c) => c?.name === col)) db.run(`ALTER TABLE reports ADD COLUMN ${col} TEXT`);
-    } catch { /* 单列迁移失败不阻塞启动（读写路径自带 ?? null 降级） */ }
+    } catch (e) { swallow(e, "state:reports-col-migrate-fail"); }
   }
 
   const qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
@@ -285,9 +287,9 @@ export function createStore(ctx: any): Store {
     st.updatedAt = new Date().toISOString();
     const sid = String(st.sessionID);
     let prev: any = null;
-    try { prev = qGet.get(sid); } catch { /* 读失败按无前行处理 */ }
+    try { prev = qGet.get(sid); } catch (e) { swallow(e, "state:save-prev-read-fail"); }
     if (prev && typeof st.rev === "number" && st.rev !== prev.rev) {
-      try { console.warn(`[wf] stale-rev save rejected: session=${sid} incoming=${st.rev} current=${prev.rev}`); } catch { }
+      try { console.warn(`[wf] stale-rev save rejected: session=${sid} incoming=${st.rev} current=${prev.rev}`); } catch (e) { swallow(e, "state:console-warn-fail"); }
       return { ok: false, reason: "stale-rev" };
     }
     const rev = Number(prev?.rev ?? 0) + 1;
@@ -301,7 +303,7 @@ export function createStore(ctx: any): Store {
         isActive, updatedAt: st.updatedAt, stateJson: JSON.stringify(st),
       }, prev ? prev.rev : null);
       if (!w.ok) {
-        try { console.warn(`[wf] save rejected (${w.reason}): session=${sid} incoming=${st.rev} current=${prev?.rev ?? "(无行)"}`); } catch { }
+        try { console.warn(`[wf] save rejected (${w.reason}): session=${sid} incoming=${st.rev} current=${prev?.rev ?? "(无行)"}`); } catch (e) { swallow(e, "state:console-warn-fail"); }
         return { ok: false, reason: w.reason };
       }
       // append-only 流水：仅追加上次落盘后新增的 log 尾项。M16-r39 T01：按 logSeq 单调序号差判定
@@ -313,7 +315,7 @@ export function createStore(ctx: any): Store {
       const n = Math.max(0, Math.min(curSeq - prevSeq, newLog.length));
       for (const e of newLog.slice(newLog.length - n)) qEv.run(sid, String(e?.at ?? st.updatedAt), JSON.stringify(e ?? {}));
     } catch (e) {
-      try { console.warn(`[wf] save failed: ${String((e as Error)?.message ?? e)}`); } catch { }
+      try { console.warn(`[wf] save failed: ${String((e as Error)?.message ?? e)}`); } catch (err) { swallow(err, "state:console-warn-fail"); }
       return { ok: false, reason: "write-error" };
     }
     return { ok: true, rev };
@@ -321,8 +323,8 @@ export function createStore(ctx: any): Store {
 
   // reset：清除任务行与报告槽（events 流水为审计保留，不删）
   const removeState = async (sessionID: string): Promise<void> => {
-    try { qTaskDel.run(String(sessionID ?? "")); } catch { }
-    try { qRepDel.run(String(sessionID ?? "")); } catch { }
+    try { qTaskDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:task-del-fail"); }
+    try { qRepDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:report-del-fail"); }
   };
 
   // M10-b：wf/* 子会话经项目反查管辖状态（原项目索引键 IDX 的 SQL 等价：同 project 最近落盘）
@@ -333,7 +335,7 @@ export function createStore(ctx: any): Store {
     // 仅 wf/* agent 与 leader（workflow，兼容 wf/leader）受项目管辖；普通会话不受影响（M16-r38）
     if (!a.startsWith("wf/") && !isLeader(a)) return null;
     try {
-      const s = await ctx.session.get({ sessionID });
+      const s = await host.sessions.get({ sessionID });
       const pid = s?.projectID;
       if (!pid) return null;
       return parse(qProj.get(String(pid), String(sessionID))) ?? null;
@@ -344,7 +346,7 @@ export function createStore(ctx: any): Store {
   const resolveProjectDir = async (st: WfState | null, sessionID: string): Promise<string> => {
     let d = st?.directory ?? null;
     if (!d) {
-      const sess = await ctx.session.get({ sessionID }).catch(() => null);
+      const sess = await host.sessions.get({ sessionID }).catch(() => null);
       d = sess?.location?.directory ?? null;
     }
     return d ?? process.cwd();
@@ -354,8 +356,8 @@ export function createStore(ctx: any): Store {
   const scanStates = async (projectID?: string | null, directory?: string | null): Promise<StateListItem[]> => {
     const out: StateListItem[] = [];
     try {
-      try { qGc.run(new Date(Date.now() - STALE_MS).toISOString()); } catch { /* GC 失败按保留处理 */ }
-      try { qGhost.run(); } catch { /* F3 幽灵行清理失败按保留处理 */ }
+      try { qGc.run(new Date(Date.now() - STALE_MS).toISOString()); } catch (e) { swallow(e, "state:gc-fail"); }
+      try { qGhost.run(); } catch (e) { swallow(e, "state:ghost-clean-fail"); }
       for (const row of qAll.all()) {
         const v = parse(row);
         if (!v || typeof v !== "object") continue;
@@ -374,7 +376,7 @@ export function createStore(ctx: any): Store {
           updatedAt: v.updatedAt ?? null,
         });
       }
-    } catch { /* 扫描失败按空处理 */ }
+    } catch (e) { swallow(e, "state:scan-states-fail"); }
     out.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
     return out.slice(0, 20);
   };
@@ -407,8 +409,9 @@ export function createStore(ctx: any): Store {
   const ready = (async () => {
     try {
       const n = Number(qCount.get()?.n ?? 0);
-      if (n > 0 || !ctx?.storage?.scan) return;
-      const res = await ctx.storage.scan({ prefix: STATE_PREFIX });
+      if (n > 0) return;
+      const res = await host.storage.scan({ prefix: STATE_PREFIX });
+      if (res === undefined) return; // T03：缺失信号=旧 !ctx?.storage?.scan 分支（跳过迁移）
       const entries = Array.isArray(res) ? res : (res?.entries ?? []);
       for (const e of entries) {
         const k = e?.key ?? e?.[0];
@@ -429,7 +432,7 @@ export function createStore(ctx: any): Store {
           isActive, 1, v.updatedAt ?? null, JSON.stringify(v));
         for (const le of (Array.isArray(v.log) ? v.log : [])) qEv.run(sid, String(le?.at ?? v.updatedAt ?? ""), JSON.stringify(le ?? {}));
       }
-      const rr = await ctx.storage.scan({ prefix: REPORT_PREFIX });
+      const rr = await host.storage.scan({ prefix: REPORT_PREFIX });
       const re = Array.isArray(rr) ? rr : (rr?.entries ?? []);
       for (const e of re) {
         const k = e?.key ?? e?.[0];
@@ -441,12 +444,12 @@ export function createStore(ctx: any): Store {
           qRep.run(String(v.sessionID ?? ks.slice(REPORT_PREFIX.length)), String(v.text), v.at ? String(v.at) : null, null, null);
         }
       }
-    } catch { /* 迁移失败不阻塞 */ }
+    } catch (e) { swallow(e, "state:storage-migrate-fail"); }
   })();
 
   return {
     load, save, removeState, resolveState, resolveProjectDir, scanStates,
     putReport, getReport, dumpStates, ready,
-    close: () => { try { db.close(); } catch { } },
+    close: () => { try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } },
   };
 }

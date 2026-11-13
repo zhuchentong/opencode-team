@@ -5,17 +5,18 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import { createStore, logAdd, writeTaskRow } from "../server/state.ts";
+// T04：装配收敛 helpers/host-stub（extra=ctx 形命名空间覆盖：storage/session→sessions）
+import { mkHostStub } from "./helpers/host-stub.js";
 
 const tmpDir = () => fs.mkdtempSync("/tmp/opencode/wf-state-");
 const dbFile = (dir) => `${dir}/.workflow/wf.db`;
-const mkCtx = (dir, extra = {}) => ({
+const mkHost = (dir, extra = {}) => mkHostStub({
   location: { directory: dir },
-  storage: { scan: async () => ({ entries: [] }), get: async () => null, set: async () => {}, remove: async () => {} },
-  session: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: dir } }) },
-  ...extra,
+  storage: extra.storage ?? { scan: async () => ({ entries: [] }), get: async () => null, set: async () => {}, remove: async () => {} },
+  sessions: extra.session ?? { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: dir } }) },
 });
 const newStore = async (dir, extra) => {
-  const s = createStore(mkCtx(dir, extra));
+  const s = createStore(mkHost(dir, extra));
   await s.ready;
   return s;
 };

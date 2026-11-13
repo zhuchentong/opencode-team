@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 import { leaderOnlyReject, READONLY_CMDS, isLeader } from "../server/lib.ts";
 import { HINT_KEY } from "../server/state.ts";
 
@@ -15,12 +16,12 @@ import { HINT_KEY } from "../server/state.ts";
 const mockDir = `${import.meta.dirname}/../node_modules/@opencode/plugin`;
 if (!fs.existsSync(mockDir)) {
   fs.mkdirSync(mockDir, { recursive: true });
-  fs.writeFileSync(`${mockDir}package.json`, JSON.stringify({
+  fs.writeFileSync(`${mockDir}/package.json`, JSON.stringify({
     name: "@opencode/plugin", version: "0.0.0-local-mock", private: true, type: "module",
     exports: { "./tui": "./mock-tui.js", "./rpc": "./mock-rpc.js" },
   }));
-  fs.writeFileSync(`${mockDir}mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
-  fs.writeFileSync(`${mockDir}mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
 }
 
 const DIR = "/tmp/opencode/wf-leader";
@@ -29,20 +30,16 @@ const DB = `${DIR}/.workflow/wf.db`;
 // agents：sessionID → agent 映射（mock 与真机 Session.Info.agent 同源；缺省 wf/leader）
 const mkCtx = (opts = {}, agents = {}) => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
-  const tools = []; const cmds = []; const entries = [];
-  const ctx = {
+  const entries = [];
+  // T04：装配收敛 helpers/host-stub（agents[sessionID] 形=sessions.get 覆盖；setChat 经 _ctx 活写，setup 前生效）
+  const host = mkHostStub({
     options: { probe: false, ...opts },
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
-    session: {
-      get: async ({ sessionID } = {}) => ({ projectID: "pi1", agent: agents[sessionID] ?? "wf/leader", location: { directory: DIR } }),
-      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async (i) => entries.push(i), list: async () => entries, remove: async () => {} } },
-    },
-    tool: { transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; }, hook: () => ({ dispose() {} }) },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds, entries, setChat: (api) => { ctx.chat = api; } };
+    sessions: { get: async ({ sessionID } = {}) => ({ projectID: "pi1", agent: agents[sessionID] ?? "wf/leader", location: { directory: DIR } }) },
+    instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, setChat: (api) => { host._ctx.chat = api; } };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const wfTool = (m) => m.tools.find((t) => t.name === "wf_command");

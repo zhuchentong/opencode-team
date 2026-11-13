@@ -9,6 +9,8 @@
 // 纯逻辑（resolveTierRef/tierFileContent/hasTierMarker）bun test 直测；IO（syncTierAgents）注入 io。
 // fail-open 约定由调用方保证：任何异常不阻断流转（commands.ts tierCheck try/catch）。
 
+import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
+
 export type ModelRef = { id: string; providerID: string; variant?: string };
 
 // 档位强度序（降级链：请求档缺失时向下取最近存在档；无更低 → null=不写文件，继承会话默认档）。
@@ -85,7 +87,7 @@ export async function syncTierAgents(
     if (!target) { out.push(`tier-skip:${role}:no-variant`); continue; }
     const path = `${dir}/${role.replace(/^wf\//, "")}.md`;
     let existing = "";
-    try { existing = await io.readFile(path, "utf8"); } catch { /* 首次创建 */ }
+    try { existing = await io.readFile(path, "utf8"); } catch (e) { swallow(e, "model-tier:agent-file-read-fail"); }
     if (existing && !hasTierMarker(existing)) { out.push(`tier-skip:${role}:unmanaged`); continue; }
     const content = tierFileContent(target);
     if (existing === content) { out.push(`tier-keep:${role}`); continue; }
@@ -107,7 +109,7 @@ export async function readTierAgents(
       const c = await io.readFile(`${projectDir}/.opencode/agents/wf/${role.replace(/^wf\//, "")}.md`, "utf8");
       const mm = c.match(/^model: (.+)$/m);
       if (mm) out.push(`${role}=${mm[1].split("/").pop()}`);
-    } catch { /* 无派生文件 → 不展示 */ }
+    } catch (e) { swallow(e, "model-tier:derived-file-read-fail"); }
   }
   return out;
 }

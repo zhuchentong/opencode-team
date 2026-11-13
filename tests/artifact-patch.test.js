@@ -7,17 +7,18 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
 
 // 虚拟模块占位包自举（与 integration.test.js 同源）
 const mockDir = `${import.meta.dirname}/../node_modules/@opencode/plugin`;
 if (!fs.existsSync(mockDir)) {
   fs.mkdirSync(mockDir, { recursive: true });
-  fs.writeFileSync(`${mockDir}package.json`, JSON.stringify({
+  fs.writeFileSync(`${mockDir}/package.json`, JSON.stringify({
     name: "@opencode/plugin", version: "0.0.0-local-mock", private: true, type: "module",
     exports: { "./tui": "./mock-tui.js", "./rpc": "./mock-rpc.js" },
   }));
-  fs.writeFileSync(`${mockDir}mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
-  fs.writeFileSync(`${mockDir}mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-tui.js`, "export const Plugin = { define: (def) => def };\n");
+  fs.writeFileSync(`${mockDir}/mock-rpc.js`, "export const Rpc = { define: (def) => def };\n");
 }
 
 const DIR = "/tmp/opencode/wf-patch";
@@ -26,10 +27,9 @@ const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const store = new Map();
-  const tools = [];
-  const cmds = [];
   let hookFn = null;
-  const ctx = {
+  // T04：装配收敛 helpers/host-stub（store=旧 storage 迁移源形状保持；put/list 走 stub 缺省 inert）
+  const host = mkHostStub({
     options: { probe: false },
     location: { directory: DIR },
     storage: {
@@ -38,20 +38,10 @@ const mkCtx = () => {
       remove: async (k) => { store.delete(k); },
       scan: async () => ({ entries: [] }),
     },
-    session: {
-      get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }),
-      wait: async () => {},
-      prompt: async () => {},
-      hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
-    },
-    tool: {
-      transform: (fn) => { fn({ add: (d) => tools.push(d), list: () => tools.map((t) => ({ name: t.name })) }); return { dispose() {} }; },
-      hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; },
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  return { ctx, tools, cmds, hook: () => hookFn };
+    sessions: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },
+    tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
+  });
+  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, hook: () => hookFn };
 };
 // M16-r44：方案确认交互模拟（leader question，选项含锚定批准标签）
 const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",

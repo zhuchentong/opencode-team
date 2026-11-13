@@ -13,9 +13,9 @@ import { FLOWS, isLeader } from "./lib.ts";
 
 const FLOW_NAMES = Object.keys(FLOWS); // 10 个流转命令（wf:intake…wf:done；M16-r28 assign 并入 test-design）
 
-export function registerCommandTool(ctx: any, deps: any) {
+export function registerCommandTool(host: import("./host.ts").Host, deps: any) { // T03：ctx→Host
   const { load, runner, probeOnce } = deps;
-  return ctx.tool.transform((draft: any) => {
+  return host.tools.transform((draft: any) => {
     draft.add({
       name: "wf_command",
       description:

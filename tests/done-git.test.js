@@ -4,9 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { LIMITS } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts"; // F4b：done 串行文案纯渲染断言（不经 transition）
-import { registerCommands } from "../server/commands.ts";
+import { mkWiringHarness as mkWiring } from "./helpers/wiring.js"; // T04：装配同源（harness 参数化包装）
 
 const mkTmp = () => fs.mkdtempSync("/tmp/opencode/wf-done-git-");
 const A1_OPT = "A1：有 remote → 选项=提交并推送/仅提交/跳过";
@@ -26,41 +25,13 @@ const writeGit = (dir, kind) => {
 };
 
 const mkHarness = (dir) => {
-  const store = new Map();
-  const cmds = [];
-  const puts = []; // 捕获 entry.put 值（done 分支须含交付提示）
+  // T04：装配收敛 helpers/wiring；puts=entry.put 值捕获（done 交付提示断言面），其余同旧内联 mock 等价
+  const puts = [];
   const sid = "ses_donegit";
-  const ctx = {
-    options: { leaderOnly: false },
-    session: {
-      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: dir } }),
-      wait: async () => {},
-      prompt: async () => {},
-      hook: async () => ({ dispose() {} }),
-      instructions: { entry: { put: async (q) => { puts.push(q.value); }, list: async () => [], remove: async () => {} } },
-    },
-    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
-  };
-  const deps = {
-    load: async (s) => store.get(s) ?? null,
-    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
-    resolveProjectDir: async () => dir,
-    removeState: async (s) => { store.delete(s); },
-    putReport: async () => {},
-    dumpStates: async () => [],
-    debugDirFor: async () => dir,
-    probeOnce: async () => {},
-    LIMS: { ...LIMITS },
-    emitUpdated: async () => {},
-    emitReport: async () => {},
-    WfDef: null, rpcErr: null, runner: { run: null },
-  };
-  return registerCommands(ctx, deps).then(({ dispose }) => ({
-    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: sid, prompt: { text } }),
-    st: () => store.get(sid),
-    patch: (obj) => Object.assign(store.get(sid), obj),
-    puts, dispose,
-  }));
+  return mkWiring({
+    store: new Map(), sessionID: sid, dir,
+    instructions: { put: async (q) => { puts.push(q.value); } },
+  }).then((h) => ({ ...h, puts }));
 };
 
 // daily 链推进至 done 并返回 wf:done 输出文本（关卡前置经 patch 置账）
