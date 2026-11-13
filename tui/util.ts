@@ -6,7 +6,7 @@ export const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
 // P6 收敛：默认关闭（WF_DEBUG=1 ./scripts/tui-restart.sh 开启）；写 .workflow/_debug/tui-refresh.log。
 export function setupProbe(context: any, opts: { build: string }) {
   // REPO 兜底：location 缺失时由模块 URL 反推仓库根（P3a 疑点：探针可能写错位置）
-  const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", import.meta.url).pathname).replace(/\/$/, "");
+  const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL(/* @vite-ignore */ "../../", import.meta.url).pathname).replace(/\/$/, "");
   const LOADED_AT = new Date().toISOString();
   let seq = 0;
   const PROBE_ON = process.env.WF_DEBUG === "1";

@@ -181,7 +181,11 @@ function createDeduper(opts) {
 var str = (v) => v === null || v === void 0 ? "" : String(v);
 var errMsg = (e) => String(e?.message ?? e);
 function setupProbe(context, opts) {
-	const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", "" + import.meta.url).pathname).replace(/\/$/, "");
+	const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL(
+		/* @vite-ignore */
+		"../../",
+		import.meta.url
+	).pathname).replace(/\/$/, "");
 	const LOADED_AT = (/* @__PURE__ */ new Date()).toISOString();
 	let seq = 0;
 	const PROBE_ON = process.env.WF_DEBUG === "1";

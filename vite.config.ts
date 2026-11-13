@@ -28,7 +28,7 @@ export default defineConfig({
         "solid-js",
         "node:fs", // 探针写日志用（宿主 bun 运行时原生可用；不标 external 会被 vite 替换成 browser-external shim）
       ],
-      output: { inlineDynamicImports: true }, // 单文件产物（dist/tui.js 唯一入口，无 hash chunk）
+      output: { codeSplitting: false }, // 单文件产物（dist/tui.js 唯一入口，无 hash chunk；vite8 弃用 inlineDynamicImports 后的正名）
     },
   },
 });
