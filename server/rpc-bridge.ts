@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import type { ReportLevel } from "./lib.ts";
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账 // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
+import { readTierAgents, TIER_ROLES } from "./model-tier.ts"; // M16-r49：侧边栏档位视图（派生文件实况单一来源）
 
 export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, bus, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
@@ -33,6 +34,22 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
           // T03：active 收紧——幽灵行（无 slug 且无 phase，历史缺陷：拒绝分支对全新会话落盘）
           // 与已 reset 残留行一律报 inactive，让 TUI 走回退列表，不再锁死面板
           if (!st || (!st.slug && !st.phase)) return { sessionID: input?.sessionID ?? null, active: false, lastReport };
+          // M16-r49：档位跟随视图——读项目级派生文件实况（role→variant；/api/agent 不含 model，文件为准）。
+          // fail-soft：读失败/未派生 → null（TUI 静默不显示）；inactive 分支形状不扩张（rpc-drift 锁死）。
+          let tiers: Record<string, string> | null = null;
+          try {
+            const dir = await resolveProjectDir(st, String(input?.sessionID ?? ""));
+            const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fs.promises.readFile(p, "utf8") });
+            if (rows.length) {
+              tiers = {};
+              for (const row of rows) {
+                const eq = row.indexOf("=");
+                if (eq <= 0) continue;
+                const hash = row.indexOf("#", eq);
+                tiers[row.slice(0, eq)] = hash >= 0 ? row.slice(hash + 1) : row.slice(eq + 1);
+              }
+            }
+          } catch (e) { swallow(e, "rpc-bridge:tier-read-fail"); }
           return {
             sessionID: st.sessionID,
             active: true,
@@ -53,6 +70,7 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
             phaseDurations: st.timing?.phaseDurations ?? null,
             finishedAt: st.timing?.finishedAt ?? null,
             artifacts: st.artifacts ?? {},
+            tiers, // M16-r49：档位跟随视图（role→variant；未派生=null）
             updatedAt: st.updatedAt ?? null,
             lastReport,
           };

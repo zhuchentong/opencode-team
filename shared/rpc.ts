@@ -21,6 +21,9 @@ const stateSchema = {
     // M16-r44：方案确认记账（ISO 时间戳，null=未经 question 确认）
     planConfirmedAt: { type: ["string", "null"] },
     artifacts: { type: "object", additionalProperties: true },
+    // 档位跟随视图（M16-r49）：role→variant 映射（server 读项目级派生文件实况）；
+    // 未派生/读失败=null → TUI 静默不显示（nullable，存量/旧 server 行不炸）
+    tiers: { type: ["object", "null"], additionalProperties: true },
     updatedAt: { type: ["string", "null"] },
   },
   required: ["active"],

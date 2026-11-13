@@ -226,6 +226,16 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
   const totalSec = s.finishedAt && s.startedAt ? (Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1000
     : s.startedAt && now ? (now - Date.parse(s.startedAt)) / 1000 : null;
   if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
+  // M16-r49：当前阶段档位——s.tiers（server 读项目级派生文件实况，role→variant）。放 t[3] 空行：
+  // 进度行已被「共 耗时」占满，窄面板 wrapMode:"none" 硬裁剪会截掉尾部追加，独立一行最稳。
+  // phase→role 映射经 FOLD 归一（reconcile=building）；intake=leader 会话无派生角色；未派生/缺字段静默不显示。
+  const roleOf = (ph: string | null): string | null =>
+    ({ planning: "wf/planner", review: "wf/planner-reviewer", test_design: "wf/tester",
+       building: "wf/builder", reconcile: "wf/builder", build_review: "wf/builder-reviewer",
+       testing: "wf/tester", fixing: "wf/fixer", done: "wf/learner", retrospect: "wf/learner" } as Record<string, string | null>)[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
+  const curRole = roleOf(s.phase);
+  const curVar = curRole ? s.tiers?.[curRole] : null;
+  if (curRole && curVar) { t[3] = `  ⚡ 档位 ${curRole.replace("wf/", "")}:${str(curVar)}`; c[3] = T.text.action.primary; }
   t[4] = ` ${padE("#", 2)} ${padE("阶段", 8)}  ${padE("状态", 4)}  ${padS("轮次", 4)}  ${padS("耗时", 6)}`; c[4] = T.text.muted;
   t[5] = " " + "─".repeat(W - 1); c[5] = T.text.muted;
   // 轮次归属：计划审核=plan_review、执行审核=build_review（full）、修复=fix（full）/测试=fix（daily）

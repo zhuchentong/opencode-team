@@ -46,6 +46,13 @@ test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
     assert.ok(p, `state 输出缺 ${k}（TUI 模式感知前提）`);
     assert.deepEqual(p.type, ["string", "null"], `${k} 应为 nullable string`);
   }
+
+  // M16-r49：侧边栏档位视图——state 输出携带 tiers（nullable object：role→variant，未派生=null）
+  {
+    const p = Wf.methods.state.output.properties.tiers;
+    assert.ok(p, "state 输出缺 tiers（TUI 档位视图前提）");
+    assert.deepEqual(p.type, ["object", "null"], "tiers 应为 nullable object");
+  }
 });
 
 // ── tui-sidebar-elapsed T02（plan §3.3）：state 白名单计时 4 字段 ──────────────

@@ -403,6 +403,13 @@ console.log(`插件 id: ${t.id}`);
   const s = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
   ok("P11 daily S slug 行带 [daily·S] 徽标", s.t[1].includes("[daily·S]"), s.t[1]);
   ok("P11 daily building=F3 进度 3/6", s.t[2].includes("F3") && s.t[2].includes("3/6") && s.t[2].includes("●●●○○○"), s.t[2]);
+  // M16-r49：当前阶段档位行（t[3] 空行）——tiers 在场显示 role:variant；未派生/leader 阶段静默
+  const tv = buildRows({ ...base, mode: "daily", size: "S", phase: "building", tiers: { "wf/builder": "low", "wf/planner": "high" } }, null, [], "", T);
+  ok("P17b49 building 档位行显示 builder:low", tv.t[3].includes("builder:low"), tv.t[3]);
+  const tn = buildRows({ ...base, mode: "daily", size: "S", phase: "building" }, null, [], "", T);
+  ok("P17b49 无 tiers 档位行静默（t[3] 保持空）", tn.t[3].trim() === "", JSON.stringify(tn.t[3]));
+  const ti = buildRows({ ...base, mode: "daily", size: "S", phase: "intake", tiers: { "wf/builder": "low" } }, null, [], "", T);
+  ok("P17b49 intake=leader 阶段无档位行", ti.t[3].trim() === "", JSON.stringify(ti.t[3]));
   ok("P11 表头含 阶段/状态/轮次/耗时", s.t[4].includes("阶段") && s.t[4].includes("状态") && s.t[4].includes("轮次") && s.t[4].includes("耗时"), s.t[4]);
   const rows6 = s.t.slice(6, 12);
   ok("P11 daily 6 阶段行序号连续", rows6.every((r: string, k: number) => r.startsWith(` 0${k + 1} `)), JSON.stringify(rows6));
