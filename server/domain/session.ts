@@ -1,6 +1,6 @@
 // wf-workflow — domain/session：角色→子会话自动登记与 ID 零转录续接纯函数（自 lib.ts 逐字节平移）。
 // 长 ID 编排纪律：任何模型可见文本绝不回显完整 ID（回显=转录燃料）。
-import { isLeader, type RoleSessions, type WfState } from "./types.ts";
+import { isLeader, type RoleSessions, type SessionId, type WfState } from "./types.ts"; // R3 T3.2
 
 // ── M16-r40：角色→子会话自动登记（纯函数可测）────────────────────────
 // 仅 wf/* 非 leader 子会话、ses_ 合法形状才登记；同角色 sessionID 未变化返回 false
@@ -11,8 +11,9 @@ export function trackRoleSession(st: WfState, agent: unknown, sessionID: unknown
   const sid = String(sessionID ?? "");
   if (!a.startsWith("wf/") || isLeader(a)) return false;
   if (!/^ses_[A-Za-z0-9]+$/.test(sid)) return false;
-  if (st.reuse?.roleSessions?.[a]?.sessionID === sid) return false; // R3 T3.1 子步 C：reuse 子对象
-  ((st.reuse ??= {}).roleSessions ??= {})[a] = { sessionID: sid, at: new Date().toISOString() };
+  const brandedSid = sid as SessionId; // R3 T3.2：ses_ 形状正则校验=SessionId 合法构造点
+  if (st.reuse?.roleSessions?.[a]?.sessionID === brandedSid) return false; // R3 T3.1 子步 C：reuse 子对象
+  ((st.reuse ??= {}).roleSessions ??= {})[a] = { sessionID: brandedSid, at: new Date().toISOString() };
   return true;
 }
 
@@ -50,7 +51,7 @@ export function resolveSidAlias(raw: unknown, input: SidAliasInput = {}): SidAli
   if (t.startsWith("@")) {
     const key = t.slice(1).trim();
     if (!key) return { ok: false, reason: "空别名（用法：@T01 或 @wf/builder）" };
-    if (lanes[key]?.sessionID) return { ok: true, sid: lanes[key].sessionID as string, via: `lane:${key}` };
+    if (lanes[key]?.sessionID) return { ok: true, sid: lanes[key].sessionID as SessionId, via: `lane:${key}` }; // lanes 登记读取=构造点（R3 T3.2）
     const roleHit = rs[key]?.sessionID ?? rs[`wf/${key}`]?.sessionID; // @builder 容错等价 @wf/builder
     if (roleHit) return { ok: true, sid: roleHit, via: `role:${key}` };
     return { ok: false, reason: `别名「${t}」未命中 lane 或角色登记`, candidates: [...laneKeys, ...roleKeys] };

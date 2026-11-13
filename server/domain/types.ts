@@ -13,6 +13,22 @@ export type ReportLevel = "info" | "warn";
 
 export const GATE_ERR = "[wf-workflow]";
 
+// ── R3 T3.2：零回显进类型系统（纯编译期，运行时零变化）────────────────────────
+// 长 ID 死循环史（M16-r40/r41/r45）：LLM 凭记忆复述 ses_ 长 ID → 截断 → 纠正 → 再转录。
+// branded 类型把「sid 只经登记/解析构造、渲染文本不出裸 ID」从注释纪律升格为编译期事实：
+// 裸 string 不可赋给 SessionId；渲染文本若需引用 sid 只能经 sidRefText（永不产出裸 ID）。
+declare const sidBrand: unique symbol;
+declare const slugBrand: unique symbol;
+export type SessionId = string & { readonly [sidBrand]: true };
+// Slug 同法轻处理：slugify 唯一构造点
+export type Slug = string & { readonly [slugBrand]: true };
+// SidRef 双形态（对齐 SID_ALIAS_USAGE 协议：auto ∥ lane 登记后 @Tnn）——v2 验证 S-4 修订
+export type SidRef = { form: "auto" } | { form: "lane"; lane: string };
+// 唯一渲染出口：产出可进模型可见文本的引用写法，永不产出裸 ses_ ID
+export function sidRefText(ref: SidRef): string {
+  return ref.form === "auto" ? 'sessionID="auto"' : `"@${ref.lane}"`;
+}
+
 // 状态对象（storage 持久化形状；历史版本含动态字段，索引签名容错）
 export interface FlowLogEntry {
   ok?: boolean;
@@ -34,7 +50,7 @@ export interface WfState {
   projectID?: string | null;
   directory?: string | null;
   createdAt?: string;
-  slug?: string;
+  slug?: Slug; // R3 T3.2：branded（slugify 唯一构造点）
   phase?: string | null;
   // M16-r33 P2：任务体量分级（intake 前缀 [S]/[M]/[L] 声明，缺省 M）——驱动产物预算与从简指引
   size?: string;
@@ -80,7 +96,7 @@ export interface WfState {
   // M16-r43：tierBase 档位跟随上次记录的会话基座（Session.Info.model 的 providerID/id）——切模型检测依据，
   //   变化时审计 tier-model-switch 并清空 roleSessions（旧子会话=旧模型，防混模型续用）。
   reuse?: {
-    roleSessions?: Record<string, { sessionID: string; at: string }>;
+    roleSessions?: RoleSessions; // sessionID 为 branded SessionId（登记表构造点，R3 T3.2）
     tierBase?: { providerID: string; id: string; variant?: string; at: string };
   };
   artifacts?: Record<string, { at?: string; bytes?: number }>;
@@ -148,7 +164,7 @@ export function normalizeState(st: WfState): WfState {
 }
 
 // R3 T3.1 子步 C：登记表形状单点（session.ts SidAliasInput 等派生用）
-export type RoleSessions = NonNullable<WfState["reuse"]>["roleSessions"];
+export type RoleSessions = Record<string, { sessionID: SessionId; at: string }>;
 
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
 export interface FlowDef {
@@ -236,7 +252,7 @@ export function tierOf(size?: string | null): "S" | "M" | "L" {
 // R2 T2.4：初始状态行工厂（transition load 缺行分支与 tests 双份默认值收敛；字段逐字节同旧）。
 export function makeInitialWfState(sessionID: string, at = new Date().toISOString()): WfState {
   return {
-    sessionID, slug: "", phase: null,
+    sessionID, slug: slugify("") as Slug, // R3 T3.2：slug 经唯一构造点（运行时仍 ""）
     rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
     lanes: {}, artifacts: {}, log: [], createdAt: at,
   };

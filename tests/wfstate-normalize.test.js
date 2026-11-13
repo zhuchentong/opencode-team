@@ -143,3 +143,14 @@ test("normalize delivery：旧平铺 doneGit/selfMod 搬入子对象（同名）
   assert.ok(o2.timing && o2.verdicts && o2.reuse && o2.delivery, "四组子对象齐备");
   assert.ok(!("startedAt" in o2) && !("doneGit" in o2) && !("roleSessions" in o2) && !("planReviewVerdict" in o2), "顶层无平铺残留");
 });
+
+// ── T3.2：SidRef 唯一渲染出口（零回显类型化的运行时可测面）─────────────────────
+import { sidRefText } from "../server/domain/types.ts";
+test("T3.2 sidRefText：auto/lane 两形态产出引用写法，永不产出裸 ses_ ID", () => {
+  assert.equal(sidRefText({ form: "auto" }), 'sessionID="auto"');
+  assert.equal(sidRefText({ form: "lane", lane: "T01" }), '"@T01"');
+  for (const ref of [{ form: "auto" }, { form: "lane", lane: "wf/builder" }]) {
+    const txt = sidRefText(ref);
+    assert.ok(!txt.includes("ses_"), `渲染文本不得含裸 ID：${txt}`);
+  }
+});

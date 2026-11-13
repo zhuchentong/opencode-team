@@ -8,7 +8,7 @@
 //        拒绝文案迁 shared/prompts/gates.ts（字节级），gate 判定快照写 st.verdicts.gateStatus（R3 T3.1 分组），
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
-import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
+import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type Slug, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
 import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
 
 // M16-r28（性能审计批次 1/2）：B1-1 shell 误伤翻案（=>/比较符/tee<）+ guard 项目 containment
@@ -222,7 +222,8 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       if (tok === "FULL") mode = "full"; else size = tok;
       body = body.slice(pm[0].length);
     }
-    st.slug = slugify(body) || st.slug || "untitled";
+    // R3 T3.2：slug 唯一构造点（|| 链拓宽为 string，收窄回 Slug——三分支皆经 slugify/既有 Slug）
+    st.slug = (slugify(body) || st.slug || slugify("untitled")) as Slug;
     st.size = size;
     st.mode = mode;
   }
