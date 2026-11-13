@@ -59,7 +59,7 @@ const mkStateBridge = async (st, report = null) => {
     load: async () => st,
     scanStates: async () => [],
     getReport: async () => report,
-    runner: { run: null },
+    bus: { call: async () => undefined }, // R2 T2.4：runner→bus（state 桥不触 exec，inert mock）
     resolveProjectDir: async () => "/tmp/opencode/wf-elapsed",
   };
   await createRpcBridge(host, deps);
@@ -121,13 +121,14 @@ test("T01 bridge lastReport 透传 brief/level（新字段行原样送达 TUI）
 });
 
 // ── notification-brief-display T03：bridge emitReport meta / exec 透传 ────────
-const mkEmitBridge = async (runnerRun) => {
+// R2 T2.4：runner→bus——mock bus.call 直返结果（null=异常形状，走桥内 ❌ 兜底分支，语义同旧 runner 缺失）
+const mkEmitBridge = async (busCall) => {
   const emitted = [];
   const impls = {};
   const host = mkHostStub({ rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async (name, data) => { emitted.push({ name, data }); } } }; } } });
   const bridge = await createRpcBridge(host, {
     load: async () => null, scanStates: async () => [], getReport: async () => null,
-    runner: { run: runnerRun ?? null }, resolveProjectDir: async () => "/tmp/opencode/wf-brief",
+    bus: { call: busCall ?? (async () => undefined) }, resolveProjectDir: async () => "/tmp/opencode/wf-brief",
   });
   return { bridge, emitted, impls };
 };
@@ -143,16 +144,16 @@ test("T03 emitReport 事件载荷恒带 brief/level 键（无 meta → null/info
   assert.deepEqual(emitted[1].data, { sessionID: "ses_e", text: "全文2", at: "at2", brief: "b", level: "warn" });
 });
 
-test("T03 exec 透传 runner 结果的 brief/level（字符串才带，缺省 null；未知命令兜底两键在位）", async () => {
-  // runner 携新字段 → 原样透传
+test("T03 exec 透传 bus.call 结果的 brief/level（字符串才带，缺省 null；异常形状兜底两键在位）", async () => {
+  // bus 携新字段 → 原样透传
   const withMeta = await mkEmitBridge(async () => ({ text: "T", at: "A", brief: "B", level: "warn" }));
   assert.deepEqual(await withMeta.impls.exec({ sessionID: "s", name: "wf:plan" }),
     { text: "T", at: "A", brief: "B", level: "warn" });
-  // 旧 runner 结果（无新字段）→ 缺省 null（required 仍 ["text"]，TUI briefOf 降级）
+  // 旧形状结果（无新字段）→ 缺省 null（required 仍 ["text"]，TUI briefOf 降级）
   const legacy = await mkEmitBridge(async () => ({ text: "T2", at: "A2" }));
   assert.deepEqual(await legacy.impls.exec({ sessionID: "s", name: "wf:plan" }),
     { text: "T2", at: "A2", brief: null, level: null });
-  // runner 缺失/无 text → 桥内 ❌ 兜底也带两键（null）
+  // bus 异常形状（undefined）→ 桥内 ❌ 兜底也带两键（null）
   const none = await mkEmitBridge(null);
   assert.deepEqual(await none.impls.exec({ sessionID: "s", name: "wf:nope" }),
     { text: "❌ 未知命令：wf:nope", at: "", brief: null, level: null });

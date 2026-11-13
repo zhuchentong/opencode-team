@@ -14,6 +14,7 @@ import { registerCommandTool } from "./command-tool.ts"; // T05：模型侧状�
 import { registerGuardHook } from "./guard-hook.ts";
 import { registerHint } from "./hint.ts";
 import { registerCommands } from "./commands.ts";
+import { createCommandBus } from "./command-bus.ts"; // R2 T2.4：bus 取代 runner 可变盒子（解环=装配期共享引用）
 import { registerRoleSync } from "./roles.ts"; // M16-r31：角色内容插件托管（B1 文件同步）
 import { registerSkillSync } from "./skills.ts"; // M16-r45：session-lookup skill 托管同步（默认开启）
 
@@ -48,16 +49,17 @@ export default {
     const allowHint = allowMarkers.map((m) => `${m.replace(/^\//, "").replace(/\/$/, "")}/**`).join("、");
 
     // ── M8-a/M16：RPC 桥（TUI 侧边栏读状态 + exec 通道，见 rpc-bridge.ts）──
-    // runner：解 bridge↔commands 循环依赖的可变引用——commands 注册时填充 run，bridge exec 调用
-    const runner: { run: ((name: string, a: any) => Promise<unknown>) | null } = { run: null };
-    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(host, { load, scanStates, getReport, runner, resolveProjectDir });
+    // R2 T2.4：runner 可变盒子退役——CommandBus 装配期创建、bridge/tool 持引用、
+    // registerCommands 填充（register×attachPublish），Map 注册表天然解环，无运行时替换面。
+    const bus = createCommandBus();
+    const { rpcReg, rpcErr, WfDef, emitUpdated, emitReport } = await createRpcBridge(host, { load, scanStates, getReport, bus, resolveProjectDir });
 
     // ── M3：wf_write_artifact 工具（见 artifact-tool.ts）──────────
     const tools = registerArtifactTool(host, { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce });
 
     // ── T05：wf_command 工具——leader 侧状态机入口（见 command-tool.ts）──
-    // runner 为可变引用：commands 注册时填充 run，工具 execute 惰性取用（顺序不敏感）
-    const cmdTool = registerCommandTool(host, { load, runner, probeOnce });
+    // R2 T2.4：bus 引用装配期共享，命令注册先后无关（execute 惰性查 bus）
+    const cmdTool = registerCommandTool(host, { load, bus, probeOnce });
 
     // ── M4：阶段越权硬阻断（planning/review 拒业务代码写；shell 门控与实测结论见 guard-hook.ts）──
     const hookReg = registerGuardHook(host, { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir });
@@ -75,7 +77,7 @@ export default {
     const commands = await registerCommands(host, { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated,
       emitReport: async (sid: string, text: string, at: string) => { await emitReport(sid, text, at); }, // T06：bridge 返回通道形状，deps 契约 Promise<void>（组装层适配）
       WfDef, rpcErr,
-      putReport, removeState, dumpStates, runner }); // selfmod-guard T01：探测根走运行时 host.options.selfModRoot 活读（index 不再透传）
+      putReport, removeState, dumpStates, bus }); // selfmod-guard T01：探测根走运行时 host.options.selfModRoot 活读（index 不再透传）
 
     return () => {
       for (const r of [commands, tools, cmdTool, hookReg, rpcReg, chatReg, roleReg, skillReg]) { try { r?.dispose?.(); } catch (e) { swallow(e, "index:dispose-fail"); } }

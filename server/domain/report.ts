@@ -15,10 +15,15 @@ export function isRejectReport(text: string): boolean {
   return String(text ?? "").startsWith(REJECT_PREFIX);
 }
 
-// §3.3 level 规则表（按序命中即返回）：❌ 拒绝 → wf:fix 返工 → 产物结论 FAIL 在场
+// §3.3 level 规则表（按序命中即返回）：关卡结构化 fail（R0）→ ❌ 拒绝 → wf:fix 返工 → 产物结论 FAIL 在场
 // → done 交付确认需应答 → 其余 info。已知边界（plan §3.3）：full 模式 FAIL→wf:plan
 // 修订轮为 info（wf:fix 才是 FAIL 处理命令，规则 2 覆盖；修订轮不重复弹属可接受降噪）。
+// R2 T2.3（arch-r2-profile-statemachine）：R0=gateStatus 快照优先（evaluateTransition 每次 gate
+// 判定覆写，仅覆盖「命令自身即关卡载体」的三个命令），R1 ❌ 前缀兜底保留不删——结构化输入
+// 使 level 判定不再单赖文案前缀（文案字节纪律仍在，双保险）。
+const GATED_CMDS = new Set(["wf:test-design", "wf:build", "wf:done"]);
 export function levelFor(cmd: string, text: string, st: WfState | null): ReportLevel {
+  if (st?.gateStatus && !st.gateStatus.ok && GATED_CMDS.has(cmd)) return "warn"; // R0 结构化关卡
   if (isRejectReport(text)) return "warn"; // R1
   if (cmd === "wf:fix") return "warn"; // R2
   if ((cmd === "wf:test" && st?.testReportVerdict === "FAIL") ||
@@ -41,6 +46,12 @@ export function clipBrief(line: string, max = BRIEF_LINE_MAX): string {
   if (m && m.index !== undefined) out = out.slice(0, m.index);
   return `${redactIds(out)}…`;
 }
+
+// R2 T2.5（arch-r2-profile-statemachine）：报告文本链单点 renderReport——自 commands.ts
+// sanitizeText 逐字节平移（终端控制符剥离；injectReport 注入前调用）。不变量：剥离后文本不含
+// 控制符（tests/brief-level.test.js 补管线例）。
+// eslint-disable-next-line no-control-regex -- 有意：剥终端控制字符（sanitizeDisplayText 同源，quota 教训）
+export const renderReport = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 
 // §3.2 非流转/拒绝报告兜底 brief（2 行）：命令标签 + text 首个非空行（截断 + redactIds）。
 // 适用：非流转命令成功报告、一切拒绝(halt)文案、st 不可得。

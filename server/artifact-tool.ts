@@ -8,7 +8,7 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, isDaily, trackRoleSession, type WfState } from "./lib.ts";
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, profileOf, trackRoleSession, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -184,7 +184,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           }
           // M16-r39 T02：plan 修订清双通道记账——模式感知的重新验证指路
           if (kind === "plan") {
-            note += "\nplan 已修订：review 结论、test-plan 与方案确认记账已清，须重新 " + (isDaily(st) ? "wf:review（含 question 方案确认）" : "wf:review / wf:test-design（含 question 方案确认）");
+            note += "\nplan 已修订：review 结论、test-plan 与方案确认记账已清，须重新 " + (profileOf(st).id === "daily" ? "wf:review（含 question 方案确认）" : "wf:review / wf:test-design（含 question 方案确认）"); // R2 T2.1：模式判定单点
           }
           return { content: note };
         } catch (e) {

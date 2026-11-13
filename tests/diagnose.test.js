@@ -120,3 +120,22 @@ test("T01 摘要节：>5 条 → 明细仅最近 5 条（时序末尾）", () =>
   assert.ok(details[0].includes("m2"), "明细=最近 5 条（丢弃最旧 m0/m1）");
   assert.ok(details[4].includes("m6"), "末条=最新");
 });
+
+test("R2 T2.3：细化 note（gate-rejected:<id>）按 base 归组 + └ 明细行；无冒号显示逐字不变", () => {
+  const st = {
+    sessionID: "ses_d", slug: "demo", phase: "review",
+    rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {},
+    log: [
+      { at: "t1", cmd: "wf:test-design", from: "review", to: "review", ok: false, note: "gate-rejected:dual-channel" },
+      { at: "t2", cmd: "wf:done", from: "testing", to: "testing", ok: false, note: "gate-rejected:acceptance" },
+      { at: "t3", cmd: "wf:done", from: "testing", to: "testing", ok: false, note: "gate-rejected:acceptance" },
+      { at: "t4", cmd: "wf:build", from: "review", to: "review", ok: false, note: "agent-rejected:wf/builder" },
+    ],
+  };
+  const r = diagnoseReport(st, { version: "TEST", artifactFiles: [] });
+  assert.match(r, /gate-rejected ×3：关卡前置产物未产出/, "base 归组计数（细化 note 不裂键）");
+  assert.match(r, /└ dual-channel ×1/);
+  assert.match(r, /└ acceptance ×2/);
+  assert.match(r, /agent-rejected ×1/);
+  assert.match(r, /└ wf\/builder ×1/);
+});

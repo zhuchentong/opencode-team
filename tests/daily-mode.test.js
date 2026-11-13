@@ -104,7 +104,9 @@ test("r34 daily 边表流转：review→build→test→done；full-only 命令�
 });
 
 test("r34 verify 关卡：M/L build 须 planReviewVerdict=PASS（S 跳结论）；M16-r44 方案确认全 tier 必经", () => {
-  const gate = GATES_DAILY["wf:build"];
+  // R2 T2.3：GATES_DAILY 值=Gate 对象（isSatisfiedBy/explain 分离）；helper 还原旧 fn 语义（满足→null，否则拒绝文案）
+  const g = GATES_DAILY["wf:build"];
+  const gate = (st) => (g.isSatisfiedBy(st) ? null : g.explain(st));
   assert.match(gate(blank({ mode: "daily", size: "M" })), /方案确认关卡未过/, "M 未确认 → 方案确认关卡拒");
   assert.match(gate(blank({ mode: "daily", size: "M", planReviewVerdict: "FAIL" })), /方案确认关卡未过/, "未确认优先于结论校验");
   assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x" })), /验证关卡未过/, "已确认无 verdict → verdict 关卡拒");

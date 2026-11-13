@@ -1,33 +1,36 @@
-// wf-workflow — 命令层（自 index.ts 原样搬移）：10 个流转命令表驱动（/wf:intake…/wf:done，全部经
-// transition 走状态机）+ 6 个辅助命令（status/diagnose/ping/lane/reset/debug）；transition 与
-// inject/listOverrides 编排亦在此（原 setup 闭包，行为不变）。
+// wf-workflow — 命令层：10 个流转命令表驱动（/wf:intake…/wf:done，全部经 transition 走状态机）
+// + 6 个辅助命令（status/diagnose/ping/lane/reset/debug）。
+// R2 T2.4/T2.5（arch-r2-profile-statemachine）：transition/inject/done-git/selfmod 编排迁
+// transition.ts；leaderGate×tierSync 中间件链迁 middleware.ts；byName+runner 可变盒子退役，
+// 三入口统一经 CommandBus（command-bus.ts）。本文件剩：命令注册表 + 双轨输出编排
+//（reportProbe/publishOutput/injectReport）+ 辅助命令 + hook 剥离。
 // 已验证 API（实测 2026-11-10，宿主 2.2.6）：命令 editor.add({name, description,
 // execute(args={sessionID,prompt,delivery})})。**execute 契约 Promise<void>，返回值不显示
 // 给用户**（实测：命令被接受但会话无输出）——故 add 处统一包装：字符串返回值经 RPC "report"
 // 事件广播（TUI toast 呈现），同时保留返回值（tests 行为锚）。流转 guidance 另经 inject() 写
 // instructions.entry 供 agent 消费——两条通道并行、互不干扰。
 // deps 来源：load/save/resolveProjectDir（state）、debugDirFor/probeOnce（observe）、
-// LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）。
+// LIMS（index 组装：options.limits 覆盖后的生效上限）、emitUpdated/emitReport/WfDef/rpcErr（rpc-bridge）、
+// bus（index 装配期创建，bridge/tool/commands 三方共享）。
 import * as fs from "node:fs";
-import { join } from "node:path";
 import {
-  VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
-  evaluateTransition, promptText, diagnoseReport, pingReport,
+  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
-  FLOW_CMD_NAMES, levelFor, briefFallback, isSelfModDir, selfModWarnLine, type ReportLevel,
+  FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
-} from "./lib.ts";
-import { guidance, entryValue, briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
-import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
-import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, scanActiveTasks, type Store } from "./state.ts";
+} from "./lib.ts"; // R2 T2.4/T2.5：flowFor/evaluateTransition/leaderOnlyReject/isSelfModDir/selfModWarnLine/briefFallback 随体迁出；+renderReport 文本链单点
+import { briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
+import { ENTRY_KEY, HINT_KEY, withStateRetry, type Store } from "./state.ts"; // R2：logAdd/scanActiveTasks/FOLD 随体迁出
 import { type Observer, swallow, listSwallows } from "./observe.ts";
 import { type Host } from "./host.ts"; // T03：registerCommands 收 Host（原 ctx:any；入口 setup(ctx) 签名不变） // T01：swallow 记账 + diagnose 摘要接线
+// R2 T2.4/T2.5（arch-r2-profile-statemachine）：transition/inject 编排与命令中间件链、命令总线提取——
+// commands.ts 自此只持命令注册表 + 双轨输出编排 + 辅助命令；bus 取代 runner 可变盒子。
+import { createTransition } from "./transition.ts";
+import { createCommandGuard } from "./middleware.ts";
+import type { CommandBus } from "./command-bus.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
-import {
-  TIER_MAP, TIER_TRIGGERS, TIER_ROLES, syncTierAgents, readTierAgents,
-  type ModelRef,
-} from "./model-tier.ts"; // M16-r43：动态档位跟随
-import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
+import { TIER_ROLES, readTierAgents } from "./model-tier.ts"; // M16-r43：档位视图（ping 只读面）；tierCheck 写面随迁 middleware.ts
+import { readFile as fsReadFile } from "node:fs/promises"; // R2：fsIo（mkdir/writeFile）随 tierCheck 迁出
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
@@ -64,44 +67,19 @@ export interface CommandDeps {
   emitReport?: (sessionID: string, text: string, at: string, meta?: { brief?: string; level?: ReportLevel }) => Promise<void>;
   WfDef?: unknown;
   rpcErr?: string | null;
-  runner?: { run: ((name: string, a: any) => Promise<unknown>) | null };
+  // R2 T2.4（arch-r2-profile-statemachine）：runner 可变盒子退役——CommandBus 实例装配期共享
+  //（index 先建、bridge/tool 持引用、registerCommands 填充+attachPublish），无运行时替换面。
+  bus: CommandBus;
 }
 
-// selfmod-guard T01：插件仓库根=本模块上级目录（bun 直跑 TS，import.meta.dirname 实证可用，roles.ts 同源）；
-// 解析失败 → ""，isSelfModDir 恒 false（fail-open：判不出=不告警，宁缺勿滥）。
-const PLUGIN_REPO_ROOT = (() => {
-  try { return fs.realpathSync(join(import.meta.dirname, "..")); } catch { return ""; }
-})();
-// 生效探测根：options.selfModRoot 覆盖（测试/特殊安装布局）> 模块仓库根。运行时活读 options
-// （T03：调用方传 host.options——与 leaderOnly 同模式，setup 期捕获会丢失测试与热载后的选项变更）。
-const selfModRootFor = (opt: Record<string, any>): string => {
-  const o = opt?.selfModRoot;
-  if (typeof o === "string" && o) { try { return fs.realpathSync(o); } catch { return o; } }
-  return PLUGIN_REPO_ROOT;
-};
-// 任务目录归一（realpath 失败回退原值——软链/inode 差异不得使自改漏判为假阴性的反例已由
-// isSelfModDir 的 fail-open 语义兜住：判不出=不告警）
-const realDir = (d: unknown): string => { try { return fs.realpathSync(String(d ?? "")); } catch { return String(d ?? ""); } };
-
-// M16-r28 lint 清理：以下三个纯函数不捕获 registerCommands 闭包变量，上提模块级（function-scoping）
-// P3：项目级角色定制——.workflow/overrides/<role>.md 存在则带入 guidance（leader 委派时全文附上）
-const listOverrides = (dir: string) => {
-  try { return fs.readdirSync(`${dir}/.workflow/overrides`).filter((f: string) => f.endsWith(".md")); } catch { return []; }
-};
-// eslint-disable-next-line no-control-regex -- 有意：剥终端控制字符（sanitizeDisplayText 同源，quota 教训）
-const sanitizeText = (t: string) => t.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+// R2 T2.4/T2.5（arch-r2-profile-statemachine）迁移注记：PLUGIN_REPO_ROOT/selfModRootFor/realDir/
+// listOverrides/detectDoneGit → transition.ts；resolveAgent/fsIo/tierCheck → middleware.ts；
+// sanitizeText → domain/report.ts renderReport（文本链单点）。以下为本文件仍消费的模块级纯函数。
 // 报告剥离（降级轨上下文保护）：带 wf.report 标记的消息不进模型请求/压缩/标题
 const stripReports = (event: any) => {
   if (Array.isArray(event?.messages)) {
     event.messages = event.messages.filter((msg: any) => msg?.metadata?.[REPORT_META] === undefined);
   }
-};
-// M16-r36：agent 解析——快路径 a.agent（聊天命令若携带）→ session.get 兜底（Session.Info.agent 实证）。
-// sessionGet 注入以便单测；解析失败返回 ""（变更类 fail-closed 由 leaderOnlyReject 裁决）。
-const resolveAgent = async (a: any, sessionGet: (q: { sessionID: string }) => Promise<any>): Promise<string> => {
-  const direct = String(a?.agent ?? "");
-  if (direct) return direct;
-  try { return String((await sessionGet({ sessionID: String(a?.sessionID ?? "") }))?.agent ?? ""); } catch { return ""; }
 };
 // M16-r31：角色托管漂移守卫文案（fail-soft，读宿主文件失败不阻塞 ping）
 const roleGuardText = (opt: any) => {
@@ -112,147 +90,15 @@ const roleGuardText = (opt: any) => {
     return `\n角色托管漂移：${bad.map((r) => `${r.name}=${r.status}`).join(" ")}（syncRoles 开启后 setup 自动修复；unmanaged 需手动加标记）`;
   } catch { return ""; }
 };
-// done-git-delivery-confirm T01：done 流转的 git 环境检测（模块级 IO 纯函数，fail-open 由调用方兜底）。
-// isGit = <dir>/.git 存在（目录或 linked worktree 的 gitdir 指针文件均算）；
-// hasRemote = git config 匹配 [remote "...]（.git 文件 → 解析 gitdir: 指针取 <gitdir>/config；读失败保守 false）。
-export function detectDoneGit(dir: string): { isGit: boolean; hasRemote: boolean } {
-  const gitPath = `${dir}/.git`;
-  if (!fs.existsSync(gitPath)) return { isGit: false, hasRemote: false };
-  let configPath = `${gitPath}/config`;
-  try {
-    if (fs.statSync(gitPath).isFile()) {
-      const m = fs.readFileSync(gitPath, "utf8").match(/^gitdir:\s*(.+)\s*$/m);
-      if (m) configPath = `${m[1].startsWith("/") ? m[1] : `${dir}/${m[1]}`}/config`;
-    }
-    return { isGit: true, hasRemote: /\[remote\s+"/.test(fs.readFileSync(configPath, "utf8")) };
-  } catch { return { isGit: true, hasRemote: false }; }
-}
 
 export async function registerCommands(host: Host, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
-    putReport, removeState, dumpStates, runner } = deps;
+    putReport, removeState, dumpStates, bus } = deps;
 
-  const inject = async (st: WfState) => {
-    try {
-      // P1：值 = 头行 + 完整阶段 guidance。entry 每次组装系统提示从存储重新渲染，
-      // 故消息历史被 compaction 压缩后阶段约束仍在线（等价 superpowers post-compaction 重注入）
-      const ov = st.directory ? listOverrides(st.directory) : [];
-      await host.instructions.put({ sessionID: st.sessionID as string, key: ENTRY_KEY, value: entryValue(st, LIMS, ov) });
-      delete st.entryErr;
-    } catch (e) {
-      st.entryErr = String((e as Error)?.message ?? e);
-    }
-  };
-
-  // T02+T04：状态机推进 = load→校验→应用→inject→save 循环（≤3 次）。
-  // M16-r39 T07：归一 withStateRetry——load 回调返回克隆（无前行→新建态，绝不透传 null，
-  // 否则新 intake 被误判 gone）；apply=evaluate+phase/log/inject（拒绝：有前行才审计 save，
-  // best-effort，返回 msg=halt 不重试）；终败回滚 entry 到 DB 现势（lastLoaded=原始 loaded）。
-  //  - inject 保持在 save 前（entryErr 需随本次 save 持久化）；emitUpdated/guidance 输出置于
-  //    retry ok 之后（不向 TUI 广播未落库的状态）。
-  const transition = async (sessionID: string, cmd: string, text?: string) => {
-    let lastLoaded: WfState | null = null; // 原始 loaded（可 null）——终败 entry 回滚基准
-    let from: string | null = null;
-    let preArtifacts: string[] = [];
-    let selfModNote: string | null = null; // selfmod-guard T01：告警行（save 成功后追加输出）
-    const res = await withStateRetry({
-      load: async () => {
-        const loaded = await load(sessionID);
-        lastLoaded = loaded;
-        // T09：评估/改写只作用于克隆——loaded 恒为「DB 现势」快照，save 最终失败的 entry 回滚
-        // 依赖它（原地改写会让回滚注入未落库的 phase/rounds，名存实亡）
-        return loaded ? structuredClone(loaded) : {
-          sessionID, slug: "", phase: null,
-          rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
-          lanes: {}, artifacts: {}, log: [], createdAt: new Date().toISOString(),
-        };
-      },
-      apply: async (st) => {
-        from = st.phase ?? null;
-        const at = new Date().toISOString();
-        // M16-r29：强制重置前产物记账快照（供中途 !intake 重置后的账实不符告警）
-        preArtifacts = cmd === "wf:intake" ? Object.keys(st.artifacts ?? {}) : [];
-
-        // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
-        const r = evaluateTransition(cmd, st, text, at, LIMS);
-        if (!r.ok) {
-          logAdd(st, { at, cmd, from, to: from, ok: false, note: r.note });
-          if (lastLoaded) { try { await save(st); } catch (e) { swallow(e, "commands:reject-audit-save-fail"); } } // T02：无前行不落盘
-          return r.msg; // halt：不重试
-        }
-
-        // M16-r34：mode 选择流转表（daily 子表 vs full）；evaluateTransition 已放行 → flow 必存在
-        const flow = flowFor(st, cmd)!;
-        st.phase = flow.to;
-        st.updatedAt = at;
-        // tui-sidebar-elapsed T01（plan §3.2 冻结）：墙钟计时记账——离开阶段闭账（FOLD 折叠 key，
-        // 多轮 revisit 累计）；重置块已置 phaseEnteredAt=at 时闭账跳过（d 恒 0，不污染空账）。
-        // fromKey 置于 if 内：strict 下 from 经守卫收窄为 string（语义与冻结式逐字一致，仅作用域收窄）
-        if (from && st.phaseEnteredAt && st.phaseEnteredAt !== at) {
-          const fromKey = FOLD[from] ?? from;
-          const d = Math.max(0, Math.round((Date.parse(at) - Date.parse(st.phaseEnteredAt)) / 1000));
-          st.phaseDurations = { ...st.phaseDurations, [fromKey]: (st.phaseDurations?.[fromKey] ?? 0) + d };
-        }
-        st.phaseEnteredAt = at;
-        if (flow.to === "done" && st.startedAt && !st.finishedAt) st.finishedAt = at;
-        // 存量（无 startedAt）推 done 不置 finishedAt（总耗时保持 null 降级 ·）
-        // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
-        if (!st.projectID) {
-          try {
-            const s = await host.sessions.get({ sessionID });
-            st.projectID = s?.projectID ?? null;
-            st.directory = s?.location?.directory ?? null;
-          } catch (e) { swallow(e, "commands:session-project-fill-fail"); }
-        }
-        // done-git-delivery-confirm T01：进 done 即检测 git 环境（置于 directory 补全后、inject 前，
-        // 使 done entry 渲染即含交付确认指令）；fail-open：任何异常=不记账=零提示，绝不阻断流转。
-        if (flow.to === "done") {
-          try {
-            const dir = st.directory ?? (await resolveProjectDir(st, sessionID));
-            if (dir) {
-              const g = detectDoneGit(String(dir));
-              // 非 git 项目不记账且清旧账（重复推 done 幂等）：state 零污染，done 行为与旧版逐字节一致
-              if (g.isGit) st.doneGit = g; else delete st.doneGit;
-            }
-          } catch (e) { swallow(e, "commands:done-git-detect-fail"); }
-        }
-        logAdd(st, { at, cmd, from, to: flow.to, ok: true, rounds: { ...st.rounds } });
-        // selfmod-guard T01（F2 v2）：intake 引擎自改检测（fail-open=判不出按非自改）——任务目录=插件仓库根
-        // → st.selfMod 记账（building guidance 纪律行走 entry 通道，抗 compaction）+ 跨库扫描其它活动任务
-        // （scanActiveTasks：内存∪持久清单，休眠任务亦现形——v1 内存注册表盲区实证）。
-        // 告警行在 transition 末尾 save 成功后追加，非拒绝=⚠️ 前缀。
-        if (cmd === "wf:intake") {
-          try {
-            const dir = realDir(st.directory ?? (await resolveProjectDir(st, sessionID)));
-            if (isSelfModDir(dir, selfModRootFor(host.options))) {
-              st.selfMod = true;
-              selfModNote = selfModWarnLine(scanActiveTasks(sessionID));
-            } else delete st.selfMod;
-          } catch (e) { swallow(e, "commands:selfmod-detect-fail"); }
-        }
-        await inject(st);
-        return null;
-      },
-      save,
-    });
-    if (!res.ok) {
-      if (res.reason === "halt") return res.msg ?? "";
-      // T09：entry 回滚到 DB 现势——消除「系统提示已进新阶段、DB 未动」的矛盾信号
-      if (lastLoaded) await inject(lastLoaded);
-      else { try { await host.instructions.remove({ sessionID, key: ENTRY_KEY }); } catch (e) { swallow(e, "commands:entry-remove-fail"); } } // 新建会话建行失败：无行则清指引
-      return `❌ 状态保存失败（${res.reason}），本次流转未生效（以 /wf:status 为准），请重试。`;
-    }
-    const st = res.st;
-    await emitUpdated(st);
-    let out = guidance(st.phase, st, LIMS);
-    // M16-r29：中途强制重置（!intake）清空产物记账——账实不符告警（done 后正常换任务不告警）
-    if (cmd === "wf:intake" && from && from !== "done" && preArtifacts.length > 0) {
-      out += `\n⚠️ 强制重置已清空 ${preArtifacts.length} 项产物记账（${preArtifacts.join(", ")}）——磁盘文件仍在 .workflow/${st.prev?.slug ?? "旧slug"}/，新任务账实不符；如需沿用请先对账（/wf:diagnose）。`;
-    }
-    // selfmod-guard T01：并发告警（仅检测到其它活动任务时非 null；⚠️ 行不带 ❌=info 轨，裁决归用户）
-    if (cmd === "wf:intake" && selfModNote) out += `\n${selfModNote}`;
-    return out;
-  };
+  // R2 T2.4：transition/inject 编排提取至 transition.ts（createTransition 显式 deps 注入，
+  // 行为逐字节=旧闭包）；R2 T2.5：命令中间件链工厂（leaderGate×tierSync，顺序单点 CMD_MW_ORDER）。
+  const { transition } = createTransition({ host, load, save, resolveProjectDir, LIMS, emitUpdated });
+  const cmdGuard = createCommandGuard({ host, load, save, probeOnce, resolveProjectDir });
 
   // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
   // 记录：命令名/文本长度/RPC 通道形状/emit 结果——与 TUI 侧 tui-refresh.log reportEv 联看定死点
@@ -289,126 +135,30 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
   const injectReport = async (sid: string, text: string, cmdName: string, at: string) => {
     try {
       await host.sessions.wait({ sessionID: sid }); // T03：旧 wait?.() 缺失即跳过→wrapper 缺失→resolved undefined，时序等价
-      await host.sessions.prompt({ sessionID: sid, text: sanitizeText(text), delivery: "steer", resume: false,
+      // R2 T2.5：文本链单点 renderReport（domain/report.ts，旧 sanitizeText 逐字节平移；管线例锁不变量）
+      await host.sessions.prompt({ sessionID: sid, text: renderReport(text), delivery: "steer", resume: false,
         metadata: { [REPORT_META]: { cmd: cmdName, at } } });
       await reportProbe(sid, { ev: "inject-ok", cmd: cmdName });
     } catch (e) {
       await reportProbe(sid, { ev: "inject-fail", cmd: cmdName, err: String((e as Error)?.message ?? e).slice(0, 140) });
     }
   };
-  // exec 通道（TUI 主轨经 RPC）：按名调度原编排 + publish，不注入聊天（本地渲染返回值）。
-  const byName: Record<string, (a: any) => Promise<unknown>> = {};
-  const fsIo = {
-    mkdir: (p: string) => mkdir(p, { recursive: true }),
-    readFile: (p: string) => fsReadFile(p, "utf8"),
-    writeFile: (p: string, c: string) => fsWriteFile(p, c, "utf8"),
-  };
-
-  // ── M16-r43：动态档位跟随 ──────────────────────────────────────────────
-  // 流转/intake 成功后：读会话所选模型（Session.Info.model = Model.Ref）+ 该模型可用 variants
-  // （host.models.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
-  // 项目级 agent 文件（.opencode/agents/wf/<role>.md）。基座变化 → 审计 tier-model-switch +
-  // 清空 roleSessions（旧子会话=旧模型，防混模型续用）+ 返回提示句（guarded 附加到返回文本）。
-  // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认关（opt-in）。
-  const tierCheck = async (cmd: string, a: any): Promise<string> => {
-    if (host.options.tierAgents !== true) return "";
-    if (!TIER_TRIGGERS.has(cmd)) return "";
-    const sid = String(a?.sessionID ?? "");
-    const st = await load(sid);
-    if (!st || !st.slug) return ""; // 无活动任务（含 reset 后）→ 整段跳过
-    const sess = await host.sessions.get({ sessionID: sid }).catch(() => null);
-    const ref = sess?.model as ModelRef | undefined;
-    if (!ref?.id || !ref?.providerID) return "";
-    let variantIds: string[] = [];
-    try {
-      const ml = await host.models.list();
-      const arr: any[] = Array.isArray(ml) ? ml : (ml?.data ?? ml?.models ?? []);
-      const hit = arr.find((m: any) => m?.id === ref.id && m?.providerID === ref.providerID)
-        ?? arr.find((m: any) => m?.id === ref.id);
-      variantIds = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
-    } catch (e) { swallow(e, "commands:model-list-variants-fail"); }
-    const tiers = { ...TIER_MAP, ...host.options.tiers };
-    const dir = await resolveProjectDir(st, sid);
-    const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
-    const at = new Date().toISOString();
-    const notes: string[] = [];
-    // 切模型检测：基座变化 → 审计 + 清空 roleSessions（仅首次登记 tier-init，不清会话）
-    const prev = st.tierBase;
-    if (!prev || prev.providerID !== ref.providerID || prev.id !== ref.id) {
-      st.tierBase = { providerID: ref.providerID, id: ref.id, variant: ref.variant, at };
-      const baseKey = `${ref.providerID}/${ref.id}`;
-      if (prev) {
-        st.roleSessions = {};
-        notes.push(`🧠 档位跟随：基座模型切换为 ${baseKey}，流程角色项目级档位已重写；旧子会话为旧模型（${prev.providerID}/${prev.id}），重委派一律新建——勿凭记忆续接旧 sessionID。`);
-      }
-      notes.push(`__AUDIT__tier-model-switch:${baseKey}${prev ? `（原 ${prev.providerID}/${prev.id}）` : ""}`);
-    }
-    const actions = rows.filter((r) => !r.startsWith("tier-keep"));
-    if (actions.length) notes.push(`__AUDIT__${actions.join(" ")}`);
-    if (notes.length) {
-      for (const n of notes) {
-        if (n.startsWith("__AUDIT__")) logAdd(st, { at, cmd, from: st.phase, to: st.phase, ok: true, note: n.slice(9) });
-      }
-      await save(st);
-    }
-    return notes.filter((n) => !n.startsWith("__AUDIT__")).join("\n");
-  };
-
-  if (runner) {
-    runner.run = async (name: string, a: any) => {
-      const base = byName[name];
-      if (!base) {
-        // 未知命令不发布（与旧行为一致），但返回体四字段齐备：❌ 前缀不变量 → levelFor=warn，
-        // brief 走 fallback 纯函数（与 publishOutput 同源判定，TUI 无需特判）
-        const t = `❌ 未知命令：${name}`;
-        return { text: t, at: "", brief: briefFallback(name, t), level: levelFor(name, t, null) };
-      }
-      const out = await base(a);
-      const text = typeof out === "string" ? out : "";
-      const at = new Date().toISOString();
-      // T03（plan §4）：publish 结果透传；无 text 不发布 → 缺省 brief="" level="info"
-      const meta = text ? await publishOutput(String(a?.sessionID ?? ""), text, at, name) : { brief: "", level: "info" as ReportLevel };
-      return { text, at, ...meta };
-    };
-  }
+  // R2 T2.4：exec 通道调度经 CommandBus——旧 byName Map 与 runner.run 包装体逐字节迁移到
+  // command-bus.ts（未知命令 ❌/briefFallback/levelFor 同形）；双轨统一挂接 publish：
+  // bus.attachPublish = 本文件 publishOutput（exec 主轨不注入聊天，editor execute 轨另行 injectReport）。
+  bus.attachPublish(async (name, text, at, a) => publishOutput(String(a?.sessionID ?? ""), text, at, name));
 
   const reg = host.commands.transform((editor: any) => {
     // server 命令通道 = 降级轨：publish（reports 表，TUI 轮询兜底可见）+ inject（Web/Desktop 聊天可见）。
     // 返回值保留（tests 行为锚；宿主不消费）。
     const add = (def: any) => {
       const base = def.execute;
-      // M16-r36：单一强制点——聊天命令/wf_command/TUI exec 三入口同调 byName，guarded 一处覆盖。
-      // 变更类仅 leader（workflow，兼容 wf/leader；agent 经 a.agent ?? session.get 解析）；拒绝落审计 agent-rejected（有行才落盘，守 T02）。
-      const guarded = async (a: any) => {
-        if (host.options.leaderOnly !== false) {
-          const agent = await resolveAgent(a, (q: { sessionID: string }) => host.sessions.get(q));
-          await probeOnce(a?.sessionID, "cmd-agent-probe", { cmd: def.name, aKeys: Object.keys(a ?? {}), agent });
-          // F1（implant×build 卡死 1.5 天实证）：load 上提至拒绝判定前——会话持任务时拒绝文案给
-          // 「切回 workflow 重跑 / reset 清账」两个准确出口（旧文案误导开新会话接管）。
-          // load fail→null→旧文案分支（fail-open）；审计复用同一快照（best-effort 语义不变）。
-          let rejSt: WfState | null = null;
-          try { rejSt = await load(String(a?.sessionID ?? "")); } catch { rejSt = null; }
-          const rej = leaderOnlyReject(agent, def.name, rejSt);
-          if (rej) {
-            try {
-              if (rejSt && (rejSt.slug || rejSt.phase)) {
-                logAdd(rejSt, { at: new Date().toISOString(), cmd: def.name, from: rejSt.phase, to: rejSt.phase, ok: false, note: `agent-rejected:${agent || "(unknown)"}` });
-                await save(rejSt);
-              }
-            } catch (e) { swallow(e, "commands:agent-reject-audit-fail"); }
-            return rej;
-          }
-        }
-        const out = await base(a);
-        // M16-r43：动态档位跟随——流转/intake 成功后校验会话基座模型并同步项目级档位文件。
-        // fail-open：任何异常不阻断流转（与 r29 告警不阻断同模式）；options.tierAgents 默认关。
-        try {
-          const note = await tierCheck(def.name, a);
-          if (note && typeof out === "string") return `${out}\n${note}`;
-        } catch (e) { swallow(e, "commands:tier-check-fail"); }
-        return out;
-      };
-      byName[def.name] = guarded;
+      // M16-r36：单一强制点——聊天命令/wf_command/TUI exec 三入口同调 bus，guarded 一处覆盖。
+      // R2 T2.5：guarded=中间件链组合（leaderGate×tierSync，体逐字节迁移至 middleware.ts；
+      // 顺序单点 CMD_MW_ORDER，tests/middleware.test.js 锁短路/附加语义）。
+      // R2 T2.4：注册面 byName→bus（三入口 call 同一实例，runner 可变盒子退役）。
+      const guarded = cmdGuard.guard(def.name)(base);
+      bus.register(def.name, guarded);
       editor.add({
         ...def,
         execute: async (a: any) => {

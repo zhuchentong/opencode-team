@@ -50,11 +50,14 @@ fs.mkdirSync(DIR, { recursive: true });
 
 // ── 纯函数：关卡矩阵 ─────────────────────────────────────────────────
 test("M16-r44 full wf:build 关卡：无确认拒（指路 question）、有确认放行", () => {
-  const msg = GATES["wf:build"](blank({ phase: "test_design" }));
+  // R2 T2.3：GATES 值=Gate 对象；helper 还原旧 fn 语义（满足→null，否则拒绝文案）
+  const g = GATES["wf:build"];
+  const gate = (st) => (g.isSatisfiedBy(st) ? null : g.explain(st));
+  const msg = gate(blank({ phase: "test_design" }));
   assert.match(String(msg), /方案确认关卡未过/);
   assert.match(String(msg), /question/, "拒绝文案指路 question 交互");
   assert.match(String(msg), /批准执行/, "指路含固定选项标签");
-  assert.equal(GATES["wf:build"](blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z" })), null);
+  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z" })), null);
 });
 
 test("M16-r44 清零：wf:plan 重开规划作废确认（纯函数）", () => {

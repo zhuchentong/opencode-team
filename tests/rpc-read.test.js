@@ -24,7 +24,7 @@ function makeBridgeDeps(tmp, st) {
     load: async () => st,
     scanStates: async () => [],
     getReport: async () => null,
-    runner: { run: null },
+    bus: { call: async () => undefined }, // R2 T2.4：runner→bus（read 桥不触 exec，inert mock）
     resolveProjectDir: async () => tmp,
   };
   return { host, deps, impls };

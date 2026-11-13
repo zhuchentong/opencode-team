@@ -59,3 +59,22 @@ test("DAILY_STAGE_ORDER = FLOWS_DAILY 可达 to 集（防视图/流转漂移）"
   const reachable = new Set(Object.values(FLOWS_DAILY).map((f) => f.to));
   assert.deepEqual([...reachable].toSorted(), [...DAILY_STAGE_ORDER].toSorted());
 });
+
+// ── R2 T2.2（arch-r2-profile-statemachine）：PhaseDef ⇔ shared 常量双向一致性守卫 ──
+import { PHASES_FULL, PHASES_DAILY } from "../server/lib.ts";
+
+test("R2 T2.2：PHASES_FULL.blocking ⇔ BLOCKING 双向一致（注册面=唯一 blocking 源）", () => {
+  const blockingFull = Object.entries(PHASES_FULL).filter(([, d]) => d.blocking).map(([p]) => p).toSorted();
+  assert.deepEqual(blockingFull, [...BLOCKING].toSorted(), "full phases blocking 集须与 shared BLOCKING 逐字相等");
+});
+
+test("R2 T2.2：PHASES_DAILY.blocking ⊆ BLOCKING；键集=DAILY_STAGE_ORDER", () => {
+  for (const [p, d] of Object.entries(PHASES_DAILY)) if (d.blocking) assert.ok(BLOCKING.includes(p), `daily blocking 越界 ${p}`);
+  assert.deepEqual(Object.keys(PHASES_DAILY).toSorted(), [...DAILY_STAGE_ORDER].toSorted());
+});
+
+test("R2 T2.2：PHASE_ORDER ⊆ PHASES_FULL 键集；assign legacy 兼容行在位", () => {
+  for (const p of PHASE_ORDER) assert.ok(p in PHASES_FULL, `full phases 缺阶段 ${p}`);
+  assert.ok("assign" in PHASES_FULL, "assign 兼容行须在 PHASES_FULL");
+  assert.match(PHASES_FULL.assign.next, /test_design/, "assign 下一步指 test_design");
+});

@@ -1,5 +1,5 @@
 // wf-workflow — domain/artifact：kind→文件名/verdict 解析/patch 模糊匹配/阶段纪律/瘦身预算（自 lib.ts 逐字节平移）。
-import { type WfState } from "./types.ts";
+import { tierOf, type WfState } from "./types.ts"; // R2 T2.1：tierOf 平移至 types 叶子（flow 域消费合法化）
 
 // ── M3：产物 kind → 文件名（循环类产物按轮次编号）──────────────────
 export const KIND_FILES: Record<string, (st: WfState) => string> = {
@@ -135,10 +135,8 @@ export const ARTIFACT_BUDGET_L_KB: Record<string, number> = {
   "test-report": 10,
   lessons: 6,
 };
-// 体量归一：只认 S/L，其余（M/缺省/存量无 size）一律按 M（存量兼容）
-export function tierOf(size?: string | null): "S" | "M" | "L" {
-  return size === "S" || size === "L" ? size : "M";
-}
+// 体量归一 tierOf：R2 T2.1 平移至 domain/types.ts（flow 域 GATES_DAILY 消费合法化；
+// budgetFor/artifactSizeWarning 内部引用 + lib barrel 导出名不变）。
 export function budgetFor(kind: string, size?: string | null): number | null {
   const tier = tierOf(size);
   const table = tier === "S" ? ARTIFACT_BUDGET_S_KB : tier === "L" ? ARTIFACT_BUDGET_L_KB : ARTIFACT_BUDGET_KB;

@@ -56,6 +56,10 @@ test("gate-rejected：review 未产出 test-plan 时 wf:test-design 被拒（不
   const r = advance(st, "wf:test-design");
   assert.equal(r.ok, false);
   assert.equal(r.note, "gate-rejected");
+  assert.equal(r.gate, "dual-channel", "R2 T2.3：拒绝附 gate.id（审计细分维度）");
+  assert.equal(st.gateStatus.id, "dual-channel");
+  assert.equal(st.gateStatus.ok, false, "R2 T2.3：gateStatus 快照记账（fail）");
+  assert.equal(typeof st.gateStatus.at, "string");
   assert.match(r.msg, /test-plan\.md/);
   assert.match(r.msg, /wf_command\(name="wf:test-design"\)/, "拒绝文案指路新命令名");
   assert.deepEqual(st.rounds, before, "拒绝不得改变计数器");
@@ -309,7 +313,7 @@ test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnt
   h.dispose();
 });
 
-// ── notification-brief-display T03：publishOutput/runner 接线 + FLOW_COMMANDS 单一来源 ──
+// ── notification-brief-display T03：publishOutput/bus 接线 + FLOW_COMMANDS 单一来源（R2：runner→bus）──
 // 捕获 mock（putReport/emitReport 记录载荷）驱动 commands.ts 真实 publishOutput；
 // 断言 plan §5-T03 验收表 1-4 + B 意见名单同源（L129）。
 const mkWiringHarness = async () =>
@@ -363,9 +367,9 @@ test("T03 非流转命令（status）：briefFallback 2 行 info，兜底行无 
   h.dispose();
 });
 
-test("T03 runner.run 返回 {text,at,brief,level}；无 text 分支缺省不炸", async () => {
+test("T03 bus.call 返回 {text,at,brief,level}；无 text 分支缺省不炸（R2：runner.run→bus.call 同形）", async () => {
   const h = await mkWiringHarness();
-  const res = await h.deps.runner.run("wf:ping", { sessionID: "ses_w", prompt: { text: "" } });
+  const res = await h.deps.bus.call("wf:ping", { sessionID: "ses_w", prompt: { text: "" } });
   assert.equal(typeof res.text, "string");
   assert.ok(res.text.length > 0, "ping 有输出");
   assert.ok(typeof res.at === "string" && res.at.length >= 20);
@@ -373,7 +377,7 @@ test("T03 runner.run 返回 {text,at,brief,level}；无 text 分支缺省不炸"
   assert.equal(res.level, "info");
   // 未知命令：不发布（无 reports 行），但返回体四字段齐备（❌ → warn，R1 前缀不变量同源判定）
   const n = h.reports.length;
-  const bad = await h.deps.runner.run("wf:nope", { sessionID: "ses_w" });
+  const bad = await h.deps.bus.call("wf:nope", { sessionID: "ses_w" });
   assert.equal(h.reports.length, n, "未知命令不得发布报告行");
   assert.match(bad.text, /未知命令/);
   assert.equal(bad.level, "warn");

@@ -30,7 +30,17 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   const refusals = rejects.filter((e) => e.note !== "blocked");
   out.push(`流转尝试=${log.length} 拒绝=${refusals.length} 越权阻断=${blocks.length}`);
   const byNote: Record<string, number> = {};
-  for (const e of refusals) byNote[String(e.note)] = (byNote[String(e.note)] ?? 0) + 1;
+  // R2 T2.3：细化 note（"gate-rejected:<id>" / "agent-rejected:<agent>"）按冒号前 base 归组，
+  // 细分维度入 └ 子行；无冒号 note 显示与旧逐字节一致（diagnose.test 锚不破坏）。
+  const bySub: Record<string, Record<string, number>> = {};
+  for (const e of refusals) {
+    const raw = String(e.note);
+    const ci = raw.indexOf(":");
+    const base = ci === -1 ? raw : raw.slice(0, ci);
+    const sub = ci === -1 ? "" : raw.slice(ci + 1);
+    byNote[base] = (byNote[base] ?? 0) + 1;
+    if (sub) (bySub[base] ??= {})[sub] = (bySub[base][sub] ?? 0) + 1;
+  }
   for (const [note, n] of Object.entries(byNote)) {
     const hint = ({
       "illegal-transition": "命令顺序错误（请核对流转表/下一步提示）",
@@ -39,6 +49,7 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
       "intake-guard": "已有活动任务被守卫拦截（用 /wf:reset 或 /wf:intake ! <slug>）",
     } as Record<string, string>)[note] || "见日志详情";
     out.push(`  ✗ ${note} ×${n}：${hint}`);
+    if (bySub[note]) for (const [s, k] of Object.entries(bySub[note])) out.push(`      └ ${s} ×${k}`);
   }
   for (const e of blocks.slice(-5)) out.push(`  ⛔ 越权阻断：${e.tool ?? e.cmd ?? "?"} ${e.detail ?? ""}`);
 

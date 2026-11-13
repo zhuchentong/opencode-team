@@ -101,13 +101,16 @@ test("T04 mkStoreStub：CAS 与 state.ts 契约同源", async () => {
 test("T04 mkCommandDeps：CommandDeps 全键默认+捕获组", () => {
   const d = mkCommandDeps();
   for (const k of ["load", "save", "resolveProjectDir", "removeState", "putReport", "dumpStates",
-    "debugDirFor", "probeOnce", "LIMS", "emitUpdated", "emitReport", "WfDef", "rpcErr", "runner"]) {
+    "debugDirFor", "probeOnce", "LIMS", "emitUpdated", "emitReport", "WfDef", "rpcErr", "bus"]) {
     assert.ok(k in d, `deps 缺键 ${k}`);
   }
   assert.deepEqual(d.LIMS, { ...LIMITS }, "LIMS 默认={...LIMITS}");
   assert.equal(d.WfDef, null);
   assert.equal(d.rpcErr, null);
-  assert.equal(d.runner.run, null);
+  // R2 T2.4：runner 盒退役→bus 实例（inert：空注册表，call 未知命令走 ❌ 分支）
+  assert.equal(typeof d.bus.call, "function");
+  assert.equal(typeof d.bus.register, "function");
+  assert.equal(d.bus.has("wf:plan"), false);
   const d2 = mkCommandDeps({ LIMS: { plan_review: 9 } });
   assert.deepEqual(d2.LIMS, { plan_review: 9 }, "over 覆盖");
 });

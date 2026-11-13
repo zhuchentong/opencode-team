@@ -70,6 +70,10 @@ export interface WfState {
   logSeq?: number;
   testPlanWritten?: boolean;
   testReportVerdict?: string;
+  // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
+  // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）。
+  // intake 重置块清除（跨任务不残留）。形状纪律同 verdicts 家族：R3 分组迁移候选（gate→verdicts 域）。
+  gateStatus?: { id: string; ok: boolean; at: string };
   entryErr?: string;
   // tui-sidebar-elapsed T01（plan §3.1）：墙钟计时记账——全部可选，存量快照自然缺省 → TUI 降级 ·
   startedAt?: string;                       // ISO：intake 建任务时刻（总耗时起点）
@@ -109,7 +113,9 @@ export function isLeader(agent: string): boolean {
   return LEADER_ALIASES.includes(agent);
 }
 
-export type TransitionResult = { ok: true } | { ok: false; note: string; msg: string };
+// R2 T2.3：gate 拒绝附 gate.id（audit 明细维度；note 值逐字不变=flows.test 锚不破坏，
+// commands.ts logAdd 据此把 note 细化为 "gate-rejected:<id>" 仅作用于 log/诊断面）。
+export type TransitionResult = { ok: true } | { ok: false; note: string; msg: string; gate?: string };
 
 // T01（arch-r1-host-split）：静默失败条目（observe.ts 环形缓冲与 diagnose facts 共用；
 // 运行时实现零依赖——T02 归 domain/types.ts，供 domain/diagnose 与 observe 同型引用）。
@@ -117,3 +123,54 @@ export interface SwallowEntry { code: string; msg: string; at: string }
 
 // 拒绝文案统一 ❌ 字面量前缀（作者位不变量，与成功 guidance 【开头互斥，守卫锁死）。
 export const REJECT_PREFIX = "❌";
+
+// ── R2 T2.4（arch-r2-profile-statemachine）：拒绝码枚举与错误形状轻定义 ──────────
+// evaluateTransition 的 note 值唯一来源（字符串逐字=旧值，log/diagnose 面兼容）；
+// WfError = swallow code 命名与未来统一 Result 的最小形状。SaveResult/RetryResult
+// 旧形状本批不动（retry.test 真机契约锚；完整收敛挂 R3 纪律）。
+export const REJECT_NOTES = {
+  UNKNOWN_COMMAND: "unknown-command",
+  ILLEGAL_TRANSITION: "illegal-transition",
+  GATE_REJECTED: "gate-rejected",
+  LIMIT_EXCEEDED: "limit-exceeded",
+  INTAKE_GUARD: "intake-guard",
+} as const;
+export interface WfError { code: string; msg: string }
+
+// ── R2 T2.1/T2.3/T2.2（arch-r2-profile-statemachine）：Strategy/Specification/State Object 形状 ──
+// Gate：判定与解释分离（Specification）——isSatisfiedBy 纯谓词，explain 拒绝文案模板。
+export interface Gate {
+  id: string;
+  isSatisfiedBy: (st: WfState) => boolean;
+  explain: (st: WfState) => string;
+}
+// PhaseDef：阶段单点注册表条目（State Object 化，T2.2）——next=NEXT 表值迁入，blocking 源=
+// shared BLOCKING（装配期一致性守卫 tests/phases.test.js 锁「PhaseDef.blocking ⇔ BLOCKING」双向）。
+export interface PhaseDef {
+  next: string;
+  blocking?: boolean;
+}
+// WorkflowProfile：模式数据容器（Strategy）——flows/gates/phases 三段齐全即一个完整模式；
+// 注册与唯一消费点在 domain/flow.ts（profileOf），guidance 编排层按 profile.id 派发。
+export interface WorkflowProfile {
+  id: string;
+  flows: Record<string, FlowDef>;
+  gates: Record<string, Gate>;
+  phases: Record<string, PhaseDef>;
+}
+
+// 体量归一：只认 S/L，其余（M/缺省/存量无 size）一律按 M（存量兼容）
+// R2 T2.1：自 artifact.ts 逐字节平移至 types 叶子（flow/guidance 等域消费合法化；
+// lib 导出名 tierOf 不变——artifact.ts 改 import 转发）。
+export function tierOf(size?: string | null): "S" | "M" | "L" {
+  return size === "S" || size === "L" ? size : "M";
+}
+
+// R2 T2.4：初始状态行工厂（transition load 缺行分支与 tests 双份默认值收敛；字段逐字节同旧）。
+export function makeInitialWfState(sessionID: string, at = new Date().toISOString()): WfState {
+  return {
+    sessionID, slug: "", phase: null,
+    rounds: { plan_review: 0, build_review: 0, test_fix: 0 },
+    lanes: {}, artifacts: {}, log: [], createdAt: at,
+  };
+}

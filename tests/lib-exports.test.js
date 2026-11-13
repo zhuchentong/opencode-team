@@ -1,4 +1,6 @@
-// T02（arch-r1-host-split）：lib 运行时导出集全集锁（先建锁后拆分；62 名=bun -e Object.keys(lib) 实测）
+// T02（arch-r1-host-split）：lib 运行时导出集全集锁（先建锁后拆分；R2 前 62 名=bun -e Object.keys(lib)
+// 实测；arch-r2-profile-statemachine 有意 +8：REJECT_NOTES/makeInitialWfState（types.ts）+
+// PHASES_FULL/PHASES_DAILY/PROFILES/profileOf/registerProfile（flow.ts）+ renderReport（report.ts）→ 70）
 // + barrel 形态判据（lib.ts ≤60 行）。m4-smoke 的 9 名抽查保留不动。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,17 +12,19 @@ const EXPECTED = [
   "BLOCKING_PHASES", "BRIEF_LINE_MAX", "DEFAULT_ALLOW_MARKERS", "DEFAULT_ALLOW_RES", "EDIT_TOOLS",
   "FLOWS", "FLOWS_DAILY", "FLOW_CMD_NAMES", "GATES", "GATES_DAILY", "GATE_ERR", "HINT_ENTRY",
   "HINT_TRIGGERS", "KIND_FILES", "LEADER_AGENT", "LEADER_ALIASES", "LIMITS", "NEXT", "NEXT_DAILY",
-  "READONLY_CMDS", "REJECT_PREFIX", "SID_ALIAS_AUTO", "SID_ALIAS_USAGE", "VERSION", "WF_ROLES",
+  "PHASES_DAILY", "PHASES_FULL", "PROFILES", "READONLY_CMDS", "REJECT_NOTES", "REJECT_PREFIX",
+  "SID_ALIAS_AUTO", "SID_ALIAS_USAGE", "VERSION", "WF_ROLES",
   "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "clipBrief",
   "completeSidPrefix", "diagnoseReport", "evaluateTransition", "extractPaths", "flowFor",
   "fuzzyFind", "gateFor", "hasStrictVerdictLine", "isDaily", "isHintWorthy", "isLeader",
   "isNearTruncation", "isRejectReport", "isSelfModDir", "leaderOnlyReject", "levelFor",
-  "makeAllowChecker", "nextFor", "normalizeFuzzy", "parseVerdict", "pingReport", "promptText",
-  "resolveSidAlias", "selfModWarnLine", "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
+  "makeAllowChecker", "makeInitialWfState", "nextFor", "normalizeFuzzy", "parseVerdict", "pingReport",
+  "profileOf", "promptText", "registerProfile", "renderReport", "resolveSidAlias", "selfModWarnLine",
+  "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 62 名全集锁", () => {
-  assert.equal(EXPECTED.length, 62);
+test("T02 导出集零漂移：Object.keys(lib) === 70 名全集锁", () => {
+  assert.equal(EXPECTED.length, 70);
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 

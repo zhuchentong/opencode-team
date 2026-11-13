@@ -1,9 +1,10 @@
 // wf-workflow — 阶段指引（M16-r39 T08：自 lib.ts 拆分，文案逐字不变）。
-// 依赖方向单向：guidance → lib（LIMITS/isDaily/budgetFor + 类型），lib 不反向 import 本文件
+// 依赖方向单向：guidance → lib（LIMITS/profileOf/budgetFor + 类型），lib 不反向 import 本文件
+// R2 T2.1：模式判定经 profileOf（isDaily 消费点收敛至 domain/flow.profileOf 一处）。
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LIMITS, isDaily, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts";
+import { LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts";
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -37,9 +38,18 @@ export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: stri
   return `${guidance(st.phase, st, limits, overrides)}\n${head}`;
 }
 
+// R2 T2.1：模式派发注册表（Strategy 消费面，键=profile.id；完整性守卫=tests/profile-shape.test.js
+// 断言 PROFILES 键集与本表键集一致——新增模式两处成对注册，漏一处即红）。
+const GUIDANCE_BY_ID: Record<string, (phase: string | null | undefined, st: WfState, limits: Limits) => string> = {
+  full: guidanceBase,
+  daily: guidanceDaily,
+};
+
 export function guidance(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   // M16-r34：daily 模式用日常习惯流指引（tier 分支）；full/存量用 guidanceBase
-  const base = isDaily(st) ? guidanceDaily(phase, st, limits) : guidanceBase(phase, st, limits);
+  // R2 T2.1：isDaily 三元 → profileOf(st).id 注册表派发（模式判定单点在 profileOf）
+  const G = GUIDANCE_BY_ID[profileOf(st).id] ?? guidanceBase;
+  const base = G(phase, st, limits);
   if (Array.isArray(overrides) && overrides.length) {
     const list = overrides.map((f) => String(f).replace(/\.md$/, "")).join(", ");
     return `${base}\n📌 项目级角色定制（.workflow/overrides/）：${list}。委派同名 wf 角色时，把对应文件全文带入子任务提示词。`;
@@ -66,7 +76,8 @@ function budgetLine(st: WfState, kinds: string[]): string {
   return `产物预算（${tier} 级，字节计）：${parts}。委派 prompt 必须携带本预算；超预算用 patch 删减，勿全量重写。`;
 }
 function leanLine(st: WfState): string | null {
-  return st.size === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
+  // R2 T2.1 TierCtx：size 判定一律 tierOf 归一（`st.size ===` 字面清零纪律）
+  return tierOf(st.size) === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
 }
 
 // ── M16-r40：会话复用可靠化——重委派点渲染续用指引（T02：零回显）──────────
@@ -90,6 +101,8 @@ const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf
 // M 分 2 派 vs L 一派到底=纯裁量漂移；收敛为 size 决定策略，例外须理由）──────────────
 const DISPATCH_L = `L 级：分批委派 wf/builder——按 plan 批次表/依赖序（每批 ≤4 个 T<nn>，续用同一 builder session），worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill 单树串行形态）。一派到底=例外须在回执说明理由。`;
 const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；多 builder 并行需用户同意+worktree。`;
+// R2 T2.1 DispatchStrategy：M/L 派发策略表（tier 判定唯一形态=DISPATCH_BY_TIER[tier]）
+const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L };
 // selfmod-guard T01：引擎自改纪律行（st.selfMod 门控渲染——entry 通道抗 compaction；
 // 无记账=零渲染，存量 guidance 字节级不变）
 const SELFMOD_LINE = `引擎自改模式：server/ 下文件正被宿主按内容指纹热载——builder 禁分步连续 edit（中间态会被同进程其它项目的在途会话真实执行，双任务日志实证），全部编辑完成、自检通过后一次性核验；intake 告警出现的并发任务未经用户裁决不得开工——休眠任务先核实再处置（/wf:status 查归属，done 收尾或 /wf:reset 清账），唤醒后同样是干扰源。`;
@@ -97,7 +110,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
   const L = { ...LIMITS, ...limits };
   const s = st.slug || "(未定)";
   const r: Record<string, number> = st.rounds ?? {};
-  const S = st.size === "S";
+  const tier = tierOf(st.size); // R2 T2.1 TierCtx：S/M/L 判定归一
+  const S = tier === "S";
   switch (phase) {
     case "intake": return [
       `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
@@ -142,7 +156,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       const lines = [
         `【wf 工作流｜building·日常模式】slug=${s}`,
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
-          : st.size === "L" ? DISPATCH_L : DISPATCH_M,
+          : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
           `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
@@ -296,7 +310,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
 // 任意串，脱敏兜底保证「无 ses_」不变量（tests/brief-level.test.js 逐例断言不放宽）。
 export function briefForTransition(st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...limits };
-  const modeLabel = isDaily(st) ? "日常模式" : "完整模式";
+  const modeLabel = profileOf(st).id === "daily" ? "日常模式" : "完整模式"; // R2 T2.1：isDaily 消费改 profile 单点
   const r: Record<string, number> = st.rounds ?? {};
   // L3 后缀仅在对应字段非空时追加（plan §3.1）
   const suffix = [

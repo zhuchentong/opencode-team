@@ -200,3 +200,22 @@ test("T02 briefFor 全形态无 ses_ 不变量（含 fallback 输入带 ID）", 
   ];
   for (const s of samples) assert.ok(!s.includes("ses_"), `泄漏：${s}`);
 });
+
+// ── R2 T2.3：levelFor R0 结构化关卡判定（gateStatus 快照优先；R1 ❌ 兜底保留）──
+test("R2 T2.3：levelFor R0——gateStatus fail + 关卡命令 → warn（不依赖文案前缀）", () => {
+  const st = mkSt({ phase: "building", gateStatus: { id: "daily-build", ok: false, at: "t" } });
+  // 合成无 ❌ 前缀文本：R0 结构化命中（真实路径 gate.explain 恒 ❌，R0/R1 双保险同命中）
+  assert.equal(levelFor("wf:build", "【合成】非拒绝形状文本", st), "warn");
+  assert.equal(levelFor("wf:test-design", "x", { ...st, gateStatus: { id: "dual-channel", ok: false, at: "t" } }), "warn");
+  assert.equal(levelFor("wf:done", "x", { ...st, gateStatus: { id: "acceptance", ok: false, at: "t" } }), "warn");
+});
+
+test("R2 T2.3：levelFor R0 不误伤——gateStatus ok / 非关卡命令 / 无快照 → 走原规则", () => {
+  const ok = mkSt({ gateStatus: { id: "daily-build", ok: true, at: "t" } });
+  assert.equal(levelFor("wf:build", "【wf 工作流｜building】正常", ok), "info");
+  const fail = mkSt({ gateStatus: { id: "daily-build", ok: false, at: "t" } });
+  assert.equal(levelFor("wf:status", "【wf｜status】x", fail), "info", "非关卡命令不受 R0 影响");
+  assert.equal(levelFor("wf:build", "【wf】x", mkSt()), "info", "无 gateStatus 走原规则");
+  // R1 兜底仍在：❌ 文本恒 warn（互斥不变量不放宽）
+  assert.equal(levelFor("wf:build", `${REJECT_PREFIX} 拒`, mkSt()), "warn");
+});

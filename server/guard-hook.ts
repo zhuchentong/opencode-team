@@ -10,7 +10,7 @@
 // P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
 import * as fs from "node:fs";
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, profileOf, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
 import { logAdd } from "./state.ts";
 import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
@@ -213,7 +213,11 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
       if (EDIT_TOOLS.has(toolName) && trackRoleSession(st, input?.agent, input?.sessionID)) {
         try { await save(st); } catch (e) { swallow(e, "guard-hook:role-reg-save-fail"); }
       }
-      if (!BLOCKING_PHASES.has(st.phase)) return;
+      // R2 T2.2（arch-r2-profile-statemachine）：blocking 判定=profileOf 的 PhaseDef.blocking
+      // （tests/phases.test.js 守卫锁「PhaseDef.blocking ⇔ shared BLOCKING」双向一致，行为等价）；
+      // phases 查表 miss（legacy assign 之外的折叠态/存量脏 phase）→ 回退全局 BLOCKING Set=旧语义。
+      const phaseDef = profileOf(st).phases[st.phase ?? ""];
+      if (!(phaseDef ? phaseDef.blocking === true : BLOCKING_PHASES.has(st.phase))) return;
       if (toolName === "shell") {
         const cmd = String(input?.input?.command ?? "");
         const base = String(input?.input?.cwd ?? st.directory ?? "");

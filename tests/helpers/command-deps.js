@@ -3,6 +3,7 @@
 // IO 探针 no-op），emitUpdated/emitReport/putReport 缺省带捕获组（deps.updated/emitted/reportRows
 // 附加键，不进契约字段），消费方按需用 over 替换或直读捕获数组。
 import { LIMITS } from "../../server/lib.ts";
+import { createCommandBus } from "../../server/command-bus.ts"; // R2 T2.4：runner 盒退役→真 bus 实例（inert：未注册命令→call 走未知命令分支）
 
 export function mkCommandDeps(over = {}) {
   const updated = [];
@@ -22,7 +23,7 @@ export function mkCommandDeps(over = {}) {
     emitReport: async (sid, text, at, meta) => { emitted.push({ sid, text, at, meta }); },
     WfDef: null,
     rpcErr: null,
-    runner: { run: null },
+    bus: createCommandBus(), // R2 T2.4：CommandDeps.runner→bus（registerCommands 注册+attachPublish 填充）
     // 捕获组（附加面）
     updated, emitted, reportRows,
   };

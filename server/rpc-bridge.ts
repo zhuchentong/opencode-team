@@ -6,11 +6,12 @@ import * as fs from "node:fs";
 import type { ReportLevel } from "./lib.ts";
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账 // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
 
-export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, runner, resolveProjectDir }: {
+export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, bus, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
   getReport: (sessionID: string) => Promise<any>;
-  runner: { run: ((name: string, a: any) => Promise<unknown>) | null };
+  // R2 T2.4：runner 可变盒子→CommandBus（index 装配期创建共享，exec 主轨按名调度；见 command-bus.ts）
+  bus: import("./command-bus.ts").CommandBus;
   // M16-r46 批1：产物落盘目录三级回退（与 artifact-tool 同源，state.ts 提供）
   resolveProjectDir: (st: any, sessionID: string) => Promise<string>;
 }) {
@@ -87,12 +88,12 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
         // 未知命令不抛错（抛错 client 只见 rpc.internal，原因被吞——quota 教训）；返回错误文案。
         exec: async (input: any) => {
           try {
-            const res = await runner?.run?.(String(input?.name ?? ""), {
+            const res = await bus.call(String(input?.name ?? ""), {
               sessionID: String(input?.sessionID ?? ""),
               prompt: { text: String(input?.prompt ?? "") },
             });
             if (res && typeof res === "object" && typeof (res as any).text === "string") {
-              // notification-brief-display T03：透传 runner 的 brief/level（字符串才带，缺省 null——
+              // notification-brief-display T03：透传 bus.call 的 brief/level（字符串才带，缺省 null——
               // 旧 server 版本混跑时 TUI briefOf 走降级轨）
               const r = res as any;
               return {

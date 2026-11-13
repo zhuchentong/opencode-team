@@ -1,7 +1,7 @@
 // wf-workflow — T05：模型侧状态机入口（wf_command 工具）。
 // 背景：/wf:* 原本只有用户入口（TUI 拦截 / 聊天命令），guidance 里「完成 → 执行 /wf:plan」
 // 对 leader 是祈使句却无法执行 → 状态机停摆、硬关卡与循环上限被整体绕过（面板"不同步"根因）。
-// 本工具让 leader 用同等语义推进：经 runner.run 复用双轨主轨编排（transition + inject + save +
+// 本工具让 leader 用同等语义推进：经 bus.call 复用双轨主轨编排（transition + inject + save +
 // emitUpdated + publishOutput），用户侧照常看到 toast——双入口、单状态机、关卡服务端强制。
 // 硬边界（以"会话是否自持状态行"判定属主）：
 //  - 有行 → 全部命令放行（含 status/diagnose 等辅助命令）；
@@ -14,7 +14,7 @@ import { FLOWS, isLeader } from "./lib.ts";
 const FLOW_NAMES = Object.keys(FLOWS); // 10 个流转命令（wf:intake…wf:done；M16-r28 assign 并入 test-design）
 
 export function registerCommandTool(host: import("./host.ts").Host, deps: any) { // T03：ctx→Host
-  const { load, runner, probeOnce } = deps;
+  const { load, bus, probeOnce } = deps;
   return host.tools.transform((draft: any) => {
     draft.add({
       name: "wf_command",
@@ -58,7 +58,7 @@ export function registerCommandTool(host: import("./host.ts").Host, deps: any) {
               }
             }
           }
-          const res: any = await runner?.run?.(name, { sessionID: sid, prompt: { text: String(args?.prompt ?? "") } });
+          const res: any = await bus.call(name, { sessionID: sid, prompt: { text: String(args?.prompt ?? "") } }); // R2 T2.4：bus 取代 runner 盒
           const text = typeof res?.text === "string" ? res.text : "";
           return { content: text || `❌ 未知命令：${name}` };
         } catch (e) {
