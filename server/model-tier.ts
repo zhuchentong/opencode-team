@@ -22,10 +22,14 @@ export const TIER_MAP: Record<string, string> = {
   "wf/planner": "high",
   "wf/planner-reviewer": "high",
   "wf/tester": "high",
-  "wf/builder": "off",
+  // P0-B（latency-v3.1 波次2 原子包）：执行角色 low——推理预算跟角色职责走（builder 368K reasoning
+  // 中 78K 是重复 planner 已做的设计；该网关 variants=[off,low,high,max] 无 medium，写实测存在档）。
+  // learner low：其 68K reasoning=lessons 质量本体（归零是事故），仅裁冗余不归零。
+  // 原子纪律：本映射与 options.tierAgents=true 必须同一次上线（"off" 一旦开开关就真归零——v3 最大陷阱）。
+  "wf/builder": "low",
   "wf/builder-reviewer": "high",
   "wf/fixer": "high",
-  "wf/learner": "off",
+  "wf/learner": "low",
 };
 
 export const TIER_ROLES = Object.keys(TIER_MAP);
@@ -41,6 +45,9 @@ export const TIER_TRIGGERS = new Set([
 // - 请求档在集合 → #tier；不在 → 沿强度序向下取最近存在档；无更低（如 off 缺失）→ null（继承默认）
 export function resolveTierRef(ref: ModelRef, variantIds: string[], tier: string): ModelRef | null {
   if (!ref?.id || !ref?.providerID) return null;
+  // P0-B：inherit 显式哨兵——消除 "off" 多义词（off=真归零 vs 不跟随），语义=不派生文件、跟随基座默认。
+  // （行为与未知档名 null 通路一致，显式化是为了审计行可区分 + 不依赖 ORDER 实现。）
+  if (tier === "inherit") return null;
   const ids = Array.isArray(variantIds) ? variantIds.filter(Boolean) : [];
   if (!ids.length) return null;
   const base = { providerID: ref.providerID, id: ref.id };
@@ -83,6 +90,7 @@ export async function syncTierAgents(
   const dir = `${projectDir}/.opencode/agents/wf`;
   await io.mkdir(dir, { recursive: true });
   for (const [role, tier] of Object.entries(tiers ?? {})) {
+    if (tier === "inherit") { out.push(`tier-inherit:${role}`); continue; } // P0-B：不派生文件=跟随基座默认
     const target = resolveTierRef(ref, variantIds, tier);
     if (!target) { out.push(`tier-skip:${role}:no-variant`); continue; }
     const path = `${dir}/${role.replace(/^wf\//, "")}.md`;

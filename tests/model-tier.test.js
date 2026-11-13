@@ -53,7 +53,8 @@ test("syncTierAgents：首次写全部角色文件（mock io）", async () => {
   const rows = await syncTierAgents("/proj", REF, ["off", "low", "high", "max"], TIER_MAP, io);
   const writes = rows.filter((r) => r.startsWith("tier-write"));
   assert.equal(writes.length, TIER_ROLES.length, "7 角色全写");
-  assert.ok(rows.includes("tier-write:wf/builder=off"), "builder=off");
+  assert.ok(rows.includes("tier-write:wf/builder=low"), "builder=low（P0-B：off→low，防开开关真归零陷阱）");
+  assert.ok(rows.includes("tier-write:wf/learner=low"), "learner=low（lessons 质量本体不归零）");
   assert.ok(rows.includes("tier-write:wf/fixer=high"), "fixer=high");
   assert.ok(files["/proj/.opencode/agents/wf/builder-reviewer.md"], "builder-reviewer.md 落盘（无 wf/ 前缀文件名）");
 });
@@ -100,4 +101,26 @@ test("TIER_TRIGGERS：流转+入口全在，只读豁免集不在", () => {
   for (const c of ["wf:status", "wf:diagnose", "wf:ping", "wf:lane", "wf:reset", "wf:debug"]) {
     assert.ok(!TIER_TRIGGERS.has(c), `${c} 应豁免`);
   }
+});
+
+// ── P0-B（latency-v3.1 波次2 原子包）：inherit 哨兵 + 新默认映射 ──────────────
+test("P0-B TIER_MAP 默认：builder/learner=low（推理预算跟角色职责走）", () => {
+  assert.equal(TIER_MAP["wf/builder"], "low");
+  assert.equal(TIER_MAP["wf/learner"], "low");
+  assert.equal(TIER_MAP["wf/planner"], "high");
+});
+
+test("P0-B resolveTierRef：inherit 显式哨兵 → null（不派生=跟随基座默认，脱离 ORDER 依赖）", () => {
+  assert.equal(resolveTierRef(REF, ["off", "low", "high", "max"], "inherit"), null);
+  assert.equal(resolveTierRef(REF, [], "inherit"), null);
+});
+
+test("P0-B syncTierAgents：inherit 角色输出 tier-inherit 专用审计行且不写文件", async () => {
+  const files = {};
+  const io = { mkdir: async () => {}, readFile: async () => { throw new Error("none"); }, writeFile: async (p, c) => { files[p] = c; } };
+  const rows = await syncTierAgents("/proj", REF, ["off", "low", "high", "max"], { "wf/planner": "inherit", "wf/builder": "low" }, io);
+  assert.ok(rows.includes("tier-inherit:wf/planner"), "inherit 专用审计行（区别于 tier-skip:no-variant）");
+  assert.ok(!("tier-write:wf/planner=off" in rows), "inherit 不派生文件");
+  assert.ok(rows.some((r) => r.startsWith("tier-write:wf/builder=low")));
+  assert.ok(!files["/proj/.opencode/agents/wf/planner.md"], "planner.md 不得落盘");
 });

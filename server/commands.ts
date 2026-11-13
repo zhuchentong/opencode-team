@@ -238,7 +238,15 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             const st = await load(sid);
             const dir = await resolveProjectDir(st, sid);
             const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
-            if (rows.length) tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
+            if (host.options.tierAgents === true) {
+              // P0-B：每角色生效 variant 回显（含 inherit/未派生角色=`(基座默认)`——防「没列出=没生效」误读；
+              // 判定读派生文件实况（readTierAgents）=reconstructing reality，与 options.tiers 配置解耦）。
+              const got = new Map(rows.map((r) => [r.split("=")[0], r.split("=")[1]] as const));
+              const cells = TIER_ROLES.map((role) => `${role}=${got.get(role) ?? "(基座默认)"}`);
+              tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${cells.join(" ")}`;
+            } else if (rows.length) {
+              tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
+            }
           } catch (e) { swallow(e, "commands:ping-tier-read-fail"); }
           return pingReport(res) + roleGuardText(host.options) + tierLine;
         } catch (e) {
