@@ -241,8 +241,12 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             if (host.options.tierAgents !== false) {
               // P0-B：每角色生效 variant 回显（含 inherit/未派生角色=`(基座默认)`——防「没列出=没生效」误读；
               // 判定读派生文件实况（readTierAgents）=reconstructing reality，与 options.tiers 配置解耦）。
+              // P1-B：未知角色标注 (配置无效)——middleware 白名单已拒落盘，此处只读视图可见化（同口径过滤）。
+              const userTiers = host.options.tiers ?? {};
+              const unknown = Object.keys(userTiers).filter((r) => !TIER_ROLES.includes(r));
               const got = new Map(rows.map((r) => [r.split("=")[0], r.split("=")[1]] as const));
-              const cells = TIER_ROLES.map((role) => `${role}=${got.get(role) ?? "(基座默认)"}`);
+              const cells = TIER_ROLES.map((role) => `${role}=${got.get(role) ?? "(基座默认)"}`)
+                .concat(unknown.map((role) => `${role}=(配置无效)`));
               tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${cells.join(" ")}`;
             } else if (rows.length) {
               tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;

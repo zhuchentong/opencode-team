@@ -4,6 +4,7 @@
 // 行为锚与 leader-only.test.js（集成面）互补：本文件直测 middleware.ts 纯组合面。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { composeMW, CMD_MW_ORDER, createCommandGuard } from "../server/middleware.ts";
 
 test("R2 T2.5：composeMW 顺序=数组头最外层（执行轨迹断言）", async () => {
@@ -74,4 +75,22 @@ test("R2 T2.5：无前行拒绝不落盘（T02 幽灵行防护）；load 失败 
   const out = await fn({ sessionID: "ses_m" });
   assert.ok(String(out).startsWith("❌"));
   assert.equal(saved.length, 0, "无前行（幽灵行）不得落盘");
+});
+
+// ── P1-B（arch-maintenance-p1）：options.tiers 白名单——未知角色拒落盘（幽灵 agent 防御，V5）──
+test("P1-B options.tiers 未知角色：白名单拒落盘 + tiers-invalid 审计行", async () => {
+  fs.rmSync("/tmp/opencode/wf-mw/.opencode", { recursive: true, force: true });
+  const { deps, saved } = mkDeps({
+    agent: "workflow",
+    options: { tierAgents: true, tiers: { "wf/ghost": "low", "wf/planner": "high" } },
+    st: { slug: "t", phase: "planning", rounds: {} },
+    model: { providerID: "prov", id: "m1" },
+  });
+  const guard = createCommandGuard(deps);
+  const fn = guard.guard("wf:plan")(async () => "ok");
+  await fn({ sessionID: "ses_m" });
+  assert.ok(!fs.existsSync("/tmp/opencode/wf-mw/.opencode/agents/wf/ghost.md"), "未知角色不得落盘派生文件（幽灵 subagent 防御）");
+  const notes = saved.flatMap((st) => st.log.map((l) => l.note)).join("|");
+  assert.match(notes, /tiers-invalid:wf\/ghost/, "未知角色应有 tiers-invalid 审计行");
+  assert.ok(!notes.includes("wf/ghost.md"), "审计只记角色名，不得出现文件路径误引");
 });

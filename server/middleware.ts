@@ -9,7 +9,7 @@ import { logAdd, type Store } from "./state.ts";
 import { type Observer, swallow } from "./observe.ts";
 import { type Host } from "./host.ts";
 import {
-  TIER_MAP, TIER_TRIGGERS, syncTierAgents, type ModelRef,
+  TIER_MAP, TIER_ROLES, TIER_TRIGGERS, syncTierAgents, type ModelRef,
 } from "./model-tier.ts";
 
 // tierCheck 派生文件 IO（自 commands.ts fsIo 逐字节迁移）
@@ -72,7 +72,11 @@ export function createCommandGuard(deps: GuardDeps) {
         ?? arr.find((m: any) => m?.id === ref.id);
       variantIds = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
     } catch (e) { swallow(e, "middleware:model-list-variants-fail"); }
-    const tiers = { ...TIER_MAP, ...host.options.tiers };
+    // P1-B（arch-maintenance-p1）：options.tiers 白名单过滤——未知角色若放行会被 syncTierAgents
+    // 真实落盘成派生 agent 文件（幽灵 subagent 注册，V5 实证）；非法档名本就 skip:no-variant（安全）。
+    const userTiers: Record<string, string> = host.options.tiers ?? {};
+    const unknown = Object.keys(userTiers).filter((r) => !TIER_ROLES.includes(r));
+    const tiers = { ...TIER_MAP, ...Object.fromEntries(Object.entries(userTiers).filter(([r]) => TIER_ROLES.includes(r))) };
     const dir = await resolveProjectDir(st, sid);
     const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
     const at = new Date().toISOString();
@@ -89,6 +93,7 @@ export function createCommandGuard(deps: GuardDeps) {
       notes.push(`__AUDIT__tier-model-switch:${baseKey}${prev ? `（原 ${prev.providerID}/${prev.id}）` : ""}`);
     }
     const actions = rows.filter((r) => !r.startsWith("tier-keep"));
+    if (unknown.length) actions.push(`tiers-invalid:${unknown.join(",")}`); // P1-B：配置面污染防御（可观测）
     if (actions.length) notes.push(`__AUDIT__${actions.join(" ")}`);
     if (notes.length) {
       for (const n of notes) {
