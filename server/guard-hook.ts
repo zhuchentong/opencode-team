@@ -101,6 +101,18 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         const args = input?.input ?? {};
         const target = String(args.agent ?? "");
         const passedRaw = args.sessionID;
+        // ── P2-G（latency-v3.1）：background 观察灯——leader 委派的显式性记入 events ──
+        // 口径：input.background===true→explicit / ===false→explicit-false / 其余→unset（宿主默认
+        // 行为形状未实证，三态保守；数据只用于「前台干等占比」量化供硬准入决策，绝不用于拦截）。
+        // 每委派恰一条（logAdd→save，与 question 记账同款 fail-open）；零回显（只记 lane 键，无 sid）。
+        try {
+          const bgRaw = args.background;
+          const bg = bgRaw === true ? "explicit" : bgRaw === false ? "explicit-false" : "unset";
+          const passedS = String(passedRaw ?? "");
+          const laneKey = Object.entries(st.lanes ?? {}).find(([k, v]) => (v as any).sessionID === passedS || k === passedS.replace(/^@/, ""))?.[0];
+          logAdd(st, { at: new Date().toISOString(), cmd: "deleg:observe", tool: toolName, from: st.phase, to: st.phase, ok: true, note: `background-lamp bg=${bg}${laneKey ? ` lane=${laneKey}` : ""}` });
+          try { await save(st); } catch (e) { swallow(e, "guard-hook:lamp-save-fail"); }
+        } catch (e) { swallow(e, "guard-hook:lamp-fail"); }
         if (passedRaw == null || String(passedRaw) === "") return; // 省略 sessionID=新建，不干预
         const passed = String(passedRaw);
 

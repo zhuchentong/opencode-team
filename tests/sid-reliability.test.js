@@ -285,3 +285,24 @@ test("r45-E：内容锚——skill 管道纪律；leader 别名契约与 Session
   assert.ok(SID_ALIAS_USAGE.includes(`sessionID="auto"`) && SID_ALIAS_USAGE.includes("@Tnn"), "常量保留三锚子串（C1）");
   assert.ok(SID_ALIAS_USAGE.includes("无 lane 登记"), "常量新语义：auto 默认单会话形态即生效");
 });
+
+// ── P2-G（latency-v3.1）：background 观察灯——委派显式性入 events（三态+fail-open+零回显）──
+test("P2-G 观察灯：bg=explicit / unset 入 events；lane 键随记；非 leader 不记", async () => {
+  const leader = "ses_lamp1"; const m = await setupLeader(leader);
+  await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: `set T01 ${FULL}` } });
+  await callSub(m, leader, { agent: "wf/planner", sessionID: "@T01", background: true }); // 多 lane 语境须显式别名（既有行为）；观察灯在别名解析前落账
+  let st = stOf(leader);
+  const lampNotes = st.log.filter((l) => l.note?.startsWith("background-lamp")).map((l) => l.note);
+  assert.equal(lampNotes.length, 1, "每委派恰一条观察灯");
+  assert.match(lampNotes[0], /bg=explicit lane=T01/, "显式 true=explicit + lane 键随记（零 sid 回显）");
+  assert.ok(!lampNotes[0].includes("ses_"), "零回显：观察灯不落完整 ID");
+
+  await callSub(m, leader, { agent: "wf/planner", sessionID: "@T01" }); // 未声明 background（多 lane 语境须显式别名——既有行为）
+  st = stOf(leader);
+  const unsetNote = st.log.filter((l) => l.note?.startsWith("background-lamp")).map((l) => l.note).at(-1);
+  assert.match(unsetNote, /bg=unset/, "未声明=unset（三态保守口径）");
+
+  const before = stOf(leader).log.length;
+  await callSub(m, leader, { agent: "wf/planner", sessionID: "@T01" }, "wf/builder"); // 非 leader 委派
+  assert.equal(stOf(leader).log.length, before, "非 leader 不记观察灯");
+});
