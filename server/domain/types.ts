@@ -87,7 +87,11 @@ export interface WfState {
   rounds: Record<LimitKey, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
-  lanes?: Record<string, { sessionID?: string; worktree?: string | null; at?: string }>; // M16-r39 T06：worktree 可 null（lane set 无 worktree 时写 null，形状同源）
+  // P1-E（latency-v3.1 波次3）：lane 并行制度——值对象扩 areas/status/lastUsedAt（内部字段，
+  // 不触发 wfstate-fields 顶层快照锁；勿把 lanes 迁组——会牵动锁与 normalize）。
+  // areas=写集归属（leader 从 plan lane 分组表登记，经 wf:lane set --areas=T01,T02 单 token，勿走空格参数）；
+  // status: active|done（done=已合并/收尾，留作空闲续用提示，不再计入并发数）；lastUsedAt=LRU 提示基准。
+  lanes?: Record<string, { sessionID?: string; worktree?: string | null; at?: string; areas?: string[]; status?: "active" | "done"; lastUsedAt?: string }>;
   // R3 T3.1 子步 C：reuse 分组——roleSessions/tierBase 迁入（读兼容：normalizeState 搬平铺字段）
   // M16-r40：角色→最新子会话自动登记（agent→{sessionID,at}）。子代理调 wf_write_artifact /
   //   edit 时插件自动捕获其 sessionID；guidance 重委派点按登记存在性渲染续用指引（指路别名/省略新建，
@@ -165,6 +169,8 @@ export function normalizeState(st: WfState): WfState {
 
 // R3 T3.1 子步 C：登记表形状单点（session.ts SidAliasInput 等派生用）
 export type RoleSessions = Record<string, { sessionID: SessionId; at: string }>;
+// P1-E：builder lane 并发默认上限（防本地网关互相挤占；软准入——超限告警不阻断）
+export const LANE_CAP = 2;
 
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
 export interface FlowDef {

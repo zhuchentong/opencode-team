@@ -14,13 +14,13 @@
 // bus（index 装配期创建，bridge/tool/commands 三方共享）。
 import * as fs from "node:fs";
 import {
-  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport,
+  VERSION, BLOCKING_PHASES, LANE_CAP, nextFor, promptText, diagnoseReport, pingReport,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
   FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
 } from "./lib.ts"; // R2 T2.4/T2.5：flowFor/evaluateTransition/leaderOnlyReject/isSelfModDir/selfModWarnLine/briefFallback 随体迁出；+renderReport 文本链单点
 import { briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
-import { ENTRY_KEY, HINT_KEY, withStateRetry, type Store } from "./state.ts"; // R2：logAdd/scanActiveTasks/FOLD 随体迁出
+import { ENTRY_KEY, HINT_KEY, withStateRetry, scanActiveTasks, type Store } from "./state.ts"; // P1-E：lane 准入复用跨库扫描（勿新建计数器）
 import { type Observer, swallow, listSwallows } from "./observe.ts";
 import { type Host } from "./host.ts"; // T03：registerCommands 收 Host（原 ctx:any；入口 setup(ctx) 签名不变） // T01：swallow 记账 + diagnose 摘要接线
 // R2 T2.4/T2.5（arch-r2-profile-statemachine）：transition/inject 编排与命令中间件链、命令总线提取——
@@ -278,7 +278,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
     });
     add({
       name: "wf:lane",
-      description: `登记/查看 lane：set <Tnn> <子会话ID|@别名> [worktree] / rm <Tnn> / 默认 ls（${VERSION}）`,
+      description: `登记/查看 lane：set <Tnn> <子会话ID|@别名> [worktree] [--areas=T01,T02] / done <Tnn> / rm <Tnn> / 默认 ls（${VERSION}；并发 cap=${LANE_CAP}）`,
       execute: async (a: any) => {
         const t = promptText(a.prompt).trim().split(/\s+/);
         const op = (t[0] ?? "ls").toLowerCase();
@@ -316,27 +316,35 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             } catch (e) { swallow(e, "commands:lane-session-probe-fail"); }
           }
         }
-        // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm（≤3 次），
+        // P1-E：areas 经单 token --areas=T01,T02 登记（勿走 CLI 空格参数——lane 表由 leader 从 plan 分组表录入）
+        const areasTok = t.slice(4).find((x: string) => x.startsWith("--areas="));
+        const areas = areasTok ? areasTok.slice("--areas=".length).split(",").map((x: string) => x.trim()).filter(Boolean) : undefined;
+        // T04：变更提取为可重放函数——stale-rev 冲突时以最新快照重放 set/rm/done（≤3 次），
         // 返回错误串=操作不成立，null=已写入 st.lanes
         const applyOp = (st: WfState): string | null => {
           st.lanes = st.lanes ?? {};
           if (op === "set") {
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(id)) return `❌ lane ID 非法：「${id}」（用 T01 这类：字母数字开头，≤32 字符，仅 A-Za-z0-9._-）`;
             if (!/^ses_[A-Za-z0-9]+$/.test(sid)) return `❌ 子会话 ID 非法：「${sid}」（应形如 ses_xxx，来自 subagent 返回值/@别名）`;
-            st.lanes[id] = { sessionID: sid, worktree: wt || null, at: new Date().toISOString() };
+            st.lanes[id] = { sessionID: sid, worktree: wt || null, at: new Date().toISOString(), status: "active", lastUsedAt: new Date().toISOString(), ...(areas ? { areas } : {}) };
             return null;
           }
           if (!(id in st.lanes)) return `❌ 没有 lane「${id}」。当前：${Object.keys(st.lanes).join(", ") || "(空)"}`;
+          if (op === "done") { // P1-E：标记收尾（留 lane 作空闲续用提示，不计入并发数）
+            st.lanes[id] = { ...st.lanes[id], status: "done", lastUsedAt: new Date().toISOString() };
+            return null;
+          }
           delete st.lanes[id];
           return null;
         };
-        if (op !== "set" && op !== "rm") { // ls（默认）只读，不落盘
+        if (op !== "set" && op !== "rm" && op !== "done") { // ls（默认）只读，不落盘
           const lanes = st0.lanes ?? {};
           const ks = Object.keys(lanes);
-          if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径]";
+          if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径] [--areas=T01,T02]";
           return ks.map((k: string) => {
             const v = lanes[k];
-            return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}（${String(v.at ?? "").slice(0, 19)}）`;
+            const areas = v.areas?.length ? ` areas=${v.areas.join("+")}` : "";
+            return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}${areas} [${v.status ?? "active"}]（${String(v.lastUsedAt ?? v.at ?? "").slice(0, 19)}）`;
           }).join("\n");
         }
         // M16-r39 T07：归一 withStateRetry——load(1)=首快照 st0、load(n)=重载；apply=applyOp
@@ -351,7 +359,14 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           return `❌ 状态保存失败（${res.reason}），lane 变更未生效，请重试。`;
         }
         await emitUpdated(res.st);
-        return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}${setNote}`;
+        // P1-E 软准入：并发超 LANE_CAP → 返回值告警（不阻断）；跨库活跃任务数一并提示（复用 scanActiveTasks，勿新建计数器）
+        let capNote = "";
+        try {
+          const active = Object.values(res.st.lanes ?? {}).filter((v) => v.status !== "done").length;
+          const others = scanActiveTasks(String(a.sessionID ?? "")).length;
+          if (active > LANE_CAP) capNote = `\n⚠️ 活跃 builder lane ${active} > cap ${LANE_CAP}——本地网关可能互相挤占；其余活跃任务 ${others} 个。超线并行=例外，须说明理由。`;
+        } catch (e) { swallow(e, "commands:lane-cap-note-fail"); }
+        return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}${setNote}${capNote}`;
       },
     });
     add({

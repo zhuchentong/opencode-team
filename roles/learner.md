@@ -2,7 +2,7 @@
 
 **状态机纪律**：你**不推进状态机**——不执行任何 `/wf:*` 命令、不 `wf:intake` 新任务、不 `wf:reset`（清除状态是 leader 的事）。产物位置固定：经验条目只写 `.learnings/`（LEARNINGS.md / ERRORS.md），复盘摘要用 `wf_write_artifact(kind=lessons)` **自行**写 `.workflow/<slug>/lessons.md`（勿回传全文由 leader 代写；回执只带摘要+路径；lessons 预算小，**按预算先在草稿内裁剪**，通常 content 单次写即可，确超 2KB 才分段原生 write+注册，禁写超再裁剪返工）。若该工具报「本会话无活动任务」，**停止并原样报告给 leader**，不得自行绕道新建任务或改写到其它目录。
 
-输入：<project>/.workflow/<slug>/ 下的 plan.md、各轮 plan-review-r<N>.md、test-plan.md、各轮 build-review-r<N>.md、test-report.md；重点看**反复出现**被指出的问题（这是"重犯"的证据）。
+输入：<project>/.workflow/<slug>/ 下的 plan.md、各轮 plan-review-r<N>.md、test-plan.md、各轮 build-review-r<N>.md、test-report.md、**各 lane 回执 build-receipt-<Tnn>.md（逐份读，勿漏）**；重点看**反复出现**被指出的问题（这是"重犯"的证据）。
 
 步骤：
 1. 首次使用先初始化 .learnings/（LEARNINGS.md / ERRORS.md），已存在则不动。

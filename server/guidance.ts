@@ -4,7 +4,7 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts";
+import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts"; // P1-E：LANE_CAP 动态尾
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -99,8 +99,8 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
 // ── selfmod-concurrency-guard A3：daily building 派发策略绑 size（双任务同版本取证：
 // M 分 2 派 vs L 一派到底=纯裁量漂移；收敛为 size 决定策略，例外须理由）──────────────
-const DISPATCH_L = `L 级：分批委派 wf/builder——按 plan 批次表/依赖序（每批 ≤4 个 T<nn>，续用同一 builder session），worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill 单树串行形态）。一派到底=例外须在回执说明理由。`;
-const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；多 builder 并行需用户同意+worktree。`;
+const DISPATCH_L = `L 级：按 plan lane 分组表分批委派 wf/builder（每批 ≤4 个 T<nn>，续用同 session）：lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；互斥证据不足 → 单树串行（不为并行而并行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
+const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；lane 并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准（写集互斥前提）。`;
 // R2 T2.1 DispatchStrategy：M/L 派发策略表（tier 判定唯一形态=DISPATCH_BY_TIER[tier]）
 const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L };
 // selfmod-guard T01：引擎自改纪律行（st.selfMod 门控渲染——entry 通道抗 compaction；
@@ -146,8 +146,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         lines.push(`增量复审（第 ${r.plan_review} 轮）：续用上轮 reviewer sessionID；范围=上轮 findings 当未验证线索逐条确认销项 + plan.md 修订 diff + 一致性抽查，勿全文重审、勿重新推导已确认项。`);
       }
       lines.push(S
-        ? `自验通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；wf:build 关卡校验确认记账）→ wf_command(name="wf:build")；不过 → 唯一返修路径：wf_command(name="wf:plan") 亲自修订再 wf:review；超限 → 停下问用户`
-        : `FAIL → 唯一返修路径：wf_command(name="wf:plan") 带意见修订再 wf:review（review 直推复审边已移除；plan 修订即作废确认记账）；PASS → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务）→ wf_command(name="wf:build")（关卡校验 plan-review 结论+确认记账）；超限 → 停下问用户`);
+        ? `自验通过 → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；卡片展示 lane 划分与预计耗时——「批准执行」=批准该并行授权；wf:build 关卡校验确认记账）→ wf_command(name="wf:build")；不过 → 唯一返修路径：wf_command(name="wf:plan") 亲自修订再 wf:review；超限 → 停下问用户`
+        : `FAIL → 唯一返修路径：wf_command(name="wf:plan") 带意见修订再 wf:review（review 直推复审边已移除；plan 修订即作废确认记账）；PASS → 先用 question 做方案确认（选项标签固定：批准执行/修改方案/终止任务；卡片展示 lane 划分与预计耗时——「批准执行」=批准该并行授权）→ wf_command(name="wf:build")（关卡校验 plan-review 结论+确认记账）；超限 → 停下问用户`);
       lines.push(`轮次：第 ${r.plan_review}/${L.plan_review} 轮`);
       if (!S && (r.plan_review ?? 0) >= 2) lines.push(...reuseLines(st, "wf/planner-reviewer"));
       return lines.join("\n");
@@ -157,8 +157,12 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         `【wf 工作流｜building·日常模式】slug=${s}`,
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
+        // P1-E 动态尾：lane 并发数+空闲续用提示（有 lanes 登记才渲染；静态前缀+动态小尾纪律）
+        ...(() => { const lanes = st.lanes ?? {}; return Object.keys(lanes).length
+          ? [`lanes(${Object.values(lanes).filter((v) => v.status !== "done").length}/${LANE_CAP} 活跃)：${Object.entries(lanes).map(([k, v]) => `${k}${v.areas?.length ? `[${v.areas.join("+")}]` : ""}${v.status === "done" ? "(空闲可续用)" : ""}`).join(" ")}——续用 @Tnn；写前核对 areas，越界停下回报`]
+          : []; })(),
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
-          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位）。`]),
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
         ...(st.delivery?.selfMod ? [SELFMOD_LINE] : []), // R3 T3.1 子步 D
       ];
@@ -253,12 +257,12 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     ].join("\n");
     case "building": return [
       `【wf 工作流｜building】slug=${s}`,
-      `默认：开一个 worktree，一个 wf/builder 在树内按序串行完成全部 T<nn>（逐任务 TDD 先红后绿）；建树后把 test_design 产出的红测试复制进树并 md5 核对；prompt 给 worktree 绝对路径+按序任务清单（勿贴整份 plan——只给任务行摘录+接口签名，省子代理冷启动）。多树并行=例外（写集互斥+用户同意）。`,
+      `默认：开一个 worktree，一个 wf/builder 在树内按序串行完成全部 T<nn>（逐任务 TDD 先红后绿）；建树后把 test_design 产出的红测试复制进树并 md5 核对；prompt 给 worktree 绝对路径+按序任务清单（勿贴整份 plan——只给任务行摘录+接口签名，省子代理冷启动）。多树并行=plan lane 分组表+确认卡批准（写集互斥前提），lane 分支 wf/<slug>/lane-<Tnn>。`,
       `全部回执齐备（含红→绿证据）→ wf_command(name="wf:reconcile")`,
     ].join("\n");
     case "reconcile": return [
       `【wf 工作流｜reconcile】slug=${s}`,
-      `合并 worktree 产物回主树（单树=一次合并；主树跑构建+冒烟即可，全量验证留给 testing 阶段，勿重复跑全量）。`,
+      `合并 worktree 产物回主树（多 lane=逐 lane 展示 diff 摘要再合，勿静默整树覆盖；单树=一次合并；主树跑构建+冒烟即可，全量验证留给 testing 阶段，勿重复跑全量）。合并后 wf:lane done <Tnn> 收尾（留 lane 作空闲续用提示）。`,
       `清理前先 rm 树内已合并的 untracked 副本再非 force 移除；冲突/数字不符 → 停下问用户，不自动解决。`,
       `合并完成 → wf_command(name="wf:review-build")`,
     ].join("\n");

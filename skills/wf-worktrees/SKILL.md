@@ -11,7 +11,8 @@ description: >
 
 ## 创建
 - `worktree_create`（opencode 工具）或 `git worktree add <path> -b <branch>`；树内先 `bun install`。
-- 分支命名：批次树 `wf/<slug>/batch<N>`；lane 树 `wf/<slug>/lane-Tnn`。
+- 分支命名：批次树 `wf/<slug>/batch<N>`；lane 树 `wf/<slug>/lane-Tnn`（P1-E；lane 写集归属见 `wf:lane ls` 的 areas 列）。
+- lane 树内 `.workflow/`（wf.db 等）不入 git：createStore 已在每个项目目录写 `.workflow/.gitignore`（managed 块）——树内首次跑测试自动生成，勿手工删除该块。
 - 基线陷阱：worktree 基于 HEAD 建树——主树未提交的 carryover 不在树内，开工前主树必须干净。
 
 ## 单树串行执行（builder）
