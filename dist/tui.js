@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal } from "solid-js";
-import * as ot from "@opentui/solid";
 import { Rpc } from "@opencode/plugin/rpc";
+import * as ot from "@opentui/solid";
 var Wf = Rpc.define({
 	id: "wf",
 	methods: {
@@ -154,6 +154,59 @@ var Wf = Rpc.define({
 		} }
 	}
 });
+// shared/version.ts
+var VERSION = "M16-r47";
+// shared/report.ts
+function reportId(sessionID, at) {
+	return `${sessionID}|${at}`;
+}
+function createDeduper(opts) {
+	const ttlMs = opts?.ttlMs ?? 6e4;
+	const cap = opts?.cap ?? 50;
+	const now = opts?.now ?? Date.now;
+	const map = /* @__PURE__ */ new Map();
+	return { seen(key, atMs = Date.now()) {
+		const t = now();
+		if (Number.isFinite(atMs) && t - atMs > ttlMs) return false;
+		if (map.has(key)) return false;
+		map.set(key, atMs);
+		if (map.size > cap) {
+			const first = map.keys().next().value;
+			if (first !== void 0) map.delete(first);
+		}
+		return true;
+	} };
+}
+// tui/util.ts
+var str = (v) => v === null || v === void 0 ? "" : String(v);
+var errMsg = (e) => String(e?.message ?? e);
+function setupProbe(context, opts) {
+	const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", "" + import.meta.url).pathname).replace(/\/$/, "");
+	const LOADED_AT = (/* @__PURE__ */ new Date()).toISOString();
+	let seq = 0;
+	const PROBE_ON = process.env.WF_DEBUG === "1";
+	const probe = (data) => {
+		if (!PROBE_ON) return;
+		(async () => {
+			try {
+				const fs = await import("node:fs");
+				const dir = `${REPO}/.workflow/_debug`;
+				fs.mkdirSync(dir, { recursive: true });
+				fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({
+					at: (/* @__PURE__ */ new Date()).toISOString(),
+					build: opts.build,
+					loadedAt: LOADED_AT,
+					seq: ++seq,
+					...data
+				}) + "\n");
+			} catch {}
+		})();
+	};
+	return {
+		REPO,
+		probe
+	};
+}
 // shared/phases.ts
 var PHASE_ORDER = [
 	"intake",
@@ -184,38 +237,13 @@ var DAILY_STAGE_ORDER = [
 	"testing",
 	"done"
 ];
-// shared/version.ts
-var VERSION = "M16-r47";
 // shared/redact.ts
 function redactIds(text) {
 	return String(text ?? "").replace(/ses_[A-Za-z0-9]+/g, "〔已隐去〕");
 }
-// shared/report.ts
-function reportId(sessionID, at) {
-	return `${sessionID}|${at}`;
-}
-function createDeduper(opts) {
-	const ttlMs = opts?.ttlMs ?? 6e4;
-	const cap = opts?.cap ?? 50;
-	const now = opts?.now ?? Date.now;
-	const map = /* @__PURE__ */ new Map();
-	return { seen(key, atMs = Date.now()) {
-		const t = now();
-		if (Number.isFinite(atMs) && t - atMs > ttlMs) return false;
-		if (map.has(key)) return false;
-		map.set(key, atMs);
-		if (map.size > cap) {
-			const first = map.keys().next().value;
-			if (first !== void 0) map.delete(first);
-		}
-		return true;
-	} };
-}
-// tui/index.tsx
+// tui/panel.tsx
 var { createElement, insert, setProp } = ot;
-var TUI_BUILD = VERSION;
 var ROWS = 20;
-var str = (v) => v === null || v === void 0 ? "" : String(v);
 function briefOf(d) {
 	const b = str(d?.brief);
 	if (b) return b;
@@ -226,7 +254,6 @@ function briefOf(d) {
 		return redactIds(cps.length > 100 ? cps.slice(0, 100).join("") + "…" : l);
 	}).join("\n");
 }
-var errMsg = (e) => String(e?.message ?? e);
 var sanitize = (s) => String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ";
 var dispW = (s) => {
 	let w = 0;
@@ -552,68 +579,204 @@ var buildRows = (s, err, oth, othScope, T, now, w) => {
 		af
 	};
 };
-var tui_default = Plugin.define({
-	id: "wf-workflow-tui",
-	setup(context) {
-		const compact = context?.options?.compact === true || process.env.WF_COMPACT === "1";
-		const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL("../../", "" + import.meta.url).pathname).replace(/\/$/, "");
-		const LOADED_AT = (/* @__PURE__ */ new Date()).toISOString();
-		let seq = 0;
-		const PROBE_ON = process.env.WF_DEBUG === "1";
-		const probe = (data) => {
-			if (!PROBE_ON) return;
-			(async () => {
-				try {
-					const fs = await import("node:fs");
-					const dir = `${REPO}/.workflow/_debug`;
-					fs.mkdirSync(dir, { recursive: true });
-					fs.appendFileSync(`${dir}/tui-refresh.log`, JSON.stringify({
-						at: (/* @__PURE__ */ new Date()).toISOString(),
-						build: TUI_BUILD,
-						loadedAt: LOADED_AT,
-						seq: ++seq,
-						...data
-					}) + "\n");
-				} catch {}
-			})();
-		};
+function setupArtifactPreview(context, deps) {
+	const { probe, getSid, rpc, rpcOpts } = deps;
+	const ROUTE_NAME = "wf-artifact";
+	const openArtifact = async (file) => {
+		const sid = getSid();
+		if (!sid || !file) return;
 		probe({
-			evt: "loaded",
-			repo: REPO,
-			options: JSON.stringify(context?.options ?? null),
-			loc: str(context?.location?.directory),
-			hasSlot: typeof context?.ui?.slot === "function",
-			hasKeymap: typeof context?.keymap?.layer === "function",
-			hasDataListen: typeof context?.data?.listen === "function",
-			hasDataOn: typeof context?.data?.on === "function",
-			hasAttention: typeof context?.attention?.notify === "function",
-			hasRendererEditor: !!context?.renderer
+			evt: "open-artifact",
+			file
 		});
-		const [snap, setSnap] = createSignal(null);
-		let latestSid = "";
-		const dedupe = createDeduper();
-		const ac = new AbortController();
-		const myDir = () => String(context?.location?.directory ?? "");
-		const rpc = () => context.client.rpc(Wf);
-		const rpcOpts = () => {
-			const d = myDir();
-			return d ? { location: { directory: d } } : {};
-		};
-		const locOk = (e) => {
-			const d = String(e?.location?.directory ?? "");
-			return !d || !myDir() || d === myDir();
-		};
-		const notifyImportant = (msg, level) => {
-			if (level !== "warn") return;
-			try {
-				context.attention?.notify?.({
-					title: "wf",
-					message: msg.slice(0, 160),
-					sound: false
+		try {
+			const r = await rpc().read({
+				sessionID: sid,
+				file
+			}, rpcOpts());
+			if (!r || r.error) {
+				context.ui.toast.show({
+					message: String(r?.error ?? `读取产物失败：${file}`),
+					variant: "info"
 				});
-				probe({ evt: "notify" });
-			} catch {}
-		};
+				return;
+			}
+			if (routerOk) try {
+				context.ui.router.navigate({
+					type: "plugin",
+					name: ROUTE_NAME,
+					data: {
+						file,
+						text: r.text,
+						bytes: r.bytes ?? 0,
+						path: r.path,
+						truncated: !!r.truncated
+					}
+				});
+				probe({
+					evt: "navigate-ok",
+					file
+				});
+				return;
+			} catch (e) {
+				probe({
+					evt: "navigate-err",
+					err: errMsg(e)
+				});
+			}
+			context.ui.toast.show({
+				message: `产物路径：${r.path}（预览 route 不可用）`,
+				variant: "info"
+			});
+		} catch (e) {
+			context.ui.toast.show({
+				message: `打开产物失败：${errMsg(e)}`,
+				variant: "error"
+			});
+		}
+	};
+	let routerOk = false;
+	try {
+		const R = context.ui?.router;
+		probe({
+			evt: "router-probe",
+			hasRegister: typeof R?.register === "function",
+			hasNavigate: typeof R?.navigate === "function",
+			hasCurrent: typeof R?.current === "function"
+		});
+		if (typeof R?.register === "function" && typeof R?.navigate === "function") {
+			R.register({
+				name: ROUTE_NAME,
+				render: (input) => {
+					probe({
+						evt: "route-render",
+						keys: Object.keys(input ?? {}).slice(0, 8).join(",")
+					});
+					const container = boxEl([], "100%");
+					insert(container, () => {
+						try {
+							const d = input?.data ?? input ?? {};
+							const T = context.theme ?? { text: {
+								muted: "gray",
+								base: "white",
+								feedback: { error: "red" }
+							} };
+							const body = String(d.text ?? "").split("\n");
+							const head = `  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`;
+							const fixedHead = [
+								textEl("── wf 产物预览 ────────────────", T.text.muted),
+								textEl(head, T.text.muted),
+								textEl(`  ${str(d.path)}`, T.text.muted),
+								textEl(" ", T.text.muted)
+							];
+							const fixedFoot = [textEl(" ", T.text.muted), textEl("  q 返回会话", T.text.muted)];
+							const md = mdEl(body.slice(0, 200).join("\n"), (info) => probe({
+								evt: "md-el-err",
+								...info
+							}), (info) => probe(info));
+							if (md) {
+								probe({
+									evt: "route-render-md-ok",
+									lines: Math.min(body.length, 200)
+								});
+								const kids = [md, ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行；截断可能落在代码块/表格中段）`, T.text.muted)] : []];
+								const sc = scrollEl(kids, (info) => probe({
+									evt: "scroll-el-err",
+									...info
+								}));
+								return boxEl([
+									...fixedHead,
+									...sc ? [sc] : kids,
+									...fixedFoot
+								], "100%");
+							}
+							const kids = [...body.slice(0, 200).map((ln) => textEl("  " + ln, T.text.base)), ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行）`, T.text.muted)] : []];
+							const sc2 = scrollEl(kids, (info) => probe({
+								evt: "scroll-el-err",
+								...info
+							}));
+							return boxEl([
+								...fixedHead,
+								...sc2 ? [sc2] : kids,
+								...fixedFoot
+							], "100%");
+						} catch (e) {
+							probe({
+								evt: "route-render-ERR",
+								err: errMsg(e)
+							});
+							return boxEl([textEl(`wf 预览异常: ${errMsg(e)}`, "red")]);
+						}
+					});
+					return container;
+				}
+			});
+			routerOk = true;
+		}
+	} catch (e) {
+		probe({
+			evt: "router-register-err",
+			err: errMsg(e)
+		});
+	}
+	if (routerOk) try {
+		context.keymap.layer(() => ({
+			mode: "global",
+			priority: 2,
+			commands: [{
+				id: "wf.artifact.close",
+				title: "wf: 关闭产物预览",
+				bind: "q",
+				enabled: () => {
+					try {
+						const cur = context.ui?.router?.current?.();
+						return String(cur?.name ?? "") === ROUTE_NAME;
+					} catch {
+						return false;
+					}
+				},
+				run: () => {
+					try {
+						context.ui.router.navigate({
+							type: "session",
+							sessionID: getSid()
+						});
+						return true;
+					} catch (e) {
+						probe({
+							evt: "close-nav-err",
+							err: errMsg(e)
+						});
+						return false;
+					}
+				}
+			}]
+		}));
+	} catch (e) {
+		probe({
+			evt: "keymap-err",
+			err: errMsg(e)
+		});
+	}
+	return {
+		openArtifact,
+		routerOk
+	};
+}
+// tui/notify.ts
+function setupNotify(context, probe) {
+	const notifyImportant = (msg, level) => {
+		if (level !== "warn") return;
+		try {
+			context.attention?.notify?.({
+				title: "wf",
+				message: msg.slice(0, 160),
+				sound: false
+			});
+			probe({ evt: "notify" });
+		} catch {}
+	};
+	const makeToastReport = (getSid, dedupe) => {
 		const toastReport = (d, chan) => {
 			const sid = String(d?.sessionID ?? "");
 			const text = str(d?.text);
@@ -622,11 +785,11 @@ var tui_default = Plugin.define({
 				reportEv: "recv",
 				chan,
 				got: sid,
-				cur: latestSid,
+				cur: getSid(),
 				chars: text.length
 			});
 			try {
-				if (sid !== latestSid || !text) return;
+				if (sid !== getSid() || !text) return;
 				if (at) {
 					const age = Date.now() - Date.parse(at);
 					if (Number.isFinite(age) && age > 6e4) {
@@ -662,81 +825,179 @@ var tui_default = Plugin.define({
 				});
 			}
 		};
-		let lastFp = "";
-		const refresh = async () => {
-			const sid = latestSid;
-			if (!sid) return;
-			try {
-				const s = await rpc().state({ sessionID: sid }, rpcOpts());
-				if (s?.lastReport) toastReport(s.lastReport, "poll");
-				let oth = [];
-				let othScope = "";
-				if (!s?.active) {
-					let pid = null;
-					let dir = null;
-					try {
-						const cs = context.data?.session?.get(sid);
-						pid = cs?.projectID ?? null;
-						dir = cs?.location?.directory ?? null;
-					} catch {}
-					try {
-						const mine = await rpc().list(pid ? {
-							projectID: String(pid),
-							...dir ? { directory: String(dir) } : {}
-						} : {}, rpcOpts());
-						const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
-						if (act.length) {
-							oth = act.map(listLine);
-							othScope = "本项目";
-						} else {
-							const allR = await rpc().list({}, rpcOpts());
-							const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
-							if (cross.length) {
-								oth = cross.map(listLine);
-								othScope = "全局·其它项目";
-							}
+		return toastReport;
+	};
+	return {
+		notifyImportant,
+		makeToastReport
+	};
+}
+// tui/exec-intercept.ts
+function installExecIntercept(context, deps) {
+	const { execLocal, openArtifact, isRouterOk, probe } = deps;
+	context.keymap.layer(() => ({
+		mode: "global",
+		priority: 1,
+		commands: [{
+			id: "wf.exec",
+			title: "wf: 本地执行 /wf:* 命令",
+			bind: "return",
+			run: () => {
+				const editor = context.renderer?.currentFocusedEditor;
+				const text = str(editor?.plainText).trim();
+				if (!editor || !text.startsWith("/wf:")) return false;
+				const body = text.slice(1);
+				const sp = body.search(/\s/);
+				const name = sp < 0 ? body : body.slice(0, sp);
+				const promptText = sp < 0 ? "" : body.slice(sp + 1);
+				try {
+					editor.clear();
+				} catch {}
+				if (name === "wf:open" && promptText.trim() && isRouterOk()) openArtifact(promptText.trim());
+				else execLocal(name, promptText);
+				probe({
+					evt: "intercept-hit",
+					name
+				});
+				return true;
+			}
+		}]
+	}));
+}
+// tui/data.ts
+function setupRefresh(context, deps) {
+	const { probe, getSid, rpc, rpcOpts, setSnap, toastReport } = deps;
+	let lastFp = "";
+	const refresh = async () => {
+		const sid = getSid();
+		if (!sid) return;
+		try {
+			const s = await rpc().state({ sessionID: sid }, rpcOpts());
+			if (s?.lastReport) toastReport(s.lastReport, "poll");
+			let oth = [];
+			let othScope = "";
+			if (!s?.active) {
+				let pid = null;
+				let dir = null;
+				try {
+					const cs = context.data?.session?.get(sid);
+					pid = cs?.projectID ?? null;
+					dir = cs?.location?.directory ?? null;
+				} catch {}
+				try {
+					const mine = await rpc().list(pid ? {
+						projectID: String(pid),
+						...dir ? { directory: String(dir) } : {}
+					} : {}, rpcOpts());
+					const act = (Array.isArray(mine?.sessions) ? mine.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+					if (act.length) {
+						oth = act.map(listLine);
+						othScope = "本项目";
+					} else {
+						const allR = await rpc().list({}, rpcOpts());
+						const cross = (Array.isArray(allR?.sessions) ? allR.sessions : []).filter((x) => x?.phase && x.phase !== "done").slice(0, 3);
+						if (cross.length) {
+							oth = cross.map(listLine);
+							othScope = "全局·其它项目";
 						}
-					} catch {}
-				}
-				const fp = JSON.stringify([
-					s ?? null,
+					}
+				} catch {}
+			}
+			const fp = JSON.stringify([
+				s ?? null,
+				oth,
+				othScope,
+				Math.floor(Date.now() / 5e3)
+			]);
+			if (fp !== lastFp) {
+				lastFp = fp;
+				probe({
+					evt: "refresh",
+					sid,
+					active: !!s?.active,
+					othN: oth.length
+				});
+				setSnap({
+					st: s ?? { active: false },
 					oth,
 					othScope,
-					Math.floor(Date.now() / 5e3)
-				]);
-				if (fp !== lastFp) {
-					lastFp = fp;
-					probe({
-						evt: "refresh",
-						sid,
-						active: !!s?.active,
-						othN: oth.length
-					});
-					setSnap({
-						st: s ?? { active: false },
-						oth,
-						othScope,
-						err: null
-					});
-				}
-			} catch (e) {
-				const msg = errMsg(e);
-				probe({
-					evt: "refresh-err",
+					err: null
+				});
+			}
+		} catch (e) {
+			const msg = errMsg(e);
+			probe({
+				evt: "refresh-err",
+				err: msg
+			});
+			const fp = "ERR:" + msg;
+			if (fp !== lastFp) {
+				lastFp = fp;
+				setSnap({
+					st: null,
+					oth: [],
+					othScope: "",
 					err: msg
 				});
-				const fp = "ERR:" + msg;
-				if (fp !== lastFp) {
-					lastFp = fp;
-					setSnap({
-						st: null,
-						oth: [],
-						othScope: "",
-						err: msg
-					});
-				}
 			}
+		}
+	};
+	return {
+		refresh,
+		markStale: () => {
+			lastFp = "";
+		}
+	};
+}
+// tui/index.tsx
+var TUI_BUILD = VERSION;
+var tui_default = Plugin.define({
+	id: "wf-workflow-tui",
+	setup(context) {
+		const compact = context?.options?.compact === true || process.env.WF_COMPACT === "1";
+		const { REPO, probe } = setupProbe(context, { build: TUI_BUILD });
+		probe({
+			evt: "loaded",
+			repo: REPO,
+			options: JSON.stringify(context?.options ?? null),
+			loc: str(context?.location?.directory),
+			hasSlot: typeof context?.ui?.slot === "function",
+			hasKeymap: typeof context?.keymap?.layer === "function",
+			hasDataListen: typeof context?.data?.listen === "function",
+			hasDataOn: typeof context?.data?.on === "function",
+			hasAttention: typeof context?.attention?.notify === "function",
+			hasRendererEditor: !!context?.renderer
+		});
+		const [snap, setSnap] = createSignal(null);
+		let latestSid = "";
+		const ac = new AbortController();
+		const myDir = () => String(context?.location?.directory ?? "");
+		const rpc = () => context.client.rpc(Wf);
+		const rpcOpts = () => {
+			const d = myDir();
+			return d ? { location: { directory: d } } : {};
 		};
+		const locOk = (e) => {
+			const d = String(e?.location?.directory ?? "");
+			return !d || !myDir() || d === myDir();
+		};
+		const dedupe = createDeduper();
+		const { makeToastReport } = setupNotify(context, probe);
+		const toastReport = makeToastReport(() => latestSid, dedupe);
+		const { openArtifact, routerOk } = setupArtifactPreview(context, {
+			probe,
+			getSid: () => latestSid,
+			rpc,
+			rpcOpts
+		});
+		const { refresh, markStale } = setupRefresh(context, {
+			probe,
+			getSid: () => latestSid,
+			rpc,
+			rpcOpts,
+			setSnap,
+			toastReport
+		});
 		const execLocal = async (name, promptText) => {
 			try {
 				const r = await rpc().exec({
@@ -759,183 +1020,6 @@ var tui_default = Plugin.define({
 				});
 			}
 		};
-		const ROUTE_NAME = "wf-artifact";
-		const openArtifact = async (file) => {
-			const sid = latestSid;
-			if (!sid || !file) return;
-			probe({
-				evt: "open-artifact",
-				file
-			});
-			try {
-				const r = await rpc().read({
-					sessionID: sid,
-					file
-				}, rpcOpts());
-				if (!r || r.error) {
-					context.ui.toast.show({
-						message: String(r?.error ?? `读取产物失败：${file}`),
-						variant: "info"
-					});
-					return;
-				}
-				if (routerOk) try {
-					context.ui.router.navigate({
-						type: "plugin",
-						name: ROUTE_NAME,
-						data: {
-							file,
-							text: r.text,
-							bytes: r.bytes ?? 0,
-							path: r.path,
-							truncated: !!r.truncated
-						}
-					});
-					probe({
-						evt: "navigate-ok",
-						file
-					});
-					return;
-				} catch (e) {
-					probe({
-						evt: "navigate-err",
-						err: errMsg(e)
-					});
-				}
-				context.ui.toast.show({
-					message: `产物路径：${r.path}（预览 route 不可用）`,
-					variant: "info"
-				});
-			} catch (e) {
-				context.ui.toast.show({
-					message: `打开产物失败：${errMsg(e)}`,
-					variant: "error"
-				});
-			}
-		};
-		let routerOk = false;
-		try {
-			const R = context.ui?.router;
-			probe({
-				evt: "router-probe",
-				hasRegister: typeof R?.register === "function",
-				hasNavigate: typeof R?.navigate === "function",
-				hasCurrent: typeof R?.current === "function"
-			});
-			if (typeof R?.register === "function" && typeof R?.navigate === "function") {
-				R.register({
-					name: ROUTE_NAME,
-					render: (input) => {
-						probe({
-							evt: "route-render",
-							keys: Object.keys(input ?? {}).slice(0, 8).join(",")
-						});
-						const container = boxEl([], "100%");
-						insert(container, () => {
-							try {
-								const d = input?.data ?? input ?? {};
-								const T = context.theme ?? { text: {
-									muted: "gray",
-									base: "white",
-									feedback: { error: "red" }
-								} };
-								const body = String(d.text ?? "").split("\n");
-								const head = `  ${str(d.file)} · ${(Number(d.bytes) / 1024).toFixed(1)}k${d.truncated ? " · 超64KB已截断" : ""}`;
-								const fixedHead = [
-									textEl("── wf 产物预览 ────────────────", T.text.muted),
-									textEl(head, T.text.muted),
-									textEl(`  ${str(d.path)}`, T.text.muted),
-									textEl(" ", T.text.muted)
-								];
-								const fixedFoot = [textEl(" ", T.text.muted), textEl("  q 返回会话", T.text.muted)];
-								const md = mdEl(body.slice(0, 200).join("\n"), (info) => probe({
-									evt: "md-el-err",
-									...info
-								}), (info) => probe(info));
-								if (md) {
-									probe({
-										evt: "route-render-md-ok",
-										lines: Math.min(body.length, 200)
-									});
-									const kids = [md, ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行；截断可能落在代码块/表格中段）`, T.text.muted)] : []];
-									const sc = scrollEl(kids, (info) => probe({
-										evt: "scroll-el-err",
-										...info
-									}));
-									return boxEl([
-										...fixedHead,
-										...sc ? [sc] : kids,
-										...fixedFoot
-									], "100%");
-								}
-								const kids = [...body.slice(0, 200).map((ln) => textEl("  " + ln, T.text.base)), ...body.length > 200 ? [textEl(`  …（共 ${body.length} 行，仅显示前 200 行）`, T.text.muted)] : []];
-								const sc2 = scrollEl(kids, (info) => probe({
-									evt: "scroll-el-err",
-									...info
-								}));
-								return boxEl([
-									...fixedHead,
-									...sc2 ? [sc2] : kids,
-									...fixedFoot
-								], "100%");
-							} catch (e) {
-								probe({
-									evt: "route-render-ERR",
-									err: errMsg(e)
-								});
-								return boxEl([textEl(`wf 预览异常: ${errMsg(e)}`, "red")]);
-							}
-						});
-						return container;
-					}
-				});
-				routerOk = true;
-			}
-		} catch (e) {
-			probe({
-				evt: "router-register-err",
-				err: errMsg(e)
-			});
-		}
-		if (routerOk) try {
-			context.keymap.layer(() => ({
-				mode: "global",
-				priority: 2,
-				commands: [{
-					id: "wf.artifact.close",
-					title: "wf: 关闭产物预览",
-					bind: "q",
-					enabled: () => {
-						try {
-							const cur = context.ui?.router?.current?.();
-							return String(cur?.name ?? "") === ROUTE_NAME;
-						} catch {
-							return false;
-						}
-					},
-					run: () => {
-						try {
-							context.ui.router.navigate({
-								type: "session",
-								sessionID: latestSid
-							});
-							return true;
-						} catch (e) {
-							probe({
-								evt: "close-nav-err",
-								err: errMsg(e)
-							});
-							return false;
-						}
-					}
-				}]
-			}));
-		} catch (e) {
-			probe({
-				evt: "keymap-err",
-				err: errMsg(e)
-			});
-		}
 		const offUpdated = rpc().events.on("updated", (e) => {
 			if (locOk(e)) refresh();
 		}, { signal: ac.signal });
@@ -959,7 +1043,7 @@ var tui_default = Plugin.define({
 		try {
 			offConn = context.data?.on?.("server.connected", () => {
 				probe({ evt: "server-connected" });
-				lastFp = "";
+				markStale();
 				refresh();
 			});
 		} catch {}
@@ -991,7 +1075,7 @@ var tui_default = Plugin.define({
 						const sid = String(input?.sessionID ?? "");
 						if (sid && sid !== latestSid) {
 							latestSid = sid;
-							lastFp = "";
+							markStale();
 							queueMicrotask(() => {
 								refresh();
 							});
@@ -1040,34 +1124,12 @@ var tui_default = Plugin.define({
 				return container;
 			}
 		});
-		context.keymap.layer(() => ({
-			mode: "global",
-			priority: 1,
-			commands: [{
-				id: "wf.exec",
-				title: "wf: 本地执行 /wf:* 命令",
-				bind: "return",
-				run: () => {
-					const editor = context.renderer?.currentFocusedEditor;
-					const text = str(editor?.plainText).trim();
-					if (!editor || !text.startsWith("/wf:")) return false;
-					const body = text.slice(1);
-					const sp = body.search(/\s/);
-					const name = sp < 0 ? body : body.slice(0, sp);
-					const promptText = sp < 0 ? "" : body.slice(sp + 1);
-					try {
-						editor.clear();
-					} catch {}
-					if (name === "wf:open" && promptText.trim() && routerOk) openArtifact(promptText.trim());
-					else execLocal(name, promptText);
-					probe({
-						evt: "intercept-hit",
-						name
-					});
-					return true;
-				}
-			}]
-		}));
+		installExecIntercept(context, {
+			execLocal,
+			openArtifact,
+			isRouterOk: () => routerOk,
+			probe
+		});
 		return () => {
 			try {
 				clearInterval(timer);

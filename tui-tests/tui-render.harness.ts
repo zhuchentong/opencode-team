@@ -42,6 +42,15 @@ if (!fs.existsSync(mockDir)) {
 
 // 虚拟模块解析依赖上面的占位包，须动态 import（静态 import 会提升到自举之前）
 // @ts-ignore bun 原生支持 .tsx
+
+// R3 T3.4：静态守卫扫描面随 tui 拆分扩展——全部 tui/*.ts(x) 源码拼接扫描（守卫本体逐字保留）。
+const TUI_SOURCES = ["index.tsx", "panel.tsx", "dedup.ts", "notify.ts", "exec-intercept.ts", "util.ts", "data.ts"] as const;
+const readTuiSrc = async (): Promise<string> => {
+  const fsp = await import("node:fs/promises");
+  const parts = await Promise.all(TUI_SOURCES.map((f) => fsp.readFile(new URL(`../tui/${f}`, import.meta.url), "utf8")));
+  return parts.join("\n");
+};
+
 const ns: any = await import("../tui/index.tsx");
 const { default: mod, buildRows } = ns;
 // M16-r37：表格化辅助（红阶段占位兜底，实现后走真实导出；兜底按 ASCII 宽度必红不崩）
@@ -132,7 +141,7 @@ console.log(`插件 id: ${t.id}`);
 
 // ── P4：源码静态守卫——流派 A 结构锁定 + 防退化（精确代码串，注释文本不受影响）─
 {
-  const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+  const src = await readTuiSrc();
   ok("P4 无 WfBoardPanel 组件定义", !src.includes("function WfBoardPanel"));
   ok("P4 无 session.panel slot 注册代码", !src.includes('append: "session.panel"'));
   ok("P4 无 wf.board 面板打开命令", !src.includes('"wf.board"'));
@@ -675,7 +684,7 @@ console.log(`插件 id: ${t.id}`);
 
   // 15c：静态守卫——mdEl 接线点 + 双轨探针 + 不经 sanitize
   {
-    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    const src = await readTuiSrc();
     ok("P15c createElement(\"markdown\") 构造点在位", src.includes('createElement("markdown")'));
     ok("P15c md 双轨探针在位（route-render-md-ok/md-el-err/hasMd 归因）", src.includes("route-render-md-ok") && src.includes("md-el-err") && src.includes("hasMd"));
     const mi = src.indexOf("function mdEl");
@@ -769,7 +778,7 @@ console.log(`插件 id: ${t.id}`);
 
   // 16d：静态守卫——scrollEl 构造点 + 探针归因 + 不设 height:100% 于 scrollbox（避免挤出头尾固定行）
   {
-    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    const src = await readTuiSrc();
     ok("P16d createElement(\"scrollbox\") 构造点在位", src.includes('createElement("scrollbox")'));
     ok("P16d scroll 降级探针在位（scroll-el-err/hasScroll 归因）", src.includes("scroll-el-err") && src.includes("hasScroll"));
     const si = src.indexOf("function scrollEl");
@@ -804,7 +813,7 @@ console.log(`插件 id: ${t.id}`);
 
   // 17b 静态守卫：import 点在位 + mdEl 内 syntaxStyle 先于 content + 三探针归因 + 模块级缓存（防泄漏）
   {
-    const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+    const src = await readTuiSrc();
     ok("P17b import(\"@opentui/core\") 动态装载点在位", src.includes('import("@opentui/core")'));
     const mi = src.indexOf("function mdEl");
     ok("P17b mdEl 定义在位", mi >= 0);
@@ -882,7 +891,7 @@ console.log(`插件 id: ${t.id}`);
   ok("R5 错误分支装饰线继承 w", dispW(e80.t[0]) === 80 && e80.t[19] === "─".repeat(80), e80.t[0]);
 
   // R7 fp tick 不加 timer（静态守卫；P4 结构守卫全绿另见 P4 块）
-  const src = await (await import("node:fs/promises")).readFile(new URL("../tui/index.tsx", import.meta.url), "utf8");
+  const src = await readTuiSrc();
   ok("R7 setInterval 唯一（复用 5s 轮询，不加新 timer）", (src.match(/setInterval\(/g) ?? []).length === 1);
   ok("R7 无 setTimeout", !src.includes("setTimeout("));
   ok("R7 fp 含 5s tick（闲置驱动刷新）", src.includes("Math.floor(Date.now() / 5000)"));
