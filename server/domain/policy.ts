@@ -51,7 +51,7 @@ export interface AgentLike {
   id?: string;
   model?: { providerID?: string; id?: string };
 }
-export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: AgentLike[] } | null | undefined): string {
+export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: AgentLike[] } | null | undefined, tierLine?: string | null): string {
   const arr = Array.isArray(agents) ? agents : (agents?.agents ?? agents?.data ?? []);
   const norm = arr.map((a) => ({
     name: String(a?.name ?? a?.id ?? ""),
@@ -65,6 +65,7 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
   const extra = found.filter((f) => !WF_ROLES.includes(f.name)).map((f) => f.name);
   return [
     `wf 角色：${matched.length}/${WF_ROLES.length} 已注册`,
+    ...(tierLine ? [tierLine] : []), // P0-B 档位行前置：折叠/截断显示面（brief 只保首行+尾截）也能看到档位实况
     ...matched.map((f) => `  ${f.name} model=${f.model ?? "(继承会话模型)"}`),
     ...(missing.length ? [`  ⚠️ 缺失：${missing.join(", ")}`] : []),
     ...(extra.length ? [`  ℹ️ 额外：${extra.join(", ")}`] : []),

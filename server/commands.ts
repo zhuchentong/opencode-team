@@ -252,7 +252,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
               tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
             }
           } catch (e) { swallow(e, "commands:ping-tier-read-fail"); }
-          return pingReport(res) + roleGuardText(host.options) + tierLine;
+          return pingReport(res, tierLine) + roleGuardText(host.options); // 档位行经 pingReport 前置（截断显示面可见）
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }
