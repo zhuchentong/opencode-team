@@ -1,7 +1,8 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal } from "solid-js";
 import * as ot from "@opentui/solid";
-var Wf = { define: (def) => def }.define({
+import { Rpc } from "@opencode/plugin/rpc";
+var Wf = Rpc.define({
 	id: "wf",
 	methods: {
 		state: {

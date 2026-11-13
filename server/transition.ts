@@ -115,13 +115,14 @@ export function createTransition(deps: TransitionDeps) {
         // tui-sidebar-elapsed T01（plan §3.2 冻结）：墙钟计时记账——离开阶段闭账（FOLD 折叠 key，
         // 多轮 revisit 累计）；重置块已置 phaseEnteredAt=at 时闭账跳过（d 恒 0，不污染空账）。
         // fromKey 置于 if 内：strict 下 from 经守卫收窄为 string（语义与冻结式逐字一致，仅作用域收窄）
-        if (from && st.phaseEnteredAt && st.phaseEnteredAt !== at) {
+        // R3 T3.1 子步 A：读写改走 st.timing.*（normalize 后内存恒新形；存量无 timing → 闭账/冻结全跳过，语义不变）
+        if (from && st.timing?.phaseEnteredAt && st.timing.phaseEnteredAt !== at) {
           const fromKey = FOLD[from] ?? from;
-          const d = Math.max(0, Math.round((Date.parse(at) - Date.parse(st.phaseEnteredAt)) / 1000));
-          st.phaseDurations = { ...st.phaseDurations, [fromKey]: (st.phaseDurations?.[fromKey] ?? 0) + d };
+          const d = Math.max(0, Math.round((Date.parse(at) - Date.parse(st.timing.phaseEnteredAt)) / 1000));
+          st.timing.phaseDurations = { ...st.timing.phaseDurations, [fromKey]: (st.timing.phaseDurations?.[fromKey] ?? 0) + d };
         }
-        st.phaseEnteredAt = at;
-        if (flow.to === "done" && st.startedAt && !st.finishedAt) st.finishedAt = at;
+        (st.timing ??= {}).phaseEnteredAt = at;
+        if (flow.to === "done" && st.timing?.startedAt && !st.timing.finishedAt) st.timing.finishedAt = at;
         // 存量（无 startedAt）推 done 不置 finishedAt（总耗时保持 null 降级 ·）
         // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
         if (!st.projectID) {

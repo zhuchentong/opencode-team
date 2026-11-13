@@ -80,17 +80,21 @@ test("T02 state 计时 4 字段：存量任务为 null（?? null 形态）", asy
 test("T02 state 计时 4 字段：有账任务逐字透传", async () => {
   const timed = {
     sessionID: "ses_timed", slug: "timed-task", phase: "done", rounds: {},
-    startedAt: "2026-11-12T10:00:00.000Z",
-    phaseEnteredAt: "2026-11-12T10:12:34.000Z",
-    phaseDurations: { intake: 42, planning: 130 },
-    finishedAt: "2026-11-12T10:12:34.000Z",
+    // R3 T3.1 子步 A：投影输入已是新形（st.timing.*）；wire 输出字段名/形状零变化
+    timing: {
+      startedAt: "2026-11-12T10:00:00.000Z",
+      phaseEnteredAt: "2026-11-12T10:12:34.000Z",
+      phaseDurations: { intake: 42, planning: 130 },
+      finishedAt: "2026-11-12T10:12:34.000Z",
+    },
   };
   const impls = await mkStateBridge(timed);
   const res = await impls.state({ sessionID: "ses_timed" });
-  assert.equal(res.startedAt, timed.startedAt);
-  assert.equal(res.phaseEnteredAt, timed.phaseEnteredAt);
-  assert.deepEqual(res.phaseDurations, timed.phaseDurations);
-  assert.equal(res.finishedAt, timed.finishedAt);
+  const t = timed.timing;
+  assert.equal(res.startedAt, t.startedAt);
+  assert.equal(res.phaseEnteredAt, t.phaseEnteredAt);
+  assert.deepEqual(res.phaseDurations, t.phaseDurations);
+  assert.equal(res.finishedAt, t.finishedAt);
 });
 
 test("T02 inactive 分支形状不变：无行/幽灵行仅 sessionID/active/lastReport，不带计时字段", async () => {

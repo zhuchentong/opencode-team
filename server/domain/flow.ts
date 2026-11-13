@@ -212,10 +212,8 @@ export function evaluateTransition(cmd: string, st: WfState, text: unknown, at =
       delete st.doneGit; // done-git T01：新任务不得残留旧交付提示
       delete st.selfMod; // selfmod-guard T01：自改记账按新任务目录重算
       // tui-sidebar-elapsed T01（plan §3.2）：新任务重置计时账（强制重 intake !slug 同块覆盖）
-      st.startedAt = at;
-      st.phaseEnteredAt = at;
-      st.phaseDurations = {};
-      delete st.finishedAt;
+      // R3 T3.1 子步 A：timing 整组重置（子对象内字段=组全集，整组覆写即逐字等价旧 4 行）
+      st.timing = { startedAt: at, phaseEnteredAt: at, phaseDurations: {} };
     }
     // M16-r33 P2 体量前缀 [S]/[M]/[L] + M16-r34 模式前缀 [FULL]（可跟在 ! 强制符后，任意序）。
     // 新 intake 默认 daily（日常习惯流）；[FULL] 显式完整 9 阶段流。size 缺省 M。

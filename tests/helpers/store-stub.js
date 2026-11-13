@@ -2,12 +2,15 @@
 // save CAS 语义与 server/state.ts 真实实现同源三态（stale-rev/write-error/ok + rev 单调递增），
 // load/save 走 structuredClone 隔离（红字：CAS/withStateRetry 语义不动——这里只做等价复刻）。
 // over 覆盖命名空间级同 mkHostStub（键=Store 方法名）。
+// R3 T3.1：load 出口同源接 normalizeState（真实 store parse 出口同款）——旧平铺种子快照收敛为新形，
+// 与真机行为一致（形状漂移=本地全绿真机哑火，故 stub 不许豁免 normalize）。
+import { normalizeState } from "../../server/domain/types.ts";
 export function mkStoreStub(states = new Map(), over = {}) {
   const reports = new Map(); // sid -> ReportRow 形状（sessionID/text/at/brief/level）
   const S = {
     load: async (sid) => {
       const v = states.get(String(sid ?? ""));
-      return v ? structuredClone(v) : null;
+      return v ? normalizeState(structuredClone(v)) : null;
     },
     save: async (st) => {
       if (!st || st.sessionID == null) return { ok: false, reason: "no-session" };

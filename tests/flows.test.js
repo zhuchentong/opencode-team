@@ -225,10 +225,11 @@ test("A1 计时：intake 后 startedAt/phaseEnteredAt 为 ISO 且相等，phaseD
   const h = await mkTimingHarness();
   await h.run("wf:intake", "elapsed-a1");
   const st = h.st();
-  assert.ok(isISO(st.startedAt), `startedAt 应为 ISO：${st.startedAt}`);
-  assert.ok(isISO(st.phaseEnteredAt), `phaseEnteredAt 应为 ISO：${st.phaseEnteredAt}`);
-  assert.equal(st.phaseEnteredAt, st.startedAt, "intake 时刻两字段相等");
-  assert.deepEqual(st.phaseDurations, {}, "空账不得污染");
+  // R3 T3.1 子步 A：读点改 st.timing.*（内存恒新形）
+  assert.ok(isISO(st.timing?.startedAt), `startedAt 应为 ISO：${st.timing?.startedAt}`);
+  assert.ok(isISO(st.timing?.phaseEnteredAt), `phaseEnteredAt 应为 ISO：${st.timing?.phaseEnteredAt}`);
+  assert.equal(st.timing.phaseEnteredAt, st.timing.startedAt, "intake 时刻两字段相等");
+  assert.deepEqual(st.timing.phaseDurations, {}, "空账不得污染");
   h.dispose();
 });
 
@@ -236,13 +237,13 @@ test("A2 计时：两次流转间隔 ≥1.05s → phaseDurations.intake>=1（num
   const h = await mkTimingHarness();
   await h.run("wf:intake", "elapsed-a2");
   const t0 = h.st();
-  assert.ok(Date.parse(t0.phaseEnteredAt) >= Date.parse(t0.startedAt), "A3：intake 后");
+  assert.ok(Date.parse(t0.timing.phaseEnteredAt) >= Date.parse(t0.timing.startedAt), "A3：intake 后");
   await new Promise((r) => setTimeout(r, 1050)); // 造秒级差（plan §4 T01 验证方式）
   await h.run("wf:plan");
   const st = h.st();
-  assert.equal(typeof st.phaseDurations?.intake, "number", `intake 闭账应为 number：${JSON.stringify(st.phaseDurations)}`);
-  assert.ok(st.phaseDurations.intake >= 1, `intake 耗时应 ≥1s：${JSON.stringify(st.phaseDurations)}`);
-  assert.ok(Date.parse(st.phaseEnteredAt) >= Date.parse(st.startedAt), "A3：plan 后");
+  assert.equal(typeof st.timing?.phaseDurations?.intake, "number", `intake 闭账应为 number：${JSON.stringify(st.timing?.phaseDurations)}`);
+  assert.ok(st.timing.phaseDurations.intake >= 1, `intake 耗时应 ≥1s：${JSON.stringify(st.timing?.phaseDurations)}`);
+  assert.ok(Date.parse(st.timing.phaseEnteredAt) >= Date.parse(st.timing.startedAt), "A3：plan 后");
   h.dispose();
 });
 
@@ -251,15 +252,15 @@ test("A4 计时：推进 done 后 finishedAt 为 ISO 且 >=startedAt；重复推
   await runDailyToDone(h, "elapsed-a4");
   const st = h.st();
   assert.equal(st.phase, "done");
-  assert.ok(isISO(st.finishedAt), `finishedAt 应为 ISO：${st.finishedAt}`);
-  assert.ok(Date.parse(st.finishedAt) >= Date.parse(st.startedAt), "finishedAt >= startedAt");
-  const f1 = st.finishedAt;
+  assert.ok(isISO(st.timing?.finishedAt), `finishedAt 应为 ISO：${st.timing?.finishedAt}`);
+  assert.ok(Date.parse(st.timing.finishedAt) >= Date.parse(st.timing.startedAt), "finishedAt >= startedAt");
+  const f1 = st.timing.finishedAt;
   // 重复推进：fixture 回拨 phase=testing 模拟再验收，再次 done → finishedAt 冻结不覆写
   h.patch({ phase: "testing" });
   await new Promise((r) => setTimeout(r, 20));
   await h.run("wf:done");
   assert.equal(h.st().phase, "done");
-  assert.equal(h.st().finishedAt, f1, "重复 done 不得覆写 finishedAt");
+  assert.equal(h.st().timing?.finishedAt, f1, "重复 done 不得覆写 finishedAt");
   h.dispose();
 });
 
@@ -269,20 +270,20 @@ test("A5 计时：强制重 intake（!slug）4 字段重置（phaseDurations 回
   await new Promise((r) => setTimeout(r, 1050));
   await h.run("wf:plan"); // 累计 intake 耗时 ≥1s
   const old = h.st();
-  assert.ok(old.phaseDurations.intake >= 1, "前置：旧账已有耗时");
+  assert.ok(old.timing.phaseDurations.intake >= 1, "前置：旧账已有耗时");
   // 非 done 阶段强制重 intake（force 路径）
   await h.run("wf:intake", "!elapsed-a5-new");
   const st = h.st();
-  assert.deepEqual(st.phaseDurations, {}, "强制重置后空账");
-  assert.ok(isISO(st.startedAt) && st.startedAt !== old.startedAt, "startedAt 更新为新 intake 时刻");
-  assert.equal(st.phaseEnteredAt, st.startedAt, "重置块置账相等（闭账跳过不污染）");
-  assert.equal(st.finishedAt, undefined);
+  assert.deepEqual(st.timing.phaseDurations, {}, "强制重置后空账");
+  assert.ok(isISO(st.timing?.startedAt) && st.timing.startedAt !== old.timing.startedAt, "startedAt 更新为新 intake 时刻");
+  assert.equal(st.timing.phaseEnteredAt, st.timing.startedAt, "重置块置账相等（闭账跳过不污染）");
+  assert.equal(st.timing.finishedAt, undefined);
   // 新任务推进 done 置 finishedAt，再次强制重 intake → finishedAt 清除
   await runDailyToDoneNoIntake(h);
-  assert.ok(isISO(h.st().finishedAt), "前置：新任务已置 finishedAt");
+  assert.ok(isISO(h.st().timing?.finishedAt), "前置：新任务已置 finishedAt");
   await h.run("wf:intake", "!elapsed-a5-third");
-  assert.equal(h.st().finishedAt, undefined, "重 intake 清除 finishedAt");
-  assert.deepEqual(h.st().phaseDurations, {});
+  assert.equal(h.st().timing?.finishedAt, undefined, "重 intake 清除 finishedAt");
+  assert.deepEqual(h.st().timing?.phaseDurations, {});
   h.dispose();
 });
 
@@ -306,10 +307,11 @@ test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnt
   await h.run("wf:plan");
   const st = h.st();
   assert.equal(st.phase, "planning", "存量流转不崩");
-  assert.ok(isISO(st.phaseEnteredAt), `phaseEnteredAt 应被置上：${st.phaseEnteredAt}`);
-  assert.equal(st.startedAt, undefined, "存量不兜底 startedAt");
-  assert.equal(st.finishedAt, undefined, "存量推 done 不置 finishedAt（本步未 done，亦不得置）");
-  assert.equal(st.phaseDurations, undefined, "闭账跳过：phaseDurations 不新增");
+  // R3 T3.1 子步 A：读点改 st.timing.*（存量无 timing → 流转时 (st.timing??={}) 只置 phaseEnteredAt）
+  assert.ok(isISO(st.timing?.phaseEnteredAt), `phaseEnteredAt 应被置上：${st.timing?.phaseEnteredAt}`);
+  assert.equal(st.timing?.startedAt, undefined, "存量不兜底 startedAt");
+  assert.equal(st.timing?.finishedAt, undefined, "存量推 done 不置 finishedAt（本步未 done，亦不得置）");
+  assert.equal(st.timing?.phaseDurations, undefined, "闭账跳过：phaseDurations 不新增");
   h.dispose();
 });
 

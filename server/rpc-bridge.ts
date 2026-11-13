@@ -47,10 +47,11 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
             planReviewVerdict: st.planReviewVerdict ?? null,
             planConfirmedAt: st.planConfirmedAt ?? null, // M16-r44：方案确认记账
             // tui-sidebar-elapsed T02（plan §3.3）：墙钟计时 4 字段（存量任务 null → TUI 降级 ·）
-            startedAt: st.startedAt ?? null,
-            phaseEnteredAt: st.phaseEnteredAt ?? null,
-            phaseDurations: st.phaseDurations ?? null,
-            finishedAt: st.finishedAt ?? null,
+            // R3 T3.1 子步 A：改读 st.timing.*（wire schema 字段名与形状零变化——投影层吸收形状差）
+            startedAt: st.timing?.startedAt ?? null,
+            phaseEnteredAt: st.timing?.phaseEnteredAt ?? null,
+            phaseDurations: st.timing?.phaseDurations ?? null,
+            finishedAt: st.timing?.finishedAt ?? null,
             artifacts: st.artifacts ?? {},
             updatedAt: st.updatedAt ?? null,
             lastReport,

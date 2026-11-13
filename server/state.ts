@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { dirname, join } from "node:path";
-import { type ActiveOther, type FlowLogEntry, type ReportLevel, type WfState, isLeader } from "./lib.ts";
+import { type ActiveOther, type FlowLogEntry, type ReportLevel, type WfState, isLeader, normalizeState } from "./lib.ts";
 import { type Host } from "./host.ts"; // T03：createStore 收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
@@ -218,8 +218,10 @@ CREATE TABLE IF NOT EXISTS reports (
 `;
 
 // 行→快照解析（模块级纯函数：只读 row.state_json，不依赖 createStore 闭包；lint function-scoping 上提）
+// R3 T3.1：出口接 normalizeState——旧平铺形状在此收敛为分组新形（内存恒新形，save 写新形；
+// 幂等，已有新形原样通过）。所有读路径（load/resolveState/scanStates/…）都经 parse，出口单点。
 const parse = (row: any): WfState | null => {
-  try { return JSON.parse(row.state_json); } catch { return null; }
+  try { return normalizeState(JSON.parse(row.state_json)); } catch { return null; }
 };
 
 export function createStore(host: Host): Store {

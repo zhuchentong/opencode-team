@@ -76,11 +76,29 @@ export interface WfState {
   gateStatus?: { id: string; ok: boolean; at: string };
   entryErr?: string;
   // tui-sidebar-elapsed T01（plan §3.1）：墙钟计时记账——全部可选，存量快照自然缺省 → TUI 降级 ·
-  startedAt?: string;                       // ISO：intake 建任务时刻（总耗时起点）
-  phaseEnteredAt?: string;                  // ISO：当前阶段进入时刻
-  phaseDurations?: Record<string, number>;  // 秒；key=FOLD 折叠后阶段名（多轮 revisit 累计）
-  finishedAt?: string;                      // ISO：进入 done 时刻（总耗时冻结点）
+  // R3 T3.1 子步 A：4 字段分组进 timing 子对象（读兼容：normalizeState 在 load 出口搬平铺字段，内存恒新形）
+  timing?: {
+    startedAt?: string;                       // ISO：intake 建任务时刻（总耗时起点）
+    phaseEnteredAt?: string;                  // ISO：当前阶段进入时刻
+    phaseDurations?: Record<string, number>;  // 秒；key=FOLD 折叠后阶段名（多轮 revisit 累计）
+    finishedAt?: string;                      // ISO：进入 done 时刻（总耗时冻结点）
+  };
   [key: string]: unknown;
+}
+
+// R3 T3.1（arch-r3-state-shape-migration）：旧平铺快照 → 新分组形状的归一（load 出口调用）。
+// 幂等：已是新形原样通过；平铺字段搬入子对象后从顶层 delete（避免双份）；混合形状正确收敛。
+// 只搬形状不磨语义：不补缺省、不改值。零依赖叶子（domain-acyclic），供 state.ts 与测试 stub 同源复用。
+export function normalizeState(st: WfState): WfState {
+  const s = st as any;
+  if (!s || typeof s !== "object") return st;
+  const hadSub = s.timing != null;
+  const timing = { ...s.timing };
+  for (const k of ["startedAt", "phaseEnteredAt", "phaseDurations", "finishedAt"] as const) {
+    if (s[k] !== undefined) { timing[k] = s[k]; delete s[k]; }
+  }
+  if (hadSub || Object.keys(timing).length > 0) s.timing = timing;
+  return st;
 }
 
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
