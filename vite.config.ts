@@ -22,6 +22,7 @@ export default defineConfig({
     rollupOptions: {
       external: [
         "@opencode/plugin/tui",
+        "@opencode/plugin/rpc", // shared/rpc.ts 打进产物时保留宿主运行时解析（已入库 dist/tui.js 头部即此形态；漏标会在全新安装后 rolldown 解析失败）
         "@opentui/solid",
         "@opentui/core", // M16-r48c：宿主 runtime-module 映射提供同份实例（SyntaxStyle 接线；防打包第二份 core）
         "solid-js",
