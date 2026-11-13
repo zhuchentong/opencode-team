@@ -184,7 +184,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
             ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，先自写 lessons 与 .learnings/ 落盘，再发起交付确认——顺序固定「总结→提交/不提交→完成」。`
             : `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`)
           : (serial
-            ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
+            ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」+ lessons 含流程效率观察节：各阶段墙钟自 events 表取）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
             : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`),
         ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
         budgetLine(st, ["lessons"]),

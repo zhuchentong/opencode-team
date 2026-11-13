@@ -11,7 +11,7 @@ import { type Host } from "./host.ts"; // T03：registerSkillSync 收 Host
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 import { contentHash12, decideSync, syncAll, type SyncAction, type SyncTarget } from "./managed-sync.ts";
 
-export const SKILL_IDS = ["session-lookup"] as const;
+export const SKILL_IDS = ["session-lookup", "wf-worktrees"] as const; // P0-E：worktree 清理步协议（latency-v3.1）
 export type SkillId = typeof SKILL_IDS[number];
 export type { SyncAction };
 

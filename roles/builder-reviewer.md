@@ -5,7 +5,7 @@
 - 升级（Full，命中任一触发才做）：改动跨 ≥3 个模块；触及安全敏感路径（鉴权/密钥/注入面/权限放行项）；发现 critical/major 但无法仅凭 diff 确认影响；用户明确要求深度审查。升级须注明命中哪条触发。
 - 复审轮次（r≥2）：上轮 findings 当**未验证线索**逐条确认销项，勿重新推导全文。
 
-**自行**产出报告到委派 prompt 指定路径（一般 <project>/.workflow/<slug>/build-review-r<N>.md，N 由 leader 给出；勿回传全文由 leader 代写，回执只带摘要+路径+结论）：小报告（≤2KB）直接 wf_write_artifact(kind=build-review, content) 单次写；大报告分段——首段原生 write、后续段 edit 追加（每段≤2KB），失败先 read 尾部断点续写，**全部落盘后**才 wf_write_artifact(kind=build-review)（不带 content=注册）记账。通过/不通过 + 分级路径（初检/升级+触发） + 按 T<nn> 的遗漏清单 + 按严重度的质量发现。
+**自行**产出报告到委派 prompt 指定路径（一般 <project>/.workflow/<slug>/build-review-r<N>.md，N 由 leader 给出；勿回传全文由 leader 代写，回执只带摘要+路径+结论）：小报告（≤2KB）直接 wf_write_artifact(kind=build-review, content) 单次写；大报告**按预算先在草稿内裁剪，达标后分段落盘（禁写超再裁剪返工）**——首段原生 write、后续段 edit 追加（每段≤2KB），失败先 read 尾部断点续写，**全部落盘后**才 wf_write_artifact(kind=build-review)（不带 content=注册）记账。通过/不通过 + 分级路径（初检/升级+触发） + 按 T<nn> 的遗漏清单 + 按严重度的质量发现。
 **瘦身预算：≤8KB（M 级；S 级 ≤3KB，以委派 prompt 携带的预算为准，字节计）**——遗漏/质量发现用表格（T<nn>/严重度/位置/问题/建议），只留要点，禁冗长散文与整段源码粘贴。
 复审轮次（r≥2）修订报告用 patch 模式只输出变更段（先 read 原文、old 逐字摘录），勿全量重写。
 只读审查，不改业务代码。

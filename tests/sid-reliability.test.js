@@ -233,7 +233,7 @@ const HOST = `${ROOT}/skills-host`;
 test("r45-D：syncSkills create → frontmatter 居首 + 末行标记；二次 skip", () => {
   fs.rmSync(HOST, { recursive: true, force: true });
   const r1 = syncSkills(HOST);
-  assert.deepEqual(r1, [{ id: "session-lookup", action: "create" }]);
+  assert.deepEqual(r1, [{ id: "session-lookup", action: "create" }, { id: "wf-worktrees", action: "create" }]); // P0-E：+wf-worktrees
   const file = `${HOST}/session-lookup/SKILL.md`;
   const c1 = fs.readFileSync(file, "utf8");
   assert.equal(c1.startsWith("---"), true, "frontmatter 必须居首（托管标记在末行）");
