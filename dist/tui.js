@@ -111,7 +111,9 @@ var Wf = { define: (def) => def }.define({
 				type: "object",
 				properties: {
 					text: { type: "string" },
-					at: { type: "string" }
+					at: { type: "string" },
+					brief: { type: ["string", "null"] },
+					level: { type: ["string", "null"] }
 				},
 				required: ["text"],
 				additionalProperties: true
@@ -138,7 +140,9 @@ var Wf = { define: (def) => def }.define({
 			properties: {
 				sessionID: { type: "string" },
 				text: { type: "string" },
-				at: { type: "string" }
+				at: { type: "string" },
+				brief: { type: ["string", "null"] },
+				level: { type: ["string", "null"] }
 			},
 			required: [
 				"sessionID",
@@ -181,11 +185,25 @@ var DAILY_STAGE_ORDER = [
 ];
 // shared/version.ts
 var VERSION = "M16-r47";
+// shared/redact.ts
+function redactIds(text) {
+	return String(text ?? "").replace(/ses_[A-Za-z0-9]+/g, "〔已隐去〕");
+}
 // tui/index.tsx
 var { createElement, insert, setProp } = ot;
 var TUI_BUILD = VERSION;
 var ROWS = 20;
 var str = (v) => v === null || v === void 0 ? "" : String(v);
+function briefOf(d) {
+	const b = str(d?.brief);
+	if (b) return b;
+	const text = str(d?.text);
+	if (!text) return "";
+	return text.split("\n").slice(0, 2).map((l) => {
+		const cps = Array.from(l);
+		return redactIds(cps.length > 100 ? cps.slice(0, 100).join("") + "…" : l);
+	}).join("\n");
+}
 var errMsg = (e) => String(e?.message ?? e);
 var sanitize = (s) => String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ";
 var dispW = (s) => {
@@ -512,7 +530,6 @@ var buildRows = (s, err, oth, othScope, T, now, w) => {
 		af
 	};
 };
-var isImportant = (text) => /⚠️|❌|FAIL|illegal/i.test(text);
 var tui_default = Plugin.define({
 	id: "wf-workflow-tui",
 	setup(context) {
@@ -564,12 +581,12 @@ var tui_default = Plugin.define({
 			const d = String(e?.location?.directory ?? "");
 			return !d || !myDir() || d === myDir();
 		};
-		const notifyImportant = (text) => {
-			if (!isImportant(text)) return;
+		const notifyImportant = (msg, level) => {
+			if (level !== "warn") return;
 			try {
 				context.attention?.notify?.({
 					title: "wf",
-					message: text.slice(0, 160),
+					message: msg.slice(0, 160),
 					sound: false
 				});
 				probe({ evt: "notify" });
@@ -611,15 +628,16 @@ var tui_default = Plugin.define({
 						if (first !== void 0) shown.delete(first);
 					}
 				}
+				const brief = briefOf(d);
 				context.ui.toast.show({
-					message: text,
+					message: brief,
 					variant: "info"
 				});
 				probe({
 					reportEv: "toast-shown",
 					chan
 				});
-				notifyImportant(text);
+				notifyImportant(brief, str(d?.level));
 			} catch (er) {
 				probe({
 					reportEv: "toast-err",
@@ -712,7 +730,9 @@ var tui_default = Plugin.define({
 				if (r?.text) toastReport({
 					sessionID: latestSid,
 					text: r.text,
-					at: r.at
+					at: r.at,
+					brief: r.brief,
+					level: r.level
 				}, "local");
 				await refresh();
 			} catch (e) {
@@ -1056,4 +1076,4 @@ var tui_default = Plugin.define({
 		};
 	}
 });
-export { buildRows, tui_default as default, dispW, fmtElapsed, listLine };
+export { briefOf, buildRows, tui_default as default, dispW, fmtElapsed, listLine };

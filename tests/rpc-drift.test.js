@@ -27,6 +27,16 @@ test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
   // state 输出必须携带 lastReport（轮询主通道契约，r29e bug A 教训）
   assert.ok(Wf.methods.state.output.properties.rounds, "state 输出形状基本项在位");
 
+  // notification-brief-display T01：report 事件/exec output 追加 nullable brief/level——
+  // 只扩 properties 不动 required（旧 TUI/旧行不炸，plan §3.4；required 不变由上方 L22/L25 既有断言锁死）
+  for (const [where, schema] of [["report 事件", Wf.events.report.schema], ["exec output", Wf.methods.exec.output]]) {
+    for (const k of ["brief", "level"]) {
+      const p = schema.properties[k];
+      assert.ok(p, `${where} 缺 ${k}（brief/level 三通道传播前提）`);
+      assert.deepEqual(p.type, ["string", "null"], `${where}.${k} 应为 nullable string`);
+    }
+  }
+
   // M16-r35：侧边栏模式感知——state 输出携带 mode/size/planReviewVerdict（nullable，存量任务为 null）
   // M16-r44：+planConfirmedAt（方案确认记账，nullable string）
   for (const k of ["mode", "size", "planReviewVerdict", "planConfirmedAt"]) {
@@ -40,13 +50,13 @@ test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
 // stateSchema additionalProperties:true → 白名单在 rpc-bridge.ts；经 mock register 直测返回值形状
 //（mock 形状与 rpc-read.test.js 同源）。存量任务 4 字段 null；inactive 分支形状不变。
 const TIMING_KEYS = ["startedAt", "phaseEnteredAt", "phaseDurations", "finishedAt"];
-const mkStateBridge = async (st) => {
+const mkStateBridge = async (st, report = null) => {
   const impls = {};
   const ctx = { rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async () => {} } }; } } };
   const deps = {
     load: async () => st,
     scanStates: async () => [],
-    getReport: async () => null,
+    getReport: async () => report,
     runner: { run: null },
     resolveProjectDir: async () => "/tmp/opencode/wf-elapsed",
   };
@@ -89,4 +99,59 @@ test("T02 inactive 分支形状不变：无行/幽灵行仅 sessionID/active/las
     assert.deepEqual(Object.keys(res).toSorted(), ["active", "lastReport", "sessionID"], "inactive 形状不得扩张");
     for (const k of TIMING_KEYS) assert.ok(!(k in res), `inactive 分支不得携带 ${k}`);
   }
+});
+
+// ── notification-brief-display T01：bridge lastReport 透传新字段 ──────────────
+// lastReport = getReport 行原样（rpc-bridge L28），reports 行扩 brief/level 后零改动透传；
+// stateSchema additionalProperties:true 放行（wire 不过 schema 裁剪）。
+test("T01 bridge lastReport 透传 brief/level（新字段行原样送达 TUI）", async () => {
+  const st = { sessionID: "ses_lr", slug: "brief-lr", phase: "building", rounds: {} };
+  const row = { sessionID: "ses_lr", text: "全文 guidance", at: "2026-11-13T00:00:00.000Z", brief: "【wf 工作流｜building·日常模式·M】…", level: "info" };
+  const impls = await mkStateBridge(st, row);
+  const res = await impls.state({ sessionID: "ses_lr" });
+  assert.equal(res.lastReport.brief, row.brief, "lastReport.brief 必须在位");
+  assert.equal(res.lastReport.level, "info", "lastReport.level 必须在位");
+  // 旧行（无新字段）也不炸：透传原样
+  const legacyRow = { sessionID: "ses_lr", text: "旧行", at: "t" };
+  const impls2 = await mkStateBridge(st, legacyRow);
+  const res2 = await impls2.state({ sessionID: "ses_lr" });
+  assert.deepEqual(res2.lastReport, legacyRow);
+});
+
+// ── notification-brief-display T03：bridge emitReport meta / exec 透传 ────────
+const mkEmitBridge = async (runnerRun) => {
+  const emitted = [];
+  const impls = {};
+  const ctx = { rpc: { register: async (_def, impl) => { Object.assign(impls, impl); return { events: { emit: async (name, data) => { emitted.push({ name, data }); } } }; } } };
+  const bridge = await createRpcBridge(ctx, {
+    load: async () => null, scanStates: async () => [], getReport: async () => null,
+    runner: { run: runnerRun ?? null }, resolveProjectDir: async () => "/tmp/opencode/wf-brief",
+  });
+  return { bridge, emitted, impls };
+};
+
+test("T03 emitReport 事件载荷恒带 brief/level 键（无 meta → null/info）", async () => {
+  const { bridge, emitted } = await mkEmitBridge();
+  await bridge.emitReport("ses_e", "全文", "at1");
+  assert.deepEqual(emitted[0], {
+    name: "report",
+    data: { sessionID: "ses_e", text: "全文", at: "at1", brief: null, level: "info" },
+  }, "缺省载荷形状冻结（旧调用零改动仍带两键）");
+  await bridge.emitReport("ses_e", "全文2", "at2", { brief: "b", level: "warn" });
+  assert.deepEqual(emitted[1].data, { sessionID: "ses_e", text: "全文2", at: "at2", brief: "b", level: "warn" });
+});
+
+test("T03 exec 透传 runner 结果的 brief/level（字符串才带，缺省 null；未知命令兜底两键在位）", async () => {
+  // runner 携新字段 → 原样透传
+  const withMeta = await mkEmitBridge(async () => ({ text: "T", at: "A", brief: "B", level: "warn" }));
+  assert.deepEqual(await withMeta.impls.exec({ sessionID: "s", name: "wf:plan" }),
+    { text: "T", at: "A", brief: "B", level: "warn" });
+  // 旧 runner 结果（无新字段）→ 缺省 null（required 仍 ["text"]，TUI briefOf 降级）
+  const legacy = await mkEmitBridge(async () => ({ text: "T2", at: "A2" }));
+  assert.deepEqual(await legacy.impls.exec({ sessionID: "s", name: "wf:plan" }),
+    { text: "T2", at: "A2", brief: null, level: null });
+  // runner 缺失/无 text → 桥内 ❌ 兜底也带两键（null）
+  const none = await mkEmitBridge(null);
+  assert.deepEqual(await none.impls.exec({ sessionID: "s", name: "wf:nope" }),
+    { text: "❌ 未知命令：wf:nope", at: "", brief: null, level: null });
 });

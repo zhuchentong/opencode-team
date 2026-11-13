@@ -38,3 +38,4 @@
 - 注释、文档、提交信息用中文；提交格式 = 中文约定式提交 + emoji（见 git log）。
 - `.workflow/`（含运行态 `wf.db`）与 `.learnings/` 不入库；产物 md、overrides 约定见 README。
 - 长 ID 编排纪律（晋升自 LRN-20261112-003，M16-r48 B 层确证）：LLM 编排勿让模型凭记忆复述长不透明 ID——给别名或省略新建、服务端就地自愈改写截断前缀、任何模型可见文本绝不回显完整 ID（回显=转录燃料，抗 compaction 注入点使其常在场自我强化）；DB 审计记录不算回显。
+- 拒绝文案 ❌ 前缀不变量（notification-brief-display T05）：新增拒绝/halt/错误文案**必须**以 lib.ts `REJECT_PREFIX`（"❌"）开头——OS 通知 `level==="warn"` 判定（levelFor R1）与 brief 分派（briefFor）都依赖它；成功 guidance 恒以【开头，互斥由 tests/brief-level.test.js 守卫锁死（违反=静默漏弹通知）。零回显：redactIds 替换 token=`〔已隐去〕`（shared/redact.ts，G-1——token 改动必含 ses_ 子串则 brief `!includes("ses_")` 不变量断言必红）。已知降噪边界：full 模式 FAIL→wf:plan 修订轮为 info（wf:fix 才 warn，plan §3.3）。

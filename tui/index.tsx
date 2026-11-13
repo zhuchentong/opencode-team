@@ -4,7 +4,8 @@
 // ── P4 新增（方案 §2.4 通知层）：
 //    ① server.connected 重拉：官方 goal.tsx 三件套第三件——SSE 断线窗口内丢失的 rpc.* 事件不重放，
 //      重连信号到达即 lastFp 重置 + refresh()，配合 60s 新鲜度门保证窗口期报告由 poll 通道必达；
-//    ② attention.notify：toast 实际弹出后，重要信号（⚠️/❌/FAIL/illegal）额外发系统级通知——
+//    ② attention.notify：toast 实际弹出后，按 server 结构化 level==="warn" 发系统级通知
+//      （notification-brief-display T04：废除全文正则误弹——旧 ⚠️/❌/FAIL 判定每次流转必弹）；
 //      宿主按终端焦点决定投递（后台时用户可感知），fail-soft（API 缺失静默降级为纯 toast）；
 //    ③ AbortSignal：RPC 事件订阅经 AbortController 统一管理，cleanup 时 abort（quota/goal 形态）。
 // 主轨命令（P0⑧ 真机验证）：return 键 priority-1 拦截层——输入以 /wf: 开头则清空编辑器并
@@ -23,11 +24,26 @@ const { createElement, insert, setProp } = ot as any; // 低层原语（宿主�
 import { Wf } from "../shared/rpc.ts";
 import { STAGE_ORDER, FOLD, CANON, DAILY_STAGE_ORDER } from "../shared/phases.ts";
 import { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本归一（server/TUI 同源）
+import { redactIds } from "../shared/redact.ts"; // notification-brief-display T04：legacy 降级脱敏同源（G-1/A）
 
 const TUI_BUILD = VERSION;
 const ROWS = 20;
 
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+
+// notification-brief-display T04（plan §4 冻结）：toast/通知文案选择——brief 非空用 brief；
+// 否则旧行/旧事件（brief=null）本地降级：text 前两行各截 100 码点并过 redactIds（零回显 A/G-1）。
+// 模块级纯函数供 harness 直测；60s 新鲜度门保证降级形态只短暂可见。
+export function briefOf(d: any): string {
+  const b = str(d?.brief);
+  if (b) return b;
+  const text = str(d?.text);
+  if (!text) return "";
+  return text.split("\n").slice(0, 2).map((l: string) => {
+    const cps = Array.from(l);
+    return redactIds(cps.length > 100 ? cps.slice(0, 100).join("") + "…" : l);
+  }).join("\n");
+}
 const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
 const sanitize = (s: string) => (String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ");
 
@@ -312,8 +328,9 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
   return { t, c, af };
 };
 
-// 重要信号判定（attention.notify 触发面）：⚠️/❌/FAIL/illegal——与 server 文案同源符号
-const isImportant = (text: string) => /⚠️|❌|FAIL|illegal/i.test(text);
+// ── notification-brief-display T04：旧全文正则判定（⚠️/❌/FAIL/illegal）已删除 ──
+// 旧判定对含 ⚠️ 行的 guidance 每次流转必弹 OS 通知（误弹）。现由 server 结构化
+// levelFor 判定（plan §3.3），TUI 仅 level==="warn" 通知；判定逻辑单一来源在 lib.ts。
 
 export default Plugin.define({
   id: "wf-workflow-tui",
@@ -357,11 +374,12 @@ export default Plugin.define({
       return !d || !myDir() || d === myDir();
     };
 
-    // P4②：系统级通知（终端焦点感知由宿主决定投递）——仅重要信号且 toast 实际弹出后
-    const notifyImportant = (text: string) => {
-      if (!isImportant(text)) return;
+    // P4②：系统级通知（终端焦点感知由宿主决定投递）——notification-brief-display T04：
+    // 仅 server 结构化 level==="warn" 弹（废除全文正则），message 取 brief 前 160
+    const notifyImportant = (msg: string, level: string) => {
+      if (level !== "warn") return;
       try {
-        context.attention?.notify?.({ title: "wf", message: text.slice(0, 160), sound: false });
+        context.attention?.notify?.({ title: "wf", message: msg.slice(0, 160), sound: false });
         probe({ evt: "notify" });
       } catch { /* attention 不可用则纯 toast 降级 */ }
     };
@@ -381,9 +399,12 @@ export default Plugin.define({
           shown.add(key);
           if (shown.size > 50) { const first = shown.values().next().value; if (first !== undefined) shown.delete(first); }
         }
-        context.ui.toast.show({ message: text, variant: "info" });
+        // T04：toast 呈现 brief（3-4 行结构化，server 生成；旧行本地降级）——全文墙终结；
+        // 全文回看通道不变（entry/inject、wf_command 返回值、reports 槽 text 照旧）
+        const brief = briefOf(d);
+        context.ui.toast.show({ message: brief, variant: "info" });
         probe({ reportEv: "toast-shown", chan });
-        notifyImportant(text);
+        notifyImportant(brief, str(d?.level));
       } catch (er) { probe({ reportEv: "toast-err", err: errMsg(er) }); }
     };
 
@@ -437,7 +458,9 @@ export default Plugin.define({
     const execLocal = async (name: string, promptText: string) => {
       try {
         const r = await rpc().exec({ sessionID: latestSid, name, prompt: promptText }, rpcOpts());
-        if (r?.text) toastReport({ sessionID: latestSid, text: r.text, at: r.at }, "local");
+        // notification-brief-display T04（C 意见）：透传 brief/level——否则本地通道丢新字段，
+        // toast 永远走 text 降级（exec 通道 toast=brief 的断言在 harness P9 锁死）
+        if (r?.text) toastReport({ sessionID: latestSid, text: r.text, at: r.at, brief: r.brief, level: r.level }, "local");
         await refresh();
       } catch (e) {
         context.ui.toast.show({ message: `wf 执行失败：${errMsg(e)}`, variant: "error" });

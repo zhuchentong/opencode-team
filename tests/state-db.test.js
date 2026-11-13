@@ -57,16 +57,48 @@ test("无 rev 的新建快照：显式覆盖放行（intake 重建语义）", as
   s.close();
 });
 
-test("reports：roundtrip 形状 {sessionID,text,at}（bug A 锚）+ removeState 清行", async () => {
+test("reports：roundtrip 形状 {sessionID,text,at,brief,level}（bug A 锚 + T01 新列缺省 null）+ removeState 清行", async () => {
   const s = await newStore(tmpDir());
   await s.putReport({ sessionID: "ses_r", text: "hello", at: "2026-11-10T00:00:00.000Z" });
-  assert.deepEqual(await s.getReport("ses_r"), { sessionID: "ses_r", text: "hello", at: "2026-11-10T00:00:00.000Z" });
+  assert.deepEqual(await s.getReport("ses_r"), { sessionID: "ses_r", text: "hello", at: "2026-11-10T00:00:00.000Z", brief: null, level: null });
   assert.equal(await s.getReport("ses_none"), null);
   await s.save({ sessionID: "ses_r", slug: "", phase: "testing", rounds: {}, log: [] });
   await s.removeState("ses_r");
   assert.equal(await s.getReport("ses_r"), null, "reset 清报告槽（防新挂载重放旧 toast）");
   assert.equal(await s.load("ses_r"), null);
   s.close();
+});
+
+// ── notification-brief-display T01：reports 表加列（brief/level）─────────────
+test("T01 putReport 携 brief/level → getReport 逐字段读回（含二次覆写更新）", async () => {
+  const s = await newStore(tmpDir());
+  await s.putReport({ sessionID: "ses_b", text: "全文", at: "2026-11-13T00:00:00.000Z", brief: "x", level: "warn" });
+  assert.deepEqual(await s.getReport("ses_b"), { sessionID: "ses_b", text: "全文", at: "2026-11-13T00:00:00.000Z", brief: "x", level: "warn" });
+  // 覆盖写：不带新字段 → 归 null（旧调用方语义，不做保留合并）
+  await s.putReport({ sessionID: "ses_b", text: "全文2", at: "t2" });
+  assert.deepEqual(await s.getReport("ses_b"), { sessionID: "ses_b", text: "全文2", at: "t2", brief: null, level: null });
+  s.close();
+});
+
+test("T01 旧库升级：手工建旧形状表（无新列）→ createStore 迁移加列、旧行读回 null、二次打开幂等", async () => {
+  const dir = tmpDir();
+  fs.mkdirSync(`${dir}/.workflow`, { recursive: true });
+  // 模拟旧版本 wf.db：reports 只有 (session_id, text, at) 三列 + 存量行
+  const d0 = new Database(dbFile(dir));
+  d0.run("CREATE TABLE reports (session_id TEXT PRIMARY KEY, text TEXT NOT NULL, at TEXT)");
+  d0.run("INSERT INTO reports (session_id, text, at) VALUES ('ses_old', '旧报告', '2026-11-01T00:00:00.000Z')");
+  d0.close();
+  const s1 = await newStore(dir);
+  assert.deepEqual(await s1.getReport("ses_old"), {
+    sessionID: "ses_old", text: "旧报告", at: "2026-11-01T00:00:00.000Z", brief: null, level: null,
+  }, "旧行 brief/level 读回 null");
+  await s1.putReport({ sessionID: "ses_new", text: "新报告", at: "t", brief: "b", level: "info" });
+  s1.close();
+  // 二次打开：ALTER 已跑过 → 幂等不报错，数据保留
+  const s2 = await newStore(dir);
+  assert.deepEqual(await s2.getReport("ses_new"), { sessionID: "ses_new", text: "新报告", at: "t", brief: "b", level: "info" });
+  assert.equal((await s2.getReport("ses_old"))?.brief, null);
+  s2.close();
 });
 
 test("scanStates：done 且 >14 天 GC；新鲜 done 保留", async () => {

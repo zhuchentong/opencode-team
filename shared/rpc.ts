@@ -101,7 +101,14 @@ export const Wf = Rpc.define({
       },
       output: {
         type: "object",
-        properties: { text: { type: "string" }, at: { type: "string" } },
+        properties: {
+          text: { type: "string" },
+          at: { type: "string" },
+          // notification-brief-display T01：brief/level 随 exec 通道透传（runner 结果）；
+          // nullable 且不动 required——旧 TUI 不受影响（plan §3.4）
+          brief: { type: ["string", "null"] },
+          level: { type: ["string", "null"] },
+        },
         required: ["text"],
         additionalProperties: true,
       },
@@ -133,6 +140,10 @@ export const Wf = Rpc.define({
           sessionID: { type: "string" },
           text: { type: "string" },
           at: { type: "string" },
+          // notification-brief-display T01：结构化摘要/级别（三通道传播之一）；
+          // 只扩 properties——required 保持三字段，旧事件载荷不炸
+          brief: { type: ["string", "null"] },
+          level: { type: ["string", "null"] },
         },
         required: ["sessionID", "text", "at"],
         additionalProperties: true,

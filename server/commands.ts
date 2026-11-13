@@ -13,9 +13,10 @@ import {
   VERSION, BLOCKING_PHASES, flowFor, nextFor, leaderOnlyReject,
   evaluateTransition, promptText, diagnoseReport, pingReport,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
+  FLOW_CMD_NAMES, levelFor, briefFallback, type ReportLevel,
   type WfState,
 } from "./lib.ts";
-import { guidance, entryValue } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
+import { guidance, entryValue, briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）
 import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
 import { ENTRY_KEY, HINT_KEY, logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
@@ -29,6 +30,22 @@ import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
 export const REPORT_META = "wf.report";
 
+// notification-brief-display T03（B 意见）：流转命令名唯一来源在 lib.FLOW_CMD_NAMES；
+// 本表只持 name→description（注册时按名单遍历取值）。键集与 FLOW_CMD_NAMES 相等由
+// tests/flows.test.js 断言锁死（新增/删除流转命令只改 lib 名单 + 此表补描述）。
+export const FLOW_DESCRIPTIONS: Record<string, string> = {
+  "wf:intake": "工作流入口：澄清需求/读 .learnings/补 gitignore（参数=slug）",
+  "wf:plan": "进入 planning：委派 wf/planner 产出 plan.md",
+  "wf:review": "进入 review（并发委派：planner-reviewer ∥ tester feasibility），≤3 轮",
+  "wf:test-design": "进入 test_design：双通道关卡（须 test-plan.md）；冻结接口排 lane + tester(design) 写红验收测试（M16-r28：原 assign 并入）",
+  "wf:build": "进入 building：每 lane 一 worktree + wf/builder（TDD）",
+  "wf:reconcile": "进入 reconcile：合并各 worktree 回主树，冲突上报用户",
+  "wf:review-build": "进入 build_review：wf/builder-reviewer，≤3 轮",
+  "wf:test": "进入 testing：wf/tester verify → test-report.md（PASS|FAIL）",
+  "wf:fix": "进入 fixing：同 lane 回 builder / 跨 lane 用 fixer，≤3 轮",
+  "wf:done": "进入 done：审计汇报 + 并行 learner 复盘",
+};
+
 // M16-r39 T06：deps 类型化（CommandDeps 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）
 export interface CommandDeps {
   load: Store["load"];
@@ -41,7 +58,8 @@ export interface CommandDeps {
   probeOnce: Observer["probeOnce"];
   LIMS: Record<string, number>;
   emitUpdated: (st: WfState) => Promise<void>;
-  emitReport?: (sessionID: string, text: string, at: string) => Promise<void>;
+  // notification-brief-display T03：meta 可选（index.ts 传 rpc-bridge.emitReport；旧调用三参兼容）
+  emitReport?: (sessionID: string, text: string, at: string, meta?: { brief?: string; level?: ReportLevel }) => Promise<void>;
   WfDef?: unknown;
   rpcErr?: string | null;
   runner?: { run: ((name: string, a: any) => Promise<unknown>) | null };
@@ -218,11 +236,18 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
 
   // ── P2 双轨输出编排 ────────────────────────────────────────────────
   // publishOutput：写 reports 表 + report 事件（机会性补充）+ 探针。两条入口共用。
-  const publishOutput = async (sid: string, text: string, at: string, cmdName: string) => {
+  // notification-brief-display T03（plan §4 冻结）：server 结构化判定 brief/level 随行/随事件
+  // 传播（三通道之一）；text 全文通道一律不动（LLM 锚/降级轨 injectReport 仍喂全文）。
+  // load fail-soft：无任务/读失败 → st=null → briefFor 分派自动落 briefFallback。
+  const publishOutput = async (sid: string, text: string, at: string, cmdName: string): Promise<{ brief: string; level: ReportLevel }> => {
+    const st = await load(sid).catch(() => null);
+    const brief = briefFor(cmdName, text, st, LIMS);
+    const level = levelFor(cmdName, text, st);
     let slotOk = false;
-    try { await putReport({ sessionID: sid, text, at }); slotOk = true; } catch { /* 写槽失败降级 */ }
-    if (emitReport) await emitReport(sid, text, at);
-    await reportProbe(sid, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: cmdName, chars: text.length, hasChan: !!emitReport });
+    try { await putReport({ sessionID: sid, text, at, brief, level }); slotOk = true; } catch { /* 写槽失败降级 */ }
+    if (emitReport) await emitReport(sid, text, at, { brief, level });
+    await reportProbe(sid, { ev: slotOk ? "slot+emit" : "slot-fail", cmd: cmdName, chars: text.length, hasChan: !!emitReport, level, hasBrief: !!brief });
+    return { brief, level };
   };
   // 降级轨（Web/Desktop/无 TUI）：execute 返回值宿主不消费（契约 Promise<void>）——
   // 报告经 wait 排空后以 prompt(resume:false, steer, metadata 标记) 注入会话（2.2.6 源码
@@ -299,12 +324,18 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
   if (runner) {
     runner.run = async (name: string, a: any) => {
       const base = byName[name];
-      if (!base) return { text: `❌ 未知命令：${name}`, at: "" };
+      if (!base) {
+        // 未知命令不发布（与旧行为一致），但返回体四字段齐备：❌ 前缀不变量 → levelFor=warn，
+        // brief 走 fallback 纯函数（与 publishOutput 同源判定，TUI 无需特判）
+        const t = `❌ 未知命令：${name}`;
+        return { text: t, at: "", brief: briefFallback(name, t), level: levelFor(name, t, null) };
+      }
       const out = await base(a);
       const text = typeof out === "string" ? out : "";
       const at = new Date().toISOString();
-      if (text) await publishOutput(String(a?.sessionID ?? ""), text, at, name);
-      return { text, at };
+      // T03（plan §4）：publish 结果透传；无 text 不发布 → 缺省 brief="" level="info"
+      const meta = text ? await publishOutput(String(a?.sessionID ?? ""), text, at, name) : { brief: "", level: "info" as ReportLevel };
+      return { text, at, ...meta };
     };
   }
 
@@ -359,21 +390,12 @@ export async function registerCommands(ctx: any, deps: CommandDeps): Promise<{ d
       });
     };
 
-    // ── 10 个流转命令（表驱动：description 与原逐一注册逐字一致；M16-r28 assign 并入 test-design）──
-    const FLOW_COMMANDS = [
-      ["wf:intake", "工作流入口：澄清需求/读 .learnings/补 gitignore（参数=slug）"],
-      ["wf:plan", "进入 planning：委派 wf/planner 产出 plan.md"],
-      ["wf:review", "进入 review（并发委派：planner-reviewer ∥ tester feasibility），≤3 轮"],
-      ["wf:test-design", "进入 test_design：双通道关卡（须 test-plan.md）；冻结接口排 lane + tester(design) 写红验收测试（M16-r28：原 assign 并入）"],
-      ["wf:build", "进入 building：每 lane 一 worktree + wf/builder（TDD）"],
-      ["wf:reconcile", "进入 reconcile：合并各 worktree 回主树，冲突上报用户"],
-      ["wf:review-build", "进入 build_review：wf/builder-reviewer，≤3 轮"],
-      ["wf:test", "进入 testing：wf/tester verify → test-report.md（PASS|FAIL）"],
-      ["wf:fix", "进入 fixing：同 lane 回 builder / 跨 lane 用 fixer，≤3 轮"],
-      ["wf:done", "进入 done：审计汇报 + 并行 learner 复盘"],
-    ];
-    for (const [name, description] of FLOW_COMMANDS as [string, string][]) {
-      add({ name, description, execute: async (a: any) => transition(a.sessionID, name, a.prompt) });
+    // ── 10 个流转命令（表驱动；M16-r28 assign 并入 test-design）──
+    // notification-brief-display T03（B 意见）：命令名唯一来源 = lib.ts FLOW_CMD_NAMES，
+    // 本处只留 name→description 映射（模块级 FLOW_DESCRIPTIONS）；防漂移键集相等断言
+    // 见 tests/flows.test.js T03（含源码 grep：无第二份硬编码 [name,description] 名单）。
+    for (const name of FLOW_CMD_NAMES) {
+      add({ name, description: FLOW_DESCRIPTIONS[name] ?? "", execute: async (a: any) => transition(a.sessionID, name, a.prompt) });
     }
 
     add({

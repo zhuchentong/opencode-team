@@ -3,7 +3,7 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LIMITS, isDaily, budgetFor, KIND_FILES, SID_ALIAS_USAGE, type Limits, type WfState } from "./lib.ts";
+import { LIMITS, isDaily, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts";
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -53,8 +53,9 @@ function artifactPathLine(st: WfState, kind: string): string {
   return `产物目标路径：.workflow/${st.slug || "<slug>"}/${KIND_FILES[kind](st)}`;
 }
 // M16-r33 P2：双通道预算注入——phase guidance 渲染当前级预算（leader 自看），委派 prompt 也须携带（子代理看）
+// M16-r50：档位用 tierOf 归一（S/M/L 三档，plan 预算分级 10/20/30KB）
 function budgetLine(st: WfState, kinds: string[]): string {
-  const tier = st.size === "S" ? "S" : "M";
+  const tier = tierOf(st.size);
   const parts = kinds.map((k) => `${k}≤${budgetFor(k, tier)}KB`).join("、");
   return `产物预算（${tier} 级，字节计）：${parts}。委派 prompt 必须携带本预算；超预算用 patch 删减，勿全量重写。`;
 }
@@ -263,4 +264,35 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     }
     default: return `【wf 工作流】阶段 ${phase}`;
   }
+}
+
+// ── notification-brief-display T02（plan §3.1/§4 冻结）：流转成功报告的 4 行结构化 brief ──
+// 纯结构化生成（从 WfState 字段取值，禁 guidance 全文正则——plan §1 目标①）。
+// 消费方：commands.ts publishOutput（T03 接线）→ reports 行/report 事件/exec 返回三通道。
+// 零回显（A/G-2）：每行过 clipBrief（≤100 码点截断加 … + redactIds）——slug 理论上可含
+// 任意串，脱敏兜底保证「无 ses_」不变量（tests/brief-level.test.js 逐例断言不放宽）。
+export function briefForTransition(st: WfState, limits: Limits = LIMITS): string {
+  const L = { ...LIMITS, ...limits };
+  const modeLabel = isDaily(st) ? "日常模式" : "完整模式";
+  const r: Record<string, number> = st.rounds ?? {};
+  // L3 后缀仅在对应字段非空时追加（plan §3.1）
+  const suffix = [
+    st.planReviewVerdict ? `｜planReview=${st.planReviewVerdict}` : "",
+    st.testReportVerdict ? `｜test=${st.testReportVerdict}` : "",
+    st.planConfirmedAt ? "｜确认=✅" : "",
+    st.testPlanWritten ? "｜testPlan=✅" : "",
+  ].join("");
+  return [
+    `【wf 工作流｜${st.phase}·${modeLabel}·${st.size ?? "M"}】slug=${st.slug || "(未定)"}`,
+    `行动：${nextFor(st, st.phase)}`,
+    `轮次 plan_review=${r.plan_review ?? 0}/${L.plan_review} build_review=${r.build_review ?? 0}/${L.build_review} test_fix=${r.test_fix ?? 0}/${L.test_fix}${suffix}`,
+    "/wf:status 查看完整指引",
+  ].map((line) => clipBrief(line)).join("\n");
+}
+
+// 分派（§4 冻结）：流转命令 + 非拒绝文本 + st 有相位 → 结构化 transition brief；
+// 其余（非流转命令成功报告/一切拒绝(halt)文案/st 不可得）→ briefFallback 2 行。
+export function briefFor(cmd: string, text: string, st: WfState | null, limits: Limits = LIMITS): string {
+  if (FLOW_CMD_NAMES.has(cmd) && !isRejectReport(text) && st?.phase) return briefForTransition(st, limits);
+  return briefFallback(cmd, text);
 }

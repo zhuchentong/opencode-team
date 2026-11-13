@@ -96,7 +96,9 @@ function makeCtx(opts?: { noRouter?: boolean }) {
         return {
           state: async (_input: any) => stateReply,
           list: async (_input: any) => ({ sessions: listSessions }),
-          exec: async (input: any) => { lastExec = input; return { text: "exec 报告", at: new Date().toISOString() }; },
+          // notification-brief-display T04：形状与 server 真实写入同源（LRN⑧）——
+          // rpc-bridge exec 现返回 {text, at, brief, level} 四字段
+          exec: async (input: any) => { lastExec = input; return { text: "exec 报告", at: new Date().toISOString(), brief: "exec 摘要", level: "info" }; },
           read: async (_input: any) => readReply,
           events: { on: (name: string, cb: () => void, opts?: any) => { listeners.push({ name, cb, opts }); return () => { }; } },
         };
@@ -152,6 +154,9 @@ console.log(`插件 id: ${t.id}`);
   // M16-r46 批2：产物点击接线静态守卫（换树盲区由本守卫+真机目检代劳——探针③已实证 OpenTUI 命中）
   ok("P4 产物行 onMouseDown 绑定点在位", src.includes('"onMouseDown"'));
   ok("P4 router fail-soft 探测在位", src.includes("hasRegister"));
+  // notification-brief-display T04：level 判定废除全文正则 + execLocal 透传新字段（C 意见）
+  ok("P4 无 isImportant 全文正则（T04 废除对象不得回归）", !src.includes("isImportant"));
+  ok("P4 execLocal 传参透传 brief/level（C：exec 通道 toast=brief 前提）", src.includes("brief: r.brief") && src.includes("level: r.level"));
 }
 
 // ── P5：挂载渲染——render 返回单一元素 + testRender 帧不崩 ───────────
@@ -192,6 +197,18 @@ console.log(`插件 id: ${t.id}`);
     // 信封形状兼容（宿主事件实为 {type,location,data}）
     reportCbs.forEach((l) => l.cb({ sessionID: "ignored", data: { sessionID: "ses_z", text: "信封报告" } }));
     ok("P6 信封形状 → 解包后呈现", toasts.some((x) => x.message === "信封报告"));
+    // ── notification-brief-display T04：report 事件带 brief → toast 文案 === brief（非全文墙）──
+    const longText = Array.from({ length: 30 }, (_, i) => `第${i}行 指引全文内容`).join("\n");
+    const brief1 = "【wf 工作流｜building·日常模式·M】slug=x\n行动：/wf:test";
+    reportCbs.forEach((l) => l.cb({ sessionID: "ses_z", text: longText, at: new Date(Date.now() + 1000).toISOString(), brief: brief1, level: "info" }));
+    ok("P6 事件带 brief → toast === brief（非全文）", toasts.some((x) => x.message === brief1) && !toasts.some((x) => x.message === longText));
+    // legacy 行（brief:null，旧库/旧事件）→ 本地降级 text 前两行截断且 ses_ 脱敏（A/G-1）
+    // （at 显式 +2000ms：与上一事件同毫秒会被 sessionID|at 去重键误拦）
+    reportCbs.forEach((l) => l.cb({ sessionID: "ses_z", text: "状态行 session=ses_A1B2c3d4\nslug=demo phase=building\n不该出现的第三行", at: new Date(Date.now() + 2000).toISOString(), brief: null, level: null }));
+    ok("P6 legacy brief:null → 降级 2 行且无 ses_", (() => {
+      const m = String(toasts.at(-1)?.message ?? "");
+      return m === "状态行 session=〔已隐去〕\nslug=demo phase=building";
+    })(), JSON.stringify(toasts.at(-1)?.message));
     await setup.dispose();
   } catch (e: any) {
     ok("P6 report→toast 不崩", false, e?.message);
@@ -236,25 +253,34 @@ console.log(`插件 id: ${t.id}`);
 {
   const { ctx, slots, listeners, toasts, setState } = makeCtx();
   const at1 = new Date().toISOString();
-  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "轮询报告", at: at1 } });
+  // T04：mock 行形状与 state.ts getReport 真实写入同源（5 字段，LRN⑧）
+  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "轮询报告\n全文第二行", at: at1, brief: "轮询报告摘要", level: "info" } });
   cleanups.push(t.setup(ctx as any)!);
   const sidebarRender = slots["sidebar.content"];
   try {
     const setup = await testRender(() => sidebarRender({ sessionID: "ses_p8" }), { width: 50, height: 24 });
     await setup.flush();
     await sleep(80); // 等 mount 时的 refresh（async RPC）落地
-    ok("P8 refresh 读到 lastReport → toast 呈现", toasts.some((x) => x.message === "轮询报告"), `toasts=${JSON.stringify(toasts.map((x) => x.message))}`);
+    ok("P8 refresh 读到 lastReport → toast 呈现 brief", toasts.some((x) => x.message === "轮询报告摘要"), `toasts=${JSON.stringify(toasts.map((x) => x.message))}`);
     // 同一 at 再次对账不重复弹
     const updCbs = listeners.filter((l) => l.name === "updated");
     updCbs.forEach((l) => l.cb({}));
     await sleep(80);
-    const n = toasts.filter((x) => x.message === "轮询报告").length;
+    const n = toasts.filter((x) => x.message === "轮询报告摘要").length;
     ok("P8 同 at 跨轮询去重", n === 1, `弹了 ${n} 次（应为 1）`);
     // 新 at 的新报告 → 再弹
-    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "轮询报告2", at: new Date().toISOString() } });
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "轮询报告2", at: new Date().toISOString(), brief: "轮询报告2摘要", level: "info" } });
     updCbs.forEach((l) => l.cb({}));
     await sleep(80);
-    ok("P8 新 at 报告呈现", toasts.some((x) => x.message === "轮询报告2"));
+    ok("P8 新 at 报告呈现", toasts.some((x) => x.message === "轮询报告2摘要"));
+    // T04 legacy：旧库行 brief:null → 降级 2 行且 ses_ 脱敏（P6 事件通道的轮询镜像）
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p8", text: "状态 session=ses_P8LegacyID\nphase=testing\n第三行", at: new Date().toISOString(), brief: null, level: null } });
+    updCbs.forEach((l) => l.cb({}));
+    await sleep(80);
+    ok("P8 legacy brief:null → 降级 2 行无 ses_", (() => {
+      const m = toasts.map((x) => String(x.message)).find((s) => s.startsWith("状态 session="));
+      return m === "状态 session=〔已隐去〕\nphase=testing";
+    })(), JSON.stringify(toasts.map((x) => x.message)));
     await setup.dispose();
   } catch (e: any) {
     ok("P8 轮询通道不崩", false, e?.message);
@@ -290,18 +316,19 @@ console.log(`插件 id: ${t.id}`);
     const ex = getExec();
     ok("P9 exec 调用携带 name/prompt/sessionID",
       ex?.name === "wf:ping" && ex?.prompt === "额外参数" && ex?.sessionID === "ses_p9", JSON.stringify(ex));
-    ok("P9 exec 返回值 → toast 呈现", toasts.some((x) => x.message === "exec 报告"));
+    ok("P9 exec 返回值 → toast 呈现 brief（T04/C：execLocal 透传后可达）", toasts.some((x) => x.message === "exec 摘要"), `toasts=${JSON.stringify(toasts.map((x) => x.message))}`);
     await setup.dispose();
   } catch (e: any) {
     ok("P9 return 拦截不崩", false, e?.message);
   }
 }
 
-// ── P10：P4 通知层——server.connected 重拉 + attention.notify + AbortSignal ──
+// ── P10：P4 通知层——server.connected 重拉 + attention.notify（T04：level 结构化判定，
+//    废除全文正则误弹）+ AbortSignal ──────────────────────────────────────
 {
   const { ctx, slots, listeners, toasts, notifies, connCbs, setState } = makeCtx();
   const at1 = new Date().toISOString();
-  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "连接初拉报告", at: at1 } });
+  setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "连接初拉报告", at: at1, brief: "连接初拉摘要", level: "info" } });
   cleanups.push(t.setup(ctx as any)!);
   const sidebarRender = slots["sidebar.content"];
   try {
@@ -311,23 +338,46 @@ console.log(`插件 id: ${t.id}`);
     ok("P10 events.on 订阅携带 AbortSignal", listeners.some((l) => l.opts && l.opts.signal && typeof l.opts.signal.aborted === "boolean"),
       `opts=${JSON.stringify(listeners.map((l) => ({ n: l.name, hasSig: !!l.opts?.signal })))}`);
     ok("P10 已订阅 server.connected", connCbs.length >= 1);
-    ok("P10 初拉报告 toast 且非重要不 notify", toasts.some((x) => x.message === "连接初拉报告") && notifies.length === 0);
-    // 模拟断线窗口：服务端更新报告（⚠️ 重要信号）但事件回调不到——重连信号触发重拉必达
+    ok("P10 初拉 info → toast 且 notify 不发", toasts.some((x) => x.message === "连接初拉摘要") && notifies.length === 0);
+    // 断线窗口：level=warn → 重拉送达 + OS 通知（message=brief）
     const at2 = new Date(Date.now() + 1000).toISOString();
-    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "⚠️ 断线窗口报告", at: at2 } });
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "⚠️ 断线窗口报告全文", at: at2, brief: "断线窗口报告摘要", level: "warn" } });
     connCbs.forEach((cb) => cb());
     await sleep(80);
-    ok("P10 server.connected 重拉送达窗口期报告", toasts.some((x) => x.message === "⚠️ 断线窗口报告"));
-    ok("P10 重要信号 → attention.notify", notifies.some((n) => String(n.message).includes("断线窗口报告")), JSON.stringify(notifies));
-    // 普通信号只 toast 不 notify
+    ok("P10 server.connected 重拉送达窗口期报告（toast=brief）", toasts.some((x) => x.message === "断线窗口报告摘要"));
+    ok("P10 level=warn → attention.notify(message=brief)", notifies.some((n) => n.message === "断线窗口报告摘要"), JSON.stringify(notifies));
+    // 误弹回归锚（T04 核心）：level=info 但全文含 ⚠️/❌/FAIL/illegal → 只 toast 不 notify
     const at3 = new Date(Date.now() + 2000).toISOString();
-    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "普通报告", at: at3 } });
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "⚠️ FAIL ❌ illegal 旧全文正则必误弹", at: at3, brief: "正常流转摘要", level: "info" } });
     connCbs.forEach((cb) => cb());
     await sleep(80);
-    ok("P10 普通报告 toast 且不触发 notify", toasts.some((x) => x.message === "普通报告") && notifies.length === 1, `notifies=${notifies.length}`);
+    ok("P10 info+⚠️/❌/FAIL 文本 → 不触发 notify（误弹回归锚）", toasts.some((x) => x.message === "正常流转摘要") && notifies.length === 1, `notifies=${notifies.length}`);
+    // warn 且 brief >160 → notify message 截前 160
+    const at4 = new Date(Date.now() + 3000).toISOString();
+    const longBrief = "L".repeat(200);
+    setState({ active: false, slug: "", phase: null, lastReport: { sessionID: "ses_p10", text: "x", at: at4, brief: longBrief, level: "warn" } });
+    connCbs.forEach((cb) => cb());
+    await sleep(80);
+    ok("P10 warn → notify message 为 brief 前 160 字", notifies.some((n) => n.message === longBrief.slice(0, 160)), JSON.stringify(notifies.map((n: any) => n.message?.length)));
     await setup.dispose();
   } catch (e: any) {
     ok("P10 通知层不崩", false, e?.message);
+  }
+}
+
+// ── T04：briefOf 模块级纯函数直测（toast 文案选择：brief 优先，legacy 降级 2 行+脱敏）──
+{
+  const briefOf = ns.briefOf;
+  ok("T04 briefOf 已导出（模块级纯函数）", typeof briefOf === "function");
+  if (typeof briefOf === "function") {
+    ok("T04 briefOf：brief 非空 → 原样返回（不截断不加行）", briefOf({ brief: "B\n行二", text: "T" }) === "B\n行二");
+    ok("T04 briefOf：brief 空串/缺失 → 走降级", briefOf({ brief: "", text: "单行" }) === "单行" && briefOf({ text: "单行" }) === "单行");
+    const legacy = briefOf({ brief: null, text: `首行 ${"a".repeat(150)}\n次行\n三行勿见` });
+    const ls = String(legacy).split("\n");
+    ok("T04 briefOf：降级只取前两行", ls.length === 2 && ls[1] === "次行", JSON.stringify(legacy.slice(0, 30)));
+    ok("T04 briefOf：每行截 100 码点加 …", Array.from(ls[0]).length === 101 && ls[0].endsWith("…"));
+    ok("T04 briefOf：降级行过 redactIds 无 ses_", !String(briefOf({ brief: null, text: "状态 session=ses_A1B2c3d4E5" })).includes("ses_"));
+    ok("T04 briefOf：空/无 text 不炸", briefOf({}) === "" && briefOf(null) === "");
   }
 }
 

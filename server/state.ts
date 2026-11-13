@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
-import { type FlowLogEntry, type WfState, isLeader } from "./lib.ts";
+import { type FlowLogEntry, type ReportLevel, type WfState, isLeader } from "./lib.ts";
 
 // instructions.entry 的 key（非存储键——P1 不动 entry 通道）
 export const ENTRY_KEY = "wf.phase";
@@ -66,7 +66,9 @@ export function writeTaskRow(db: Database, row: TaskRow, expectedRev: number | n
 
 // ── M16-r39 T06：deps 类型化（Store 契约；宿主入参 ctx 保留 any，内部数据流用领域类型）──
 export type SaveResult = { ok: boolean; reason?: string; rev?: number };
-export interface ReportRow { sessionID: string; text: string; at: string | null }
+// notification-brief-display T01：行形状扩 brief/level（nullable——旧行/未携新字段的写入为 null，
+// TUI 本地降级 briefOf 消费；wire 经 additionalProperties 透传）
+export interface ReportRow { sessionID: string; text: string; at: string | null; brief: string | null; level: ReportLevel | null }
 export interface StateListItem {
   sessionID: string; slug: string; phase: string | null;
   rounds: Record<string, number>; testPlanWritten: boolean;
@@ -79,7 +81,7 @@ export interface Store {
   resolveState(sessionID: string, agent?: string): Promise<WfState | null>;
   resolveProjectDir(st: WfState | null, sessionID: string): Promise<string>;
   scanStates(projectID?: string | null, directory?: string | null): Promise<StateListItem[]>;
-  putReport(r: { sessionID: string; text: string; at: string }): Promise<void>;
+  putReport(r: { sessionID: string; text: string; at: string; brief?: string; level?: ReportLevel }): Promise<void>;
   getReport(sessionID: string): Promise<ReportRow | null>;
   dumpStates(): Promise<{ key: string; value: unknown }[]>;
   ready: Promise<void>;
@@ -136,7 +138,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS reports (
   session_id TEXT PRIMARY KEY,
   text TEXT NOT NULL,
-  at TEXT
+  at TEXT,
+  brief TEXT,
+  level TEXT
 );
 `;
 
@@ -159,6 +163,14 @@ export function createStore(ctx: any): Store {
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA busy_timeout=5000");
   db.run(SCHEMA);
+  // notification-brief-display T01：旧库 reports 表加列迁移（CREATE IF NOT EXISTS 对存量表
+  // 是 no-op，不会补列）。PRAGMA table_info 检查缺列才 ALTER——幂等，二次打开零操作不报错。
+  for (const col of ["brief", "level"]) {
+    try {
+      const cols = db.prepare("PRAGMA table_info(reports)").all() as { name: string }[];
+      if (!cols.some((c) => c?.name === col)) db.run(`ALTER TABLE reports ADD COLUMN ${col} TEXT`);
+    } catch { /* 单列迁移失败不阻塞启动（读写路径自带 ?? null 降级） */ }
+  }
 
   const qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
   // M16-r39 T04：qUpsert 仅留一次性迁移用（save 路径改委托 writeTaskRow 单语句 CAS）
@@ -172,9 +184,9 @@ export function createStore(ctx: any): Store {
   );
   const qEv = db.prepare("INSERT INTO events (session_id, at, entry_json) VALUES (?, ?, ?)");
   const qRep = db.prepare(
-    "INSERT INTO reports (session_id, text, at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, at=excluded.at",
+    "INSERT INTO reports (session_id, text, at, brief, level) VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, at=excluded.at, brief=excluded.brief, level=excluded.level",
   );
-  const qRepGet = db.prepare("SELECT session_id, text, at FROM reports WHERE session_id = ?");
+  const qRepGet = db.prepare("SELECT session_id, text, at, brief, level FROM reports WHERE session_id = ?");
   const qRepDel = db.prepare("DELETE FROM reports WHERE session_id = ?");
   const qTaskDel = db.prepare("DELETE FROM tasks WHERE session_id = ?");
   const qProj = db.prepare(
@@ -289,15 +301,17 @@ export function createStore(ctx: any): Store {
     return out.slice(0, 20);
   };
 
-  // ── reports 命令输出槽（r29e 主通道的 SQLite 化；形状必须保持 {sessionID,text,at}
-  //    ——bug A 教训：缺 sessionID 字段 TUI toastReport 过滤器会把 toast 全拦掉）──
-  const putReport = async (r: { sessionID: string; text: string; at: string }): Promise<void> => {
-    qRep.run(String(r.sessionID ?? ""), String(r.text ?? ""), r.at ? String(r.at) : null);
+  // ── reports 命令输出槽（r29e 主通道的 SQLite 化；形状必须保持含 sessionID
+  //    ——bug A 教训：缺 sessionID 字段 TUI toastReport 过滤器会把 toast 全拦掉。
+  //    T01 扩 brief/level：可选入参，缺省落 null（旧调用方零改动）──
+  const putReport = async (r: { sessionID: string; text: string; at: string; brief?: string; level?: ReportLevel }): Promise<void> => {
+    qRep.run(String(r.sessionID ?? ""), String(r.text ?? ""), r.at ? String(r.at) : null,
+      r.brief != null ? String(r.brief) : null, r.level != null ? String(r.level) : null);
   };
   const getReport = async (sessionID: string): Promise<ReportRow | null> => {
     const row = qRepGet.get(String(sessionID ?? ""));
     if (!row) return null;
-    return { sessionID: row.session_id, text: row.text, at: row.at ?? null };
+    return { sessionID: row.session_id, text: row.text, at: row.at ?? null, brief: row.brief ?? null, level: row.level ?? null };
   };
 
   // wf:debug 转储用：近似旧 storage scan 的 [{key, value}] 形状
@@ -346,7 +360,7 @@ export function createStore(ctx: any): Store {
         if (!ks.startsWith(REPORT_PREFIX)) continue;
         if (typeof v === "string") { try { v = JSON.parse(v); } catch { continue; } }
         if (v && typeof v === "object" && v.text != null) {
-          qRep.run(String(v.sessionID ?? ks.slice(REPORT_PREFIX.length)), String(v.text), v.at ? String(v.at) : null);
+          qRep.run(String(v.sessionID ?? ks.slice(REPORT_PREFIX.length)), String(v.text), v.at ? String(v.at) : null, null, null);
         }
       }
     } catch { /* 迁移失败不阻塞 */ }

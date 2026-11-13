@@ -339,3 +339,134 @@ test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnt
   assert.equal(st.phaseDurations, undefined, "闭账跳过：phaseDurations 不新增");
   h.dispose();
 });
+
+// ── notification-brief-display T03：publishOutput/runner 接线 + FLOW_COMMANDS 单一来源 ──
+// 捕获 mock（putReport/emitReport 记录载荷）驱动 commands.ts 真实 publishOutput；
+// 断言 plan §5-T03 验收表 1-4 + B 意见名单同源（L129）。
+const mkWiringHarness = async () => {
+  const store = new Map();
+  const cmds = [];
+  const reports = []; // putReport 捕获（行形状 = state.ts 契约）
+  const events = []; // emitReport 捕获（第 4 参 meta）
+  const ctx = {
+    options: { leaderOnly: false },
+    session: {
+      get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: "/tmp/opencode/wf-brief-w" } }),
+      wait: async () => {}, prompt: async () => {}, hook: async () => ({ dispose() {} }),
+      instructions: { entry: { put: async () => {}, list: async () => [], remove: async () => {} } },
+    },
+    command: { transform: (fn) => { fn({ add: (d) => cmds.push(d) }); return { dispose() {} }; } },
+  };
+  const deps = {
+    load: async (sid) => store.get(sid) ?? null,
+    save: async (st) => { store.set(st.sessionID, structuredClone(st)); return { ok: true }; },
+    resolveProjectDir: async () => "/tmp/opencode/wf-brief-w",
+    removeState: async (sid) => { store.delete(sid); },
+    putReport: async (r) => { reports.push(r); },
+    dumpStates: async () => [],
+    debugDirFor: async () => "/tmp/opencode/wf-brief-w",
+    probeOnce: async () => {},
+    LIMS: { ...LIMITS },
+    emitUpdated: async () => {},
+    emitReport: async (sid, text, at, meta) => { events.push({ sid, text, at, meta }); },
+    WfDef: null, rpcErr: null, runner: { run: null },
+  };
+  const { dispose } = await registerCommands(ctx, deps);
+  return {
+    run: (name, text = "") => cmds.find((c) => c.name === name).execute({ sessionID: "ses_w", prompt: { text } }),
+    reports, events, deps, cmds,
+    st: () => store.get("ses_w"),
+    dispose,
+  };
+};
+const lastRow = (h) => h.reports[h.reports.length - 1];
+
+test("T03 成功流转：reports 行 = text 全文 + brief(【wf 开头) + level=info（LLM 全文锚不动）", async () => {
+  const h = await mkWiringHarness();
+  await h.run("wf:intake", "brief-w-plan");
+  h.reports.length = 0;
+  const r = await h.run("wf:plan");
+  const row = lastRow(h);
+  assert.equal(row.text, r, "text 仍为 guidance 全文（LLM/审计通道不动）");
+  assert.ok(row.text.startsWith("【wf 工作流"), "全文锚");
+  assert.ok(row.brief.startsWith("【wf 工作流"), `brief 应为 transition 4 行：${JSON.stringify(row.brief)}`);
+  assert.equal(row.brief.split("\n").length, 4);
+  assert.equal(row.level, "info");
+  h.dispose();
+});
+
+test("T03 halt（关卡拒绝）：level=warn 且 brief=2 行拒绝句", async () => {
+  const h = await mkWiringHarness();
+  await h.run("wf:intake", "brief-w-halt");
+  await h.run("wf:plan");
+  await h.run("wf:review"); // review→build 合法来源；不设 planConfirmedAt → 确认关卡 halt
+  h.reports.length = 0;
+  const msg = await h.run("wf:build"); // 无 planConfirmedAt → 确认关卡拒绝
+  assert.ok(msg.startsWith("❌"), msg.slice(0, 40));
+  const row = lastRow(h);
+  assert.equal(row.text, msg, "拒绝全文照旧落行");
+  assert.equal(row.level, "warn");
+  const bl = row.brief.split("\n");
+  assert.equal(bl.length, 2, `拒绝 brief 应 2 行：${row.brief}`);
+  assert.equal(bl[0], "【wf｜build】");
+  assert.ok(bl[1].startsWith("❌ 方案确认关卡未过"), bl[1]);
+  h.dispose();
+});
+
+test("T03 非流转命令（status）：briefFallback 2 行 info，兜底行无 ses_（text 全文仍含）", async () => {
+  const h = await mkWiringHarness();
+  await h.run("wf:intake", "brief-w-status");
+  h.reports.length = 0;
+  await h.run("wf:status");
+  const row = lastRow(h);
+  assert.equal(row.level, "info");
+  const bl = row.brief.split("\n");
+  assert.equal(bl[0], "【wf｜status】");
+  assert.ok(!row.brief.includes("ses_"), `brief 泄漏 ses_：${row.brief}`);
+  assert.ok(row.text.includes("ses_w"), "text 全文保留（含 session 行——LLM/审计通道）");
+  h.dispose();
+});
+
+test("T03 runner.run 返回 {text,at,brief,level}；无 text 分支缺省不炸", async () => {
+  const h = await mkWiringHarness();
+  const res = await h.deps.runner.run("wf:ping", { sessionID: "ses_w", prompt: { text: "" } });
+  assert.equal(typeof res.text, "string");
+  assert.ok(res.text.length > 0, "ping 有输出");
+  assert.ok(typeof res.at === "string" && res.at.length >= 20);
+  assert.ok(res.brief.startsWith("【wf｜ping】\n"), `exec 返回 brief：${JSON.stringify(res.brief)}`);
+  assert.equal(res.level, "info");
+  // 未知命令：不发布（无 reports 行），但返回体四字段齐备（❌ → warn，R1 前缀不变量同源判定）
+  const n = h.reports.length;
+  const bad = await h.deps.runner.run("wf:nope", { sessionID: "ses_w" });
+  assert.equal(h.reports.length, n, "未知命令不得发布报告行");
+  assert.match(bad.text, /未知命令/);
+  assert.equal(bad.level, "warn");
+  assert.ok(String(bad.brief).includes("未知命令"), bad.brief);
+  h.dispose();
+});
+
+test("T03 emitReport 调用携 meta（第 4 参 brief/level）", async () => {
+  const h = await mkWiringHarness();
+  await h.run("wf:intake", "brief-w-emit");
+  const ev = h.events[h.events.length - 1];
+  assert.equal(ev.sid, "ses_w");
+  assert.ok(ev.meta && typeof ev.meta.brief === "string" && ev.meta.brief.startsWith("【wf 工作流"), JSON.stringify(ev.meta));
+  assert.equal(ev.meta.level, "info");
+  h.dispose();
+});
+
+test("T03 FLOW_COMMANDS 单一来源：描述表键集 = FLOW_CMD_NAMES（无第二份硬编码名单）", async () => {
+  const fs = await import("node:fs");
+  const { FLOW_CMD_NAMES } = await import("../server/lib.ts");
+  const { FLOW_DESCRIPTIONS } = await import("../server/commands.ts");
+  assert.deepEqual(Object.keys(FLOW_DESCRIPTIONS).toSorted(), [...FLOW_CMD_NAMES].toSorted(), "描述表与名单键集相等");
+  const src = fs.readFileSync(new URL("../server/commands.ts", import.meta.url), "utf8");
+  assert.match(src, /for \(const name of FLOW_CMD_NAMES\)/, "构造须遍历 FLOW_CMD_NAMES");
+  assert.ok(!/\[\s*"wf:intake",\s*"工作流入口/.test(src), "不得残留第二份 [name,description] 硬编码名单");
+  const h = await mkWiringHarness();
+  for (const name of FLOW_CMD_NAMES) {
+    const c = h.cmds.find((x) => x.name === name);
+    assert.ok(c && c.description.length > 0, `${name} 注册且描述非空`);
+  }
+  h.dispose();
+});

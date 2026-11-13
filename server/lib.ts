@@ -8,6 +8,7 @@
 // M16-r39（T08）：guidance/entryValue/DONE_ENTRY 拆分至 server/guidance.ts（文案逐字不变）；
 //   VERSION 归一 shared/version.ts（server/TUI 同源）。本文件不 re-export guidance（防环）。
 import { BLOCKING } from "../shared/phases.ts"; // M10-d A1：阶段闸门单一来源
+import { redactIds } from "../shared/redact.ts"; // notification-brief-display T02：零回显脱敏单一来源
 
 export { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本单一来源（T13 升 r39）
 
@@ -15,6 +16,10 @@ export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
 export type LimitKey = keyof typeof LIMITS;
 // P2：limits 可按实例覆盖（partial 覆盖默认 LIMITS）
 export type Limits = Partial<Record<LimitKey, number>>;
+
+// notification-brief-display（plan §4 冻结）：报告级别——TUI 仅 warn 触发 OS 通知。
+// 定义在 lib（state.ts/commands.ts 单一来源 import；lib 不 import state/guidance，无环）
+export type ReportLevel = "info" | "warn";
 
 export const GATE_ERR = "[wf-workflow]";
 export const EDIT_TOOLS: Set<string> = new Set(["edit", "write", "patch"]);
@@ -589,8 +594,10 @@ export function artifactPhaseWarning(kind: string, phase: string | null | undefi
 // ── M16-r32：产物瘦身预算——体积/结构约束（纯函数可测）────────────
 // 真机实证（auth-login r28）：plan.md 40KB 生成 ~6.6min，耗时与体积成正比；工具本身毫秒级。
 // 软预算 + 超预算告警（不阻断）：压生成耗时，同时减下游 reviewer 阅读量（双重收益）。
+// M16-r50：plan 预算按体量分级 S10/M20/L30KB（大任务方案要素多，15KB 常被迫精简重写反而费工）；
+// 其余产物类型维持原预算。单位=KB（字节计，中文×~1.5）。
 export const ARTIFACT_BUDGET_KB: Record<string, number> = {
-  plan: 15,
+  plan: 20,
   "plan-review": 8,
   "test-plan": 10,
   "build-review": 8,
@@ -598,7 +605,7 @@ export const ARTIFACT_BUDGET_KB: Record<string, number> = {
   lessons: 6,
 };
 // M16-r33 P2：S 级（简易/演示任务）收紧预算——真机取证 todolist 简易任务 plan 26KB/test-plan 22KB
-// 杀鸡用牛刀。L 级用 M 预算（体量标记只驱动从简指引，不放宽体积）。单位=KB（字节计，中文×~1.5）。
+// 杀鸡用牛刀。
 // M16-r49：S 级 plan 5→10KB——5KB 对正常方案过紧，频繁超预算触发精简重写反而费工；10KB 仍严于 M。
 export const ARTIFACT_BUDGET_S_KB: Record<string, number> = {
   plan: 10,
@@ -608,14 +615,29 @@ export const ARTIFACT_BUDGET_S_KB: Record<string, number> = {
   "test-report": 4,
   lessons: 3,
 };
+// M16-r50：L 级（大型任务）预算表——只放宽 plan（30KB），其余产物沿用 M 值；
+// 表形状保持六类齐全（与 KIND_FILES 键一致，测试锁定）。
+export const ARTIFACT_BUDGET_L_KB: Record<string, number> = {
+  plan: 30,
+  "plan-review": 8,
+  "test-plan": 10,
+  "build-review": 8,
+  "test-report": 10,
+  lessons: 6,
+};
+// 体量归一：只认 S/L，其余（M/缺省/存量无 size）一律按 M（存量兼容）
+export function tierOf(size?: string | null): "S" | "M" | "L" {
+  return size === "S" || size === "L" ? size : "M";
+}
 export function budgetFor(kind: string, size?: string | null): number | null {
-  const table = size === "S" ? ARTIFACT_BUDGET_S_KB : ARTIFACT_BUDGET_KB;
+  const tier = tierOf(size);
+  const table = tier === "S" ? ARTIFACT_BUDGET_S_KB : tier === "L" ? ARTIFACT_BUDGET_L_KB : ARTIFACT_BUDGET_KB;
   return table[kind] ?? null;
 }
 export function artifactSizeWarning(kind: string, bytes: number, size?: string | null): string | null {
   const budget = budgetFor(kind, size);
   if (!budget || bytes <= budget * 1024) return null;
-  const tier = size === "S" ? "S" : "M";
+  const tier = tierOf(size);
   return `⚠️ 产物超瘦身预算：${kind} ${(bytes / 1024).toFixed(1)}KB > ${budget}KB（${tier} 级，字节计）——请精简（表格化/只留要点/删冗长散文）；修订用 wf_write_artifact 的 patch 模式删减冗余章节，勿全量重写。`;
 }
 
@@ -716,4 +738,52 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   // 6) 下一步
   out.push(`  下一步：${nextFor(st, st.phase)}`);
   return out.join("\n");
+}
+
+// ── notification-brief-display T02（plan §3.2/§3.3/§4 冻结）：brief/level 生成纯函数 ──
+// 消费方：commands.ts publishOutput（T03 接线）；TUI 仅按 level==="warn" 弹 OS 通知。
+// 拒绝文案统一 ❌ 字面量前缀（作者位不变量，与成功 guidance 【开头互斥，守卫锁死）。
+export const REJECT_PREFIX = "❌";
+// 10 个流转命令名唯一来源（B 意见：T03 把 commands.ts FLOW_COMMANDS 改为引用派生，防漂移断言在 T03）
+export const FLOW_CMD_NAMES: Set<string> = new Set([
+  "wf:intake", "wf:plan", "wf:review", "wf:test-design", "wf:build",
+  "wf:reconcile", "wf:review-build", "wf:test", "wf:fix", "wf:done",
+]);
+export function isRejectReport(text: string): boolean {
+  return String(text ?? "").startsWith(REJECT_PREFIX);
+}
+
+// §3.3 level 规则表（按序命中即返回）：❌ 拒绝 → wf:fix 返工 → 产物结论 FAIL 在场
+// → done 交付确认需应答 → 其余 info。已知边界（plan §3.3）：full 模式 FAIL→wf:plan
+// 修订轮为 info（wf:fix 才是 FAIL 处理命令，规则 2 覆盖；修订轮不重复弹属可接受降噪）。
+export function levelFor(cmd: string, text: string, st: WfState | null): ReportLevel {
+  if (isRejectReport(text)) return "warn"; // R1
+  if (cmd === "wf:fix") return "warn"; // R2
+  if ((cmd === "wf:test" && st?.testReportVerdict === "FAIL") ||
+      (cmd === "wf:review" && st?.planReviewVerdict === "FAIL")) return "warn"; // R3
+  if (cmd === "wf:done" && st?.phase === "done" && st?.doneGit?.isGit) return "warn"; // R4
+  return "info"; // R5
+}
+
+// brief 行截断单一实现：≤max 码点截断加 …（省略号不计入正文预算）。
+// 防泄漏细节：截断若落在 ID 中段（含恰停在 "ses_"），残段会躲过 redactIds 的
+// [A-Za-z0-9]+ 必选尾巴 → 先剥掉尾部残段再脱敏，保证「无 ses_」不变量（G-1/A）。
+export const BRIEF_LINE_MAX = 100;
+export function clipBrief(line: string, max = BRIEF_LINE_MAX): string {
+  const src = String(line ?? "");
+  const cps = Array.from(src);
+  if (cps.length <= max) return redactIds(src);
+  let out = cps.slice(0, max).join("");
+  // 剥掉尾部半截 ID（含恰停在 "ses_" 无后缀）；纯 "ses" 结尾不含 "ses_"，无需处理
+  const m = out.match(/ses_[A-Za-z0-9]*$/);
+  if (m && m.index !== undefined) out = out.slice(0, m.index);
+  return `${redactIds(out)}…`;
+}
+
+// §3.2 非流转/拒绝报告兜底 brief（2 行）：命令标签 + text 首个非空行（截断 + redactIds）。
+// 适用：非流转命令成功报告、一切拒绝(halt)文案、st 不可得。
+export function briefFallback(cmd: string, text: string): string {
+  const tag = `【wf｜${String(cmd ?? "").replace(/^wf:/, "")}】`;
+  const first = String(text ?? "").split("\n").find((l) => l.trim() !== "") ?? "";
+  return `${tag}\n${clipBrief(first)}`;
 }

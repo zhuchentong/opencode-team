@@ -14,7 +14,7 @@
 - **抗 compaction 注入**：阶段 guidance 写入 session instructions entry（每次组装系统提示从存储重新渲染），消息历史压缩不丢阶段约束
 - **产物管理**：`wf_write_artifact` 工具按 kind 落盘 `<项目>/.workflow/<slug>/`，循环类产物自动按轮次编号；三模式（互斥）：content 首写 / patch 增量修订（严格未命中自动模糊回退）/ 两者皆缺=注册已原生落盘的产物（大产物分段写+微小注册，抗慢模型流中断）；test-report 输出按 verdict 指路下一步；slug 支持 Unicode（中文任务名原样保留）
 - **产物预览**：侧边栏产物清单点击（或 `/wf:open <名>`）打开 `wf-artifact` 预览 route，**markdown 渲染**（标题/表格/代码块/列表经 OpenTUI `markdown` 渲染器，标题/强调/行内代码着色并 conceal 语法标记；旧版宿主能力缺失时自动降级逐行纯文本），**正文可滚动**（scrollbox 包裹，头部信息与返回提示固定；无 scrollbox 能力时直挂降级），`q` 返回会话；详见 `docs/HOST-CONTRACT.md` r46/r48/r48b/r48c
-- **命令输出双轨**（宿主 2.2.6 契约 `execute(): Promise<void>` 返回值不显示）：**主轨**（TUI）return 键拦截 → RPC `exec` → 即时 toast，⚠️/❌/FAIL 附 `attention.notify` 系统级通知（终端后台可感知）；**降级轨**（Web/Desktop/无 TUI）`session.wait` + `prompt(resume:false)` 注入会话（不唤醒模型；context/compaction/generate hook 剥离报告消息，不污染模型上下文）
+- **命令输出双轨**（宿主 2.2.6 契约 `execute(): Promise<void>` 返回值不显示）：**主轨**（TUI）return 键拦截 → RPC `exec` → 即时 toast 呈现 **3-4 行结构化 brief**（server 从 WfState 生成，非全文墙；notification-brief-display），`level==="warn"`（server 结构化判定：❌ 拒绝/关卡 FAIL 在场/wf:fix 返工/done 交付确认）附 `attention.notify` 系统级通知（终端后台可感知）；**降级轨**（Web/Desktop/无 TUI）`session.wait` + `prompt(resume:false)` 注入会话**全文**（不唤醒模型；context/compaction/generate hook 剥离报告消息，不污染模型上下文；LLM 通道不受 brief 化影响——guidance 全文照旧进 entry/inject 与 reports 槽 text）
 - **可观测**：RPC + TUI 侧边栏（阶段/轮次/关卡实时刷新，事件推送 + 重连重拉 + 5s 轮询对账三通道）、`/wf:status` 审计轨迹、`/wf:diagnose` 诊断取证、`/wf:debug` 状态落盘
 - **自动激活**（superpowers 式）：用户消息命中工作流意图且会话无状态 → 注入一次性 `/wf:intake` 提示，不自动开任务
 - **项目级角色定制**：`.workflow/overrides/<role>.md` 按项目覆盖角色行为（见「项目级角色定制」专节）
@@ -118,10 +118,10 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 插件改动生效方式：**TUI 改动需 `bun run build` + 完全重启 TUI 进程**（宿主对 TUI 插件模块路径级缓存，`/reload` 不重读——用 `./scripts/tui-restart.sh`）；server 改动 watcher 按内容指纹热载即效；仅改 `opencode.jsonc` 配置可 `/reload`。首轮真机跑一遍：
 
-1. 开 session → 侧边栏显示 `── Workflow ──` 20 行面板且**不崩**；`/wf:intake probe-test` 回车 → toast 弹出 guidance + 面板变 F0 intake + 系统提示出现 `<context key="wf.phase">` 块
+1. 开 session → 侧边栏显示 `── Workflow ──` 20 行面板且**不崩**；`/wf:intake probe-test` 回车 → toast 弹出 3-4 行 brief（非全文墙；guidance 全文仍在系统提示）+ 面板变 F0 intake + 系统提示出现 `<context key="wf.phase">` 块
 2. `/wf:ping` 回车 → 即时 toast「wf 角色：7/7 已注册」（主轨：回车拦截 → RPC exec）
 3. 输入 `/wf` 从下拉菜单**选择** `/wf:status` → 输出作为消息注入会话 inbox（降级轨，不唤醒模型；TUI 里可见于 /inbox）
-4. 终端切到后台再触发一次命令 → 系统级通知弹出（attention.notify；仅 ⚠️/❌/FAIL 类重要信号）
+4. 终端切到后台再触发一次命令 → 系统级通知弹出（attention.notify；仅 server 结构化 `level==="warn"`——旧 ⚠️/❌/FAIL 全文正则已废除，含 ⚠️ 行的正常流转不再误弹）
 5. （调试期可选）`WF_DEBUG=1 ./scripts/tui-restart.sh` → 探针写 `.workflow/_debug/tui-refresh.log`（loaded/slot-render/build/recv 序列）
 
 ## 角色档位跟随（M16-r43 动态路由）
