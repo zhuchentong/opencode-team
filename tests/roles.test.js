@@ -217,6 +217,9 @@ test("M16-r32 瘦身预算：各产物的体积/结构约束写入对应角色�
   assert.match(renderRole("builder-reviewer"), /≤8KB/, "builder-reviewer 应含体积预算");
   // learner：lessons ≤6KB
   assert.match(renderRole("learner"), /≤6KB/, "learner 应含 lessons 预算");
+  // builder：执行回执 ≤4KB（M16-r51：2KB→4KB——真机 test_005 回执裁到 2003B 贴线损质）
+  assert.match(renderRole("builder"), /≤4KB/, "builder 应含回执 ≤4KB 预算（M16-r51）");
+  assert.doesNotMatch(renderRole("builder"), /回执[^。]*≤2KB/, "builder 回执不得回退到 2KB");
 });
 
 test("M16-r33 写入者契约：产出角色自写产物+patch 修订+回执禁全文（防回归）", () => {

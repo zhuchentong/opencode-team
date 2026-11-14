@@ -174,7 +174,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
-          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤${CHUNK_KB}KB：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB——M16-r51 回执上限自 2KB 放宽，不再绑 CHUNK_KB 分段阈值：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
       lines.push(...dynamicTail(st, L)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread

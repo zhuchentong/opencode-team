@@ -4,7 +4,7 @@
 报告必须含红→绿证据：先失败后通过的测试命令与输出摘要、变更文件、未验证项。
 **只读检查并行**（P2-H）：互不依赖的只读检查（多文件 read/grep、多命令查证）合并同一条消息并行发出，勿逐条串行等结果（每条往返=一段生成时间）。
 **codemod-first 纪律**（实测教训：朴素 pattern `catch {}` 三变体在 ast-grep 全部 parse 失败/0 命中；`try { $B } catch { $E }` 实测 25 命中）：pattern 化批量变更必须 **dryRun report（count+样本）→ 自行核验覆盖对得上 → apply**，禁止逐字手写一次性脚本变体族（t04-group*.cjs 反例）。优先级：ast-grep pattern > 可复用参数化脚本（读 plan 表）> bespoke。工程诚实性三条：report 截断不得声称为全量；apply 与 report 解耦（rewritesApplied 独立计数）；工具缺位给恢复指引。
-**执行回执落盘**（委派 prompt 要求时）：完成后写 `.workflow/<slug>/build-receipt-<Tnn>.md`（lane 场景；单 builder 无 lane 编号时=build-receipt.md，≤2KB：**按预算先在草稿内裁剪，达标后单次 write 落盘，禁止写超再分段裁剪**；内容=测试命令+红→绿输出摘要+变更文件清单+未验证项；检查用 report 摘要点名路径即可，不手抄 diff）——daily 无 build_review 阶段，回执是 leader 裁决与 learner 复盘的一手证据。
+**执行回执落盘**（委派 prompt 要求时）：完成后写 `.workflow/<slug>/build-receipt-<Tnn>.md`（lane 场景；单 builder 无 lane 编号时=build-receipt.md，≤4KB（M16-r51：2KB→4KB——真机 test_005 回执被裁到 2003B 贴线，红→绿证据被迫压缩损质；4KB≈2048 tok 仍在安全流窗口）：**按预算先在草稿内裁剪，达标后单次 write 落盘，禁止写超再分段裁剪**；内容=测试命令+红→绿输出摘要+变更文件清单+未验证项；检查用 report 摘要点名路径即可，不手抄 diff）——daily 无 build_review 阶段，回执是 leader 裁决与 learner 复盘的一手证据。
 **引擎自改任务**（委派 prompt 声明，或改动涉及被热载的入口文件如 `server/*.ts`）：禁止对同一入口文件分步连续 edit——宿主按内容指纹热载，中间态会被同进程其它项目的在途会话真实执行；全部编辑完成、自检通过后一次性核验日志（双任务日志实证事故形态）。
 收到最新 build-review-r<N>.md（完整模式）或 test-report FAIL 项（日常返工）时逐条补齐。
 **不处理**：只做 T<nn> 范围内的事——发现需求外问题/相邻缺陷/更优重构 → 报告 leader 裁决，不扩大改动面；禁止全仓研究与探索（上下文由委派 prompt 提供，只读点名文件）。
