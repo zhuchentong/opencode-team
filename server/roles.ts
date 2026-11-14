@@ -1,7 +1,7 @@
 // wf-workflow — M16-r31：角色内容插件托管（B1 文件同步主路径）——域门面。
 // T05（arch-r1-host-split）：通用决策+IO 已抽至 managed-sync.ts；本文件只留角色域语义：
 // phaseChain 结构事实渲染 / renderRole 全文（标记+body）/ fm 快照 / 标记解析 / 路径解析 / setup 接线。
-// 安全语义逐字保留：opt-in（options.syncRoles）+ 写前备份 + 标记区分托管/自有 + 无标记不覆盖 + hash 同跳过；
+// 安全语义逐字保留：默认开启（options.syncRoles 显式 false 关闭，v2）+ 写前备份 + 标记区分托管/自有 + 无标记不覆盖 + hash 同跳过；
 // create 仅 missing 时读 fm 快照（惰性 getter，与旧「missing 分支才读」时序同源），已存在文件 fm 绝不触碰。
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -108,10 +108,11 @@ export function roleHostFile(rolesDir: string, name: RoleName): string {
   return path.join(rolesDir, `${name}.md`);
 }
 
-// setup 接线（fail-soft）：opt.syncRoles 开启时同步角色文件；异常不阻塞插件加载。返回 dispose（空保持组装一致）。
+// setup 接线（fail-soft）：默认开启（v2：显式 false 关闭——与 tierAgents/syncSkills 同款默认开语义）；
+// 异常不阻塞插件加载。返回 dispose（空保持组装一致）。
 export function registerRoleSync(host: Host, opt: any): { dispose: () => void } {
   try {
-    if (opt?.syncRoles !== true) return { dispose() {} };
+    if (opt?.syncRoles === false) return { dispose() {} };
     const dir = resolveRolesDir(opt);
     const report = syncRoles(dir, { backup: true });
     const summary = report.map((r) => `${r.name}:${r.action}`).join(" ");

@@ -259,3 +259,17 @@ test("M16-r34 日常模式：leader 默认日常流+S 亲自实现+reviewer verd
   // tester：日常只用 verify
   assert.match(renderRole("tester"), /日常模式（默认）只用 mode=verify/, "tester 日常只用 verify");
 });
+// v2：syncRoles 默认开启（显式 false 关闭，与 tierAgents/syncSkills 同款语义）——
+// registerRoleSync 门控纯断言：缺省/undefined=开；true=开；仅 false=关（no-op dispose）。
+test("v2 syncRoles 默认开：registerRoleSync 门控（false 关闭，缺省/true 开启）", async () => {
+  const { registerRoleSync } = await import("../server/roles.ts");
+  const notified = [];
+  const host = { notify: (level, text) => notified.push({ level, text }) };
+  // 关闭：显式 false → 零 notify
+  const off = registerRoleSync(host, { syncRoles: false, selfModRoot: "/nonexistent-probe-root" });
+  assert.equal(typeof off.dispose, "function");
+  assert.equal(notified.length, 0, "显式 false 不得触发同步通知");
+  // 开启：缺省 syncRoles → 走同步路径（notify 出角色同步行；目录解析失败被 fail-soft 吞掉也不落关闭分支）
+  registerRoleSync(host, { selfModRoot: "/nonexistent-probe-root" });
+  assert.ok(notified.some((n) => n.text.includes("角色同步")), "缺省（无 syncRoles 键）应默认开启同步");
+});

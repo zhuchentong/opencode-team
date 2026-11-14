@@ -39,4 +39,4 @@ bun tui-tests/tui-render.harness.ts   # 单独跑 TUI harness（非 bun test 文
 
 - 改 `tui/` 源码：`bun run build` + `./scripts/tui-restart.sh`（宿主对 TUI 插件模块路径级永久缓存，`/reload` 不重读）。
 - 仅改 server/guidance/roles：server 侧按内容指纹热载即效，无需重建。
-- 角色模板改动生效前提：宿主 `opencode.jsonc` 插件 options `"syncRoles": true`；改完 `/wf:ping` 确认 8 角色 managed 无 stale。
+- 角色模板改动生效前提：宿主 `opencode.jsonc` 插件 options（v2 起 syncRoles 默认开启，显式 false 才需配置）；改完 `/wf:ping` 确认 8 角色 managed 无 stale。
