@@ -190,9 +190,12 @@ test("A3 daily building 派发策略绑 size：M/L 并行优先（lane 表驱动
   assert.ok(!m2.match(/每批 ≤4/), "M 不分批（分批仍 L 专属）");
 });
 
-test("D daily intake 指引：question 批量优先 + 需求基线 baseline.md + gitignore 口径（.learnings 默认入库）", () => {
+test("D daily intake 指引：question 批量优先 + 需求基线 baseline.md + gitignore 口径（.learnings 默认 ignore，M16-r52 F4 翻转）", () => {
   const g = guidance("intake", blank({ mode: "daily", size: "M" }));
   assert.match(g, /批量优先/, "澄清批量化");
   assert.match(g, /baseline\.md/, "需求基线落盘");
-  assert.match(g, /\.workflow\/（.learnings\/ 默认入库随交付提交/, "F4 口径：gitignore 只要求 .workflow/");
+  assert.match(g, /\.gitignore 含 \.workflow\/ 与 \.learnings\//, "M16-r52：gitignore 同时要求两目录");
+  assert.match(g, /agent 生成目录默认不入库/, "F4 翻转口径：默认 ignore");
+  assert.match(g, /显式删 \.learnings\/ 的 ignore 行/, "入库=显式开启路径在位");
+  assert.ok(!/默认入库随交付提交/.test(g), "不得残留旧「默认入库」口径");
 });

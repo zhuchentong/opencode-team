@@ -40,7 +40,7 @@ export const REPORT_META = "wf.report";
 // 本表只持 name→description（注册时按名单遍历取值）。键集与 FLOW_CMD_NAMES 相等由
 // tests/flows.test.js 断言锁死（新增/删除流转命令只改 lib 名单 + 此表补描述）。
 export const FLOW_DESCRIPTIONS: Record<string, string> = {
-  "wf:intake": "工作流入口：澄清需求/读 .learnings/补 gitignore（参数=slug）",
+  "wf:intake": "工作流入口：澄清需求/读 .learnings/补 gitignore（.workflow 与 .learnings 默认 ignore）（参数=slug）",
   "wf:plan": "进入 planning：委派 wf/planner 产出 plan.md",
   "wf:review": "进入 review（并发委派：planner-reviewer ∥ tester feasibility），≤3 轮",
   "wf:test-design": "进入 test_design：双通道关卡（须 test-plan.md）；冻结接口排 lane + tester(design) 写红验收测试（M16-r28：原 assign 并入）",

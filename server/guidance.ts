@@ -14,8 +14,9 @@ export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:int
 // done-git-delivery-confirm T01：done 交付确认指令——仅 st.doneGit.isGit 时渲染（无记账=输出字节级不变，
 // 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
 // F4（用户报告竞态实证：并行 learner 在提交后继续写 .learnings/ → 提交后工作区复脏）：git 项目流程
-// 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前，
-// 提交范围含 .learnings/ 随总结入库；确认批准后不得再有新的经验写入。
+// 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前；
+// 确认批准后不得再有新的经验写入。M16-r52：.learnings/ 默认策略翻转「入库→ignore」（intake 补
+// gitignore），提交后复脏竞态机制性消失——顺序纪律保留为兜底；希望经验随交付的项目显式删 ignore 行。
 function doneGitLine(st: WfState): string | null {
   if (!st.delivery?.doneGit?.isGit) return null; // R3 T3.1 子步 D
   const opts = st.delivery.doneGit.hasRemote
@@ -24,7 +25,7 @@ function doneGitLine(st: WfState): string | null {
   return `📦 交付确认（git）：检测到 git 环境。流程顺序固定「总结 → 提交/不提交 → 完成」：审计汇报与经验沉淀全部落盘后` +
     `（非 S 级须等 wf/learner 完成回执，S 级须先自写 lessons），才用 question 工具询问用户是否提交代码（${opts}）；` +
     "未经用户批准不得 commit/push；批准后先跑项目门禁（如 bun run check）通过才提交，" +
-    "提交范围=本任务代码+.learnings/ 经验文件（经验默认入库，确认前落盘，提交后不得再写），" +
+    "提交范围=本任务代码（.learnings/ 已默认 ignore 不入提交，M16-r52；确认前落盘，提交后不得再写），" +
     "只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
 }
 export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
@@ -132,7 +133,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
     case "intake": return [
       `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
       `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
-      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/（.learnings/ 默认入库随交付提交，仅项目选择不入库时才加它的 ignore）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
+      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
       S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
       `完成 → wf_command(name="wf:plan")`,
@@ -218,7 +219,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
   switch (phase) {
     case "intake": return [
       `【wf 工作流｜intake】slug=${s}`,
-      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/（.learnings/ 默认入库随交付提交，仅项目选择不入库时才加它的 ignore）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
+      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
       `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
       `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
       `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,

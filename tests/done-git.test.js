@@ -39,7 +39,7 @@ const toDone = async (h, slug) => {
   await h.run("wf:intake", slug);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true }); // v2：lane 表关卡记账
   await h.run("wf:build");
   await h.run("wf:test");
   h.patch({ testReportVerdict: "PASS" });
@@ -92,7 +92,7 @@ test("F4：git 项目 done 文案串行——learner 回执门控交付确认+�
   const h = await mkHarness(dir);
   const out = await toDone(h, "git-f4");
   assert.match(out, /总结 → 提交\/不提交 → 完成/, "F4：顺序固定并写入文案");
-  assert.match(out, /提交范围=本任务代码\+\.learnings\//, "F4：经验文件随交付入库");
+  assert.match(out, /提交范围=本任务代码（\.learnings\/ 已默认 ignore/, "M16-r52 F4 翻转：经验默认 ignore 不入提交");
   assert.match(out, /确认前落盘，提交后不得再写|回执到齐前不得发起交付确认/, "F4：确认前经验全部落盘（防提交后复脏）");
   h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
 });
