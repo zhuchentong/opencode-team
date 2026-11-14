@@ -109,7 +109,7 @@ const mkCtx = () => {
     instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
     tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
   });
-  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
+  return { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs, entries, hook: () => hookFn };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");

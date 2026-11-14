@@ -80,9 +80,9 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
 //   updatedAt 分级活跃/休眠（休眠=可能已废弃，同样先裁决再开工——唤醒后即干扰源）。
 export interface ActiveOther { slug: string; phase: string | null; directory: string | null; updatedAt: string | null }
 // 目录比较（尾斜杠归一；任一侧空=false=判不出不算自改，fail-open 宁缺勿滥告警）
+const normDir = (d: unknown) => String(d ?? "").replace(/[\\/]+$/, "");
 export function isSelfModDir(taskDir: unknown, pluginRoot: unknown): boolean {
-  const norm = (d: unknown) => String(d ?? "").replace(/[\\/]+$/, "");
-  const a = norm(taskDir), b = norm(pluginRoot);
+  const a = normDir(taskDir), b = normDir(pluginRoot);
   return !!a && !!b && a === b;
 }
 // ⚠️ 前缀（成功轨告警，非拒绝——❌ REJECT_PREFIX 互斥不变量由 tests/brief-level.test.js 守卫；

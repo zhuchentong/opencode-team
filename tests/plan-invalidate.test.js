@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
-import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 
 const DIR = "/tmp/opencode/wf-plan-inval";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -24,7 +24,7 @@ const mkCtx = () => {
     instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
     tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
   });
-  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
+  return { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs, entries, hook: () => hookFn };
 };
 // M16-r44：方案确认交互模拟（leader question，选项含锚定批准标签）
 const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",

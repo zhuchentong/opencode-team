@@ -307,6 +307,18 @@ var ZH = {
 };
 var zhOf = (phase) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
 var mark = (ok) => ok ? "✓" : "✗";
+var roleOf = (ph) => ({
+	planning: "wf/planner",
+	review: "wf/planner-reviewer",
+	test_design: "wf/tester",
+	building: "wf/builder",
+	reconcile: "wf/builder",
+	build_review: "wf/builder-reviewer",
+	testing: "wf/tester",
+	fixing: "wf/fixer",
+	done: "wf/learner",
+	retrospect: "wf/learner"
+})[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
 var fmtKB = (b) => {
 	const n = Number(b ?? 0);
 	return n > 0 ? `${(n / 1024).toFixed(1).replace(/\.0$/, "")}k` : "";
@@ -487,18 +499,6 @@ var buildRows = (s, err, oth, othScope, T, now, w) => {
 	c[2] = T.text.action.primary;
 	const totalSec = s.finishedAt && s.startedAt ? (Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1e3 : s.startedAt && now ? (now - Date.parse(s.startedAt)) / 1e3 : null;
 	if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
-	const roleOf = (ph) => ({
-		planning: "wf/planner",
-		review: "wf/planner-reviewer",
-		test_design: "wf/tester",
-		building: "wf/builder",
-		reconcile: "wf/builder",
-		build_review: "wf/builder-reviewer",
-		testing: "wf/tester",
-		fixing: "wf/fixer",
-		done: "wf/learner",
-		retrospect: "wf/learner"
-	})[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
 	const curRole = roleOf(s.phase);
 	const curVar = curRole ? s.tiers?.[curRole] : null;
 	if (curRole && curVar) {

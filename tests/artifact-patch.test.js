@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
-import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 
 // 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
 
@@ -31,7 +31,7 @@ const mkCtx = () => {
     sessions: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },
     tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
   });
-  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, hook: () => hookFn };
+  return { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs, hook: () => hookFn };
 };
 // M16-r44：方案确认交互模拟（leader question，选项含锚定批准标签）
 const confirm = (m, sid) => m.hook()({ tool: "question", sessionID: sid, agent: "workflow",

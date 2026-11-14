@@ -59,9 +59,9 @@ test("T04 mkHostStub over 深合并：命名空间级浅合并+注册捕获面",
   assert.equal(typeof host.sessions.wait, "function", "未覆盖命名空间键保留缺省（浅合并非整体替换）");
   host.tools.transform(() => {});
   assert.equal(typeof sawDraft, "function", "tools.transform 覆盖生效");
-  // _ctx 逃生门（setup(ctx) 消费者装配同源）
-  assert.equal(host._ctx.session.instructions.entry && "ok", "ok", "_ctx 暴露底层 ctx 视图");
-  assert.equal(host._ctx.options.leaderOnly, false);
+  // rawCtx 逃生门（setup(ctx) 消费者装配同源）
+  assert.equal(host.rawCtx.session.instructions.entry && "ok", "ok", "rawCtx 暴露底层 ctx 视图");
+  assert.equal(host.rawCtx.options.leaderOnly, false);
 });
 
 test("T04 mkStoreStub：CAS 与 state.ts 契约同源", async () => {

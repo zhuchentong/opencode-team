@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
-import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 
 // 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
 
@@ -25,7 +25,7 @@ const mkCtx = (opts = {}) => {
   const hooks = []; // P2 报告剥离 hook 注册捕获
   let hookFn = null;
   // T04：装配收敛 helpers/host-stub（options.probe=false 关探针避免写盘噪音；捕获数组语义不变；
-  // setChat=对 _ctx 活写——adaptHost 闭包持同一 ctx 引用，setup 前写入生效）
+  // setChat=对 rawCtx 活写——adaptHost 闭包持同一 ctx 引用，setup 前写入生效）
   const host = mkHostStub({
     options: { probe: false, ...opts }, // 关探针避免写盘噪音
     location: { directory: DIR }, // P1：状态库路径按 location 解析
@@ -48,7 +48,7 @@ const mkCtx = (opts = {}) => {
     },
     tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
   });
-  return { ctx: host._ctx, store, tools: host._toolDefs, cmds: host._cmdDefs, entries, removed, prompts, hooks, hook: () => hookFn, setChat: (api) => { host._ctx.chat = api; } };
+  return { ctx: host.rawCtx, store, tools: host.toolDefs, cmds: host.cmdDefs, entries, removed, prompts, hooks, hook: () => hookFn, setChat: (api) => { host.rawCtx.chat = api; } };
   };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);

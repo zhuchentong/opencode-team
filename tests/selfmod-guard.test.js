@@ -9,6 +9,9 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+
+// updatedAt 工厂（模块级纯函数）
+const isoMs = (ms) => new Date(ms).toISOString();
 import { isSelfModDir, selfModWarnLine, evaluateTransition, FLOWS, FLOWS_DAILY } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts";
 import { createStore, scanActiveTasks, projectsListFile } from "../server/state.ts";
@@ -32,7 +35,7 @@ const mkCtx = () => {
     instructions: { put: async (i) => { entries.push(i); }, list: async () => entries },
     tools: { hook: (_ev, fn) => { hookFn = fn; return { dispose() {} }; } },
   });
-  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs, entries, hook: () => hookFn };
+  return { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs, entries, hook: () => hookFn };
 };
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const stOf = (sid) => {
@@ -69,19 +72,18 @@ test("A1 isSelfModDir：尾斜杠归一相等判自改；任一侧空=false（fa
 test("A1 v2 selfModWarnLine：空=null；⚠️ 前缀非 ❌；活跃/休眠分级+处置出口；无日期保守休眠；>5 折叠", () => {
   assert.equal(selfModWarnLine([]), null);
   const now = Date.parse("2026-11-13T12:00:00.000Z");
-  const iso = (ms) => new Date(ms).toISOString();
-  const one = selfModWarnLine([{ slug: "live-task", phase: "building", directory: "/x", updatedAt: iso(now - 3600e3) }], now);
+  const one = selfModWarnLine([{ slug: "live-task", phase: "building", directory: "/x", updatedAt: isoMs(now - 3600e3) }], now);
   assert.ok(one.startsWith("⚠️"), "⚠️ 前缀=成功轨告警");
   assert.ok(!one.includes("❌"), "不含 ❌（REJECT_PREFIX 不变量互斥）");
   assert.match(one, /live-task·building（活跃）/);
   assert.match(one, /引擎自改护栏/);
-  const dorm = selfModWarnLine([{ slug: "dormant-task", phase: "testing", directory: "/y", updatedAt: iso(now - 3 * 86400e3) }], now);
+  const dorm = selfModWarnLine([{ slug: "dormant-task", phase: "testing", directory: "/y", updatedAt: isoMs(now - 3 * 86400e3) }], now);
   assert.match(dorm, /dormant-task·testing（休眠≥3天未更新，最后 11-10/);
   assert.match(dorm, /可能已废弃/);
   assert.match(dorm, /\/wf:reset 清账/, "休眠处置出口并列给出");
   const undated = selfModWarnLine([{ slug: "u", phase: "review", directory: "/z", updatedAt: "x" }], now);
   assert.match(undated, /u·review（休眠，日期未知）/, "updatedAt 解析失败保守归休眠");
-  const six = selfModWarnLine(Array.from({ length: 6 }, (_, i) => ({ slug: `t${i}`, phase: "review", directory: "/x", updatedAt: iso(now - i * 3600e3) })), now);
+  const six = selfModWarnLine(Array.from({ length: 6 }, (_, i) => ({ slug: `t${i}`, phase: "review", directory: "/x", updatedAt: isoMs(now - i * 3600e3) })), now);
   assert.match(six, /6 个/); assert.match(six, / 等/);
   assert.ok(!/t5/.test(six), "第 6 项折叠不进清单");
 });

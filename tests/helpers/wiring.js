@@ -32,13 +32,13 @@ export async function mkWiringHarness(over = {}) {
   });
   const { dispose } = await registerCommands(host, deps);
   return {
-    run: (name, text = "") => host._cmdDefs.find((c) => c.name === name).execute({ sessionID: sid, prompt: { text } }),
+    run: (name, text = "") => host.cmdDefs.find((c) => c.name === name).execute({ sessionID: sid, prompt: { text } }),
     reports: deps.reportRows,
     events: deps.emitted,
     updated: deps.updated,
     host,
     deps,
-    cmds: host._cmdDefs,
+    cmds: host.cmdDefs,
     states,
     st: (s = sid) => states.get(s),
     // R3 T3.1 子步 B：verdicts 家族平铺键翻译进子对象（与真实写点形状同源——mock 漂移=真机哑火）

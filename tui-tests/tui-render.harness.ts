@@ -65,12 +65,14 @@ function ok(name: string, cond: boolean, detail?: string) {
   else { errors.push(name + (detail ? ` — ${detail}` : "")); console.log(`  ❌ ${name}${detail ? ` — ${detail}` : ""}`); }
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// keymap 层命令收集（模块级纯函数：filters→run 取 commands）
+const cmdsOf = (ks: any[]) => ks.map((f: any) => f()).flatMap((l: any) => l.commands ?? []);
 
 // ── mock 宿主 context（与 index.tsx 用到的 API 面对齐）───────────────
 const theme = {
   text: { base: "#fff", muted: "#888", action: { primary: "#0af" }, feedback: { error: "#f55", success: "#5f5" } },
 };
-function makeCtx(opts?: { noRouter?: boolean }) {
+function makeCtx(mk?: { noRouter?: boolean }) {
   const slots: Record<string, (props: any) => any> = {};
   const keymaps: any[] = [];
   let listSessions: any[] = [];
@@ -96,7 +98,7 @@ function makeCtx(opts?: { noRouter?: boolean }) {
       slot: (cfg: any) => { slots[cfg.append] = cfg.render; },
       panel: { open: () => false },
       toast: { show: (t: any) => { toasts.push(t); } },
-      ...(opts?.noRouter ? {} : { router }),
+      ...(mk?.noRouter ? {} : { router }),
     },
     keymap: { layer: (fn: any) => { keymaps.push(fn); } },
     renderer: { currentFocusedEditor: editor },
@@ -522,7 +524,7 @@ console.log(`插件 id: ${t.id}`);
 {
   const prevEnv = process.env.WF_COMPACT;
   const renderFrame = async (ctx: any, sid: string) => {
-    const { slots } = { slots: (ctx as any).__slots };
+    const { slots } = { slots: (ctx as any).wfSlots };
     const setup = await testRender(() => slots["sidebar.content"]({ sessionID: sid }), { width: 50, height: 24 });
     await setup.flush();
     const frame: string = setup.captureCharFrame();
@@ -533,7 +535,7 @@ console.log(`插件 id: ${t.id}`);
     const m = makeCtx();
     m.ctx.options = options;
     cleanups.push(t.setup(m.ctx as any)!);
-    (m.ctx as any).__slots = m.slots;
+    (m.ctx as any).wfSlots = m.slots;
     return m.ctx;
   };
   try {
@@ -584,7 +586,6 @@ console.log(`插件 id: ${t.id}`);
       const st2 = await testRender(() => s2["sidebar.content"]({ sessionID: "ses_p14c" }), { width: 50, height: 24 });
       await st2.flush();
       await sleep(100); // mount refresh 落地（latestSid 就位）
-      const cmdsOf = (ks: any[]) => ks.map((f: any) => f()).flatMap((l: any) => l.commands ?? []);
       const wfCmd = cmdsOf(k2).find((c: any) => c.id === "wf.exec");
       ok("P14c 主轨 wf.exec 层在位", !!wfCmd);
       editor.plainText = "/wf:open plan.md";
@@ -712,7 +713,7 @@ console.log(`插件 id: ${t.id}`);
   const findNode = (n: any, namePart: string): any => {
     if (!n) return null;
     if ((n.constructor?.name ?? "").includes(namePart)) return n;
-    for (const c of n._childrenInLayoutOrder ?? []) { const r = findNode(c, namePart); if (r) return r; }
+    for (const c of n["_childrenInLayoutOrder"] ?? []) { const r = findNode(c, namePart); if (r) return r; }
     return null;
   };
 
@@ -726,7 +727,7 @@ console.log(`插件 id: ${t.id}`);
       const root: any = (st as any).renderer?.root;
       const sb = findNode(root, "ScrollBox");
       ok("P16a 主轨树含 scrollbox", !!sb, sb ? "found" : "not found");
-      ok("P16a markdown 为 scrollbox 之子", !!sb && (sb._childrenInLayoutOrder ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Markdown")), sb ? String((sb._childrenInLayoutOrder ?? []).map((c: any) => c.constructor?.name)) : "no sb");
+      ok("P16a markdown 为 scrollbox 之子", !!sb && (sb["_childrenInLayoutOrder"] ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Markdown")), sb ? String((sb["_childrenInLayoutOrder"] ?? []).map((c: any) => c.constructor?.name)) : "no sb");
       await st.dispose();
     } catch (e: any) { ok("P16a 主轨滚动渲染不崩", false, e?.message); }
   }
@@ -776,7 +777,7 @@ console.log(`插件 id: ${t.id}`);
         const st = await testRender(() => router.registered[0].render({ data: { file: "plan.md", text: P16_LONG, bytes: 9000, path: "/p/plan.md", truncated: false } }), { width: 60, height: 30 });
         await st.flush();
         const sb = findNode((st as any).renderer?.root, "ScrollBox");
-        ok("P16c2 纯文本轨正文亦入 scrollbox（text 为其子）", !!sb && (sb._childrenInLayoutOrder ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Text")), sb ? String((sb._childrenInLayoutOrder ?? []).length) : "no sb");
+        ok("P16c2 纯文本轨正文亦入 scrollbox（text 为其子）", !!sb && (sb["_childrenInLayoutOrder"] ?? []).some((c: any) => (c.constructor?.name ?? "").includes("Text")), sb ? String((sb["_childrenInLayoutOrder"] ?? []).length) : "no sb");
         await st.dispose();
       } catch (e: any) { ok("P16c2 纯文本滚动轨不崩", false, e?.message); }
       finally { cat.markdown = savedM; }

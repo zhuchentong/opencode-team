@@ -32,7 +32,7 @@ function silentCatches(src) {
 const serverDir = new URL("../server/", import.meta.url);
 
 test("T01 静默 catch 清零：server/*.ts 空体/仅注释体 catch 总数 ≤3 且全在 observe.ts 探针路径", () => {
-  const files = fs.readdirSync(serverDir).filter((f) => f.endsWith(".ts")).sort();
+  const files = fs.readdirSync(serverDir).filter((f) => f.endsWith(".ts")).toSorted();
   const report = [];
   for (const f of files) {
     const src = fs.readFileSync(new URL(f, serverDir), "utf8");

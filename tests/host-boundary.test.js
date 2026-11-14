@@ -62,7 +62,7 @@ function stripCommentsStrings(src) {
 function ctxHits(src) {
   const hits = [];
   stripCommentsStrings(src).split("\n").forEach((l, idx) => {
-    for (const _m of l.matchAll(/(?:^|[^\w$.])ctx\s*\??\.\s*[a-zA-Z(]/g)) hits.push(idx + 1);
+    [...l.matchAll(/(?:^|[^\w$.])ctx\s*\??\.\s*[a-zA-Z(]/g)].forEach(() => hits.push(idx + 1));
   });
   return hits;
 }

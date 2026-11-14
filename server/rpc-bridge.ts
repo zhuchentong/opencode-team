@@ -8,6 +8,9 @@ import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计�
 import { readTierAgents, TIER_ROLES } from "./model-tier.ts"; // M16-r49：侧边栏档位视图（派生文件实况单一来源）
 import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 
+// rpc read 通用拒绝/错误载荷（纯函数，不捕获外层——顶层定义）
+const readDeny = (error: string) => ({ text: "", bytes: 0, path: "", truncated: false, error });
+
 export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, bus, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;
@@ -82,26 +85,25 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
         read: async (input: any) => {
           const file = String(input?.file ?? "");
           const sid = String(input?.sessionID ?? "");
-          const deny = (error: string) => ({ text: "", bytes: 0, path: "", truncated: false, error });
           try {
             const st = await load(sid);
-            if (!st || (!st.slug && !st.phase)) return deny("wf 无活动任务，无产物可读");
+            if (!st || (!st.slug && !st.phase)) return readDeny("wf 无活动任务，无产物可读");
             const recorded = Object.keys(st.artifacts ?? {});
-            if (!recorded.includes(file)) return deny(`产物未记账（不在产物清单内）：${file || "(空文件名)"}`);
+            if (!recorded.includes(file)) return readDeny(`产物未记账（不在产物清单内）：${file || "(空文件名)"}`);
             const dir = await resolveProjectDir(st, sid);
             const path = `${dir}/.workflow/${st.slug}/${file}`;
             let text: string;
             try {
               text = fs.readFileSync(path, "utf8");
             } catch {
-              return { ...deny(`产物已记账但文件缺失：${path}`), path };
+              return { ...readDeny(`产物已记账但文件缺失：${path}`), path };
             }
             const bytes = Buffer.byteLength(text, "utf8");
             const MAX = PAYLOAD_MAX; // shared/report.ts 单一来源（commands wf:open 同源）
             const truncated = bytes > MAX;
             return { text: truncated ? text.slice(0, MAX) : text, bytes, path, truncated };
           } catch (e) {
-            return deny(`wf read 失败：${String((e as Error)?.message ?? e)}`);
+            return readDeny(`wf read 失败：${String((e as Error)?.message ?? e)}`);
           }
         },
         // P2 主轨：TUI 本地命令经 exec 拿完整输出文本（methods 返回值通道，2.2.6 实证可用）。

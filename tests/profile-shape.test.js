@@ -59,7 +59,7 @@ test("R2 T2.1：nextFor 未知阶段 fallback=/wf:intake（双模式）；regist
   assert.equal(nextFor(blank(), "不存在阶段"), "/wf:intake");
   assert.equal(nextFor(blank({ mode: "daily" }), null), "/wf:intake");
   // 扩展面：注册临时 profile 后 profileOf 可取（不污染既有键——用独立 id）
-  registerProfile({ id: "__r2_probe__", flows: {}, gates: {}, phases: {} });
-  assert.ok(PROFILES.__r2_probe__, "registerProfile 写入注册表");
-  delete PROFILES.__r2_probe__; // 清理（测试隔离）
+  registerProfile({ id: "r2-probe", flows: {}, gates: {}, phases: {} });
+  assert.ok(PROFILES["r2-probe"], "registerProfile 写入注册表");
+  delete PROFILES["r2-probe"]; // 清理（测试隔离）
 });

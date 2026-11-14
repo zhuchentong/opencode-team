@@ -64,6 +64,12 @@ const ZH: Record<string, string> = {
 };
 const zhOf = (phase: any) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
 const mark = (ok: boolean) => (ok ? "✓" : "✗");
+// M16-r49：phase→role 映射（经 FOLD 归一，reconcile=building）；intake=leader 会话无派生角色；
+// 未派生/缺字段静默不显示。模块级纯函数（不捕获渲染闭包变量）。
+const roleOf = (ph: string | null): string | null =>
+  ({ planning: "wf/planner", review: "wf/planner-reviewer", test_design: "wf/tester",
+     building: "wf/builder", reconcile: "wf/builder", build_review: "wf/builder-reviewer",
+     testing: "wf/tester", fixing: "wf/fixer", done: "wf/learner", retrospect: "wf/learner" } as Record<string, string | null>)[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
 // M16-r46 批1：产物清单格式化（KB 大小 0.5k/1.2k；行=▸+名字 fit 18+✓/✗/免+大小）——模块级纯函数
 const fmtKB = (b: unknown) => { const n = Number(b ?? 0); return n > 0 ? `${(n / 1024).toFixed(1).replace(/\.0$/, "")}k` : ""; };
 const artLine = (name: string, ok: boolean, kb: string, exempt?: boolean) =>
@@ -228,11 +234,7 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
   if (totalSec !== null && Number.isFinite(totalSec)) t[2] += ` · 共 ${fmtElapsed(totalSec)}`;
   // M16-r49：当前阶段档位——s.tiers（server 读项目级派生文件实况，role→variant）。放 t[3] 空行：
   // 进度行已被「共 耗时」占满，窄面板 wrapMode:"none" 硬裁剪会截掉尾部追加，独立一行最稳。
-  // phase→role 映射经 FOLD 归一（reconcile=building）；intake=leader 会话无派生角色；未派生/缺字段静默不显示。
-  const roleOf = (ph: string | null): string | null =>
-    ({ planning: "wf/planner", review: "wf/planner-reviewer", test_design: "wf/tester",
-       building: "wf/builder", reconcile: "wf/builder", build_review: "wf/builder-reviewer",
-       testing: "wf/tester", fixing: "wf/fixer", done: "wf/learner", retrospect: "wf/learner" } as Record<string, string | null>)[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
+  // phase→role 映射见模块级 roleOf；intake=leader 会话无派生角色。
   const curRole = roleOf(s.phase);
   const curVar = curRole ? s.tiers?.[curRole] : null;
   if (curRole && curVar) { t[3] = `  ⚡ 档位 ${curRole.replace("wf/", "")}:${str(curVar)}`; c[3] = T.text.action.primary; }

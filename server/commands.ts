@@ -348,8 +348,8 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           if (!ks.length) return "lane 列表为空。用法：/wf:lane set <Tnn> <子会话ID|@别名> [worktree路径] [--areas=T01,T02]";
           return ks.map((k: string) => {
             const v = lanes[k];
-            const areas = v.areas?.length ? ` areas=${v.areas.join("+")}` : "";
-            return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}${areas} [${v.status ?? "active"}]（${String(v.lastUsedAt ?? v.at ?? "").slice(0, 19)}）`;
+            const areasSuffix = v.areas?.length ? ` areas=${v.areas.join("+")}` : "";
+            return `  ${k} → ${v.sessionID}${v.worktree ? ` @ ${v.worktree}` : ""}${areasSuffix} [${v.status ?? "active"}]（${String(v.lastUsedAt ?? v.at ?? "").slice(0, 19)}）`;
           }).join("\n");
         }
         // M16-r39 T07：归一 withStateRetry——load(1)=首快照 st0、load(n)=重载；apply=applyOp

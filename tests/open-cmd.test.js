@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import plugin from "../server/index.ts";
-import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（_ctx=setup(ctx) 消费者视图）
+import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 import { READONLY_CMDS } from "../server/lib.ts";
 
 const DIR = "/tmp/opencode/wf-open";
@@ -26,7 +26,7 @@ const mkCtx = () => {
     },
     sessions: { get: async () => ({ projectID: "po1", agent: "workflow", location: { directory: DIR } }) },
   });
-  return { ctx: host._ctx, tools: host._toolDefs, cmds: host._cmdDefs };
+  return { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs };
 };
 
 const cmd = (m, name) => m.cmds.find((c) => c.name === name);

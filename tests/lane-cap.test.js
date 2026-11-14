@@ -19,6 +19,18 @@ const activeLanes = (n) => Object.fromEntries(
     { sessionID: `ses_${i}`, worktree: null, at: "t", status: "active", lastUsedAt: "t", areas: ["src/a"] }]),
 );
 
+// 复刻 index.ts:43-47 的组装逻辑做纯函数断言（组装逻辑本身由 integration 链覆盖）——模块级纯函数
+const buildLims = (opt) => {
+  const LIMS = { ...LIMITS };
+  for (const k of Object.keys(LIMS)) {
+    const v = Number(opt?.limits?.[k]);
+    if (Number.isInteger(v) && v >= 1) LIMS[k] = v;
+  }
+  return LIMS;
+};
+// v2 多 lane 返工路由测试态工厂：rounds.test_fix=1（模块级纯函数）
+const fixSt = (lanes) => ({ ...mkSt(lanes), rounds: { plan_review: 0, build_review: 0, test_fix: 1 } });
+
 test("默认值单点：lane_cap=4 且与 LANE_CAP 常量同源", () => {
   assert.equal(LANE_CAP, 4);
   assert.equal(LIMITS.lane_cap, LANE_CAP);
@@ -39,15 +51,6 @@ test("diagnose 不因 lane_cap 键输出余量垃圾行（rounds.lane_cap 永不
 });
 
 test("index 同款过滤：仅正整数生效，非法值回落 LANE_CAP", () => {
-  // 复刻 index.ts:43-47 的组装逻辑做纯函数断言（组装逻辑本身由 integration 链覆盖）
-  const buildLims = (opt) => {
-    const LIMS = { ...LIMITS };
-    for (const k of Object.keys(LIMS)) {
-      const v = Number(opt?.limits?.[k]);
-      if (Number.isInteger(v) && v >= 1) LIMS[k] = v;
-    }
-    return LIMS;
-  };
   assert.equal(buildLims({ limits: { lane_cap: 4 } }).lane_cap, 4);
   assert.equal(buildLims({ limits: { lane_cap: "4" } }).lane_cap, 4); // 数字字符串经 Number() 转换合法（index 既有语义）
   for (const bad of [0, -1, 1.5, null, "abc"]) {
@@ -65,7 +68,6 @@ test("full 模式 building guidance 也渲染 lanes 动态尾（盲区补齐）"
 });
 
 test("v2 多 lane 返工路由：building 返工行按活跃 lane 数条件渲染（≥2 走归属路由，否则原文）", () => {
-  const fixSt = (lanes) => ({ ...mkSt(lanes), rounds: { plan_review: 0, build_review: 0, test_fix: 1 } });
   // ≥2 活跃 lane → 多 lane 路由版
   const g2 = guidance("building", fixSt(activeLanes(2)));
   assert.match(g2, /归属 lane/); assert.match(g2, /@Tnn/); assert.match(g2, /wf\/fixer/);
