@@ -220,6 +220,10 @@ test("M16-r32 瘦身预算：各产物的体积/结构约束写入对应角色�
   // builder：执行回执 ≤4KB（M16-r51：2KB→4KB——真机 test_005 回执裁到 2003B 贴线损质）
   assert.match(renderRole("builder"), /≤4KB/, "builder 应含回执 ≤4KB 预算（M16-r51）");
   assert.doesNotMatch(renderRole("builder"), /回执[^。]*≤2KB/, "builder 回执不得回退到 2KB");
+  // test_007 lessons 契约化锚：commit 交付/主树回执路径/planner 共享基建归属
+  assert.match(renderRole("builder"), /commit hash/, "回执含 commit hash（lesson1：树内交付即 commit）");
+  assert.match(renderRole("builder"), /主树绝对路径/, "回执主树路径（lesson6：worktree 副本清理即丢）");
+  assert.match(renderRole("planner"), /共享基建/, "波次拆分基建归属首波（lesson2）");
 });
 
 test("M16-r33 写入者契约：产出角色自写产物+patch 修订+回执禁全文（防回归）", () => {

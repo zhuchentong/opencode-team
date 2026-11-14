@@ -177,7 +177,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
           // M16-r51：回执上限 2KB→4KB（test_005 实证 2003B 贴线损质），与 CHUNK_KB 分段阈值（2KB=防流中断窗口）解耦——证据细节在 git 历史，不进模型可见面
-          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB：测试命令+红→绿输出摘要+变更文件清单+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB：测试命令+红→绿输出摘要+变更文件清单+未验证项+areas 越界声明+commit hash）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。**回执路径=主树绝对路径**（勿让 builder 写 worktree 相对路径——树内 .workflow/ 是 gitignored 副本，清理即丢）。`,
+          `lane 登记纪律：放行波次前一次性串行登记该波全部 lane（多 builder 运行期并发 wf:lane set 曾触发 wf.db 写错误）；builder 运行期禁增量登记，补登等该 builder 回执后的空窗。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
       lines.push(...dynamicTail(st, L)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread

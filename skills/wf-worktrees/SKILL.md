@@ -20,13 +20,14 @@ description: >
 - 主树被运行中宿主热载——**全程不在主树改业务代码**，合并窗口由 leader 统一执行。
 
 ## 合并（leader）
-1. builder 回执齐备（含红→绿证据）后才合并。
+0. 合并前校验树内 `git status` 干净（builder 已 commit；未 commit 残留 → 退回 builder 固化，勿代写）。
+1. builder 回执齐备（含红→绿证据）后才合并；**回执必须已双写主树**（`<主树>/.workflow/<slug>/build-receipt-<Tnn>.md` ls 验证存在且非空——树内 `.workflow/` 是 gitignored 副本，清理序会 rm 它；`cp 2>/dev/null &&` 静默短路曾致回执丢失、靠 sessionID 续接补档）。
 2. md5 逐文件核验树内产物与主树一致（防部分拷贝）。
 3. 主树跑全量门禁（树内绿≠主树绿，环境可能不同）。
 4. 数字不符/冲突 → 停下问用户，不自动解决。
 
 ## 清理（顺序固定，ERR-001）
-1. 先 `rm` 树内已合并的 untracked 副本（产物 md 等）；
+1. 先 `rm` 树内已合并的 untracked 副本（产物 md 等；回执主树副本已在合并序第 1 步验证）；
 2. **`git restore .`**（tracked M 也阻塞非 force 移除——只 rm untracked 不够）；
 3. `worktree remove`（**非 force**；force 仅在用户明确确认后使用）。
 
