@@ -16,7 +16,7 @@
 //   refresh 变化时/recv 每次到达/notify/server-connected）。
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal } from "solid-js";
-import { Wf } from "../shared/rpc.ts";
+import { Wf, RPC_EVENT_PREFIX, RPC_EVENT_REPORT, RPC_EVENT_UPDATED } from "../shared/rpc.ts";
 import { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本归一（server/TUI 同源）
 import { createDeduper } from "./dedup.ts"; // R3 T3.3：去重单实现（server/TUI 共用；薄封装）
 import { setupNotify } from "./notify.ts"; // R3 T3.4：toast+OS 通知层
@@ -89,11 +89,11 @@ export default Plugin.define({
       offData = context.data?.listen?.((ev: any) => {
         const details = ev?.details ?? ev;
         const type = String(details?.type ?? "");
-        if (!type.startsWith("rpc.wf.")) return;
+        if (!type.startsWith(RPC_EVENT_PREFIX)) return;
         if (!locOk(details)) return;
         const payload = details?.data ?? details;
-        if (type === "rpc.wf.report") toastReport(payload, "data");
-        else if (type === "rpc.wf.updated") void refresh();
+        if (type === RPC_EVENT_REPORT) toastReport(payload, "data");
+        else if (type === RPC_EVENT_UPDATED) void refresh();
       });
     } catch { /* data.listen 不可用则走其余通道 */ }
     // P4① server.connected 重拉（goal.tsx 三件套：断线窗口丢失的 rpc.* 不重放，重连即全量补偿）

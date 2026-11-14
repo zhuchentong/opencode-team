@@ -21,6 +21,7 @@ import {
 } from "./lib.ts"; // R2 T2.4/T2.5：flowFor/evaluateTransition/leaderOnlyReject/isSelfModDir/selfModWarnLine/briefFallback 随体迁出；+renderReport 文本链单点
 import { briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
 import { ENTRY_KEY, HINT_KEY, withStateRetry, scanActiveTasks, type Store } from "./state.ts"; // P1-E：lane 准入复用跨库扫描（勿新建计数器）
+import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 import { type Observer, swallow, listSwallows } from "./observe.ts";
 import { type Host } from "./host.ts"; // T03：registerCommands 收 Host（原 ctx:any；入口 setup(ctx) 签名不变） // T01：swallow 记账 + diagnose 摘要接线
 // R2 T2.4/T2.5（arch-r2-profile-statemachine）：transition/inject 编排与命令中间件链、命令总线提取——
@@ -275,7 +276,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
         let text: string;
         try { text = await fsReadFile(path, "utf8"); } catch { return `❌ 产物已记账但文件缺失：${path}`; }
         const bytes = Buffer.byteLength(text, "utf8");
-        const MAX = 64 * 1024;
+        const MAX = PAYLOAD_MAX; // shared/report.ts 单一来源（rpc-bridge read 同源）
         const truncated = bytes > MAX;
         return [`📄 ${path}（${(bytes / 1024).toFixed(1)}k）`, "", truncated ? `${text.slice(0, MAX)}\n…（超 64KB 截断）` : text].join("\n");
       },

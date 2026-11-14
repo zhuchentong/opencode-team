@@ -5,11 +5,11 @@
 // create 仅 missing 时读 fm 快照（惰性 getter，与旧「missing 分支才读」时序同源），已存在文件 fm 绝不触碰。
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { PHASE_ORDER, FOLD } from "../shared/phases.ts";
 import { VERSION } from "./lib.ts";
 import { type Host } from "./host.ts"; // T03：registerRoleSync 收 Host
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
+import { xdgConfigDir } from "./paths.ts"; // XDG 派生单点
 import {
   contentHash12, decideSync, syncAll, statusAll,
   type SyncAction, type SyncStatus, type SyncReport, type SyncTarget,
@@ -98,8 +98,7 @@ export function roleSyncStatus(rolesDir: string): { name: string; status: RoleSt
 // 宿主全局 agents/wf 目录解析：options.rolesDir 优先，回退 XDG_CONFIG_HOME 或 ~/.config/opencode/agents/wf
 export function resolveRolesDir(opt: any): string {
   if (opt?.rolesDir) return String(opt.rolesDir);
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(base, "opencode", "agents", "wf");
+  return xdgConfigDir("opencode", "agents", "wf"); // 派生单点（server/paths.ts）
 }
 
 // M16-r38：leader 宿主 agent ID=workflow（顶层 agents/workflow.md），其余 7 角色在 agents/wf/ 下。

@@ -6,6 +6,9 @@
 // 「异常时经 options.limits.lane_cap 显式调低」处置）。常量置顶：LIMITS.lane_cap 引用它（默认值单一来源）。
 export const LANE_CAP = 4;
 
+// 毫秒/天换算单点（state GC 的 STALE_MS、policy 告警分级共用；禁各端散落 24*3600*1000 字面量）
+export const DAY_MS = 24 * 3600 * 1000;
+
 // P2：limits 可按实例覆盖（partial 覆盖默认 LIMITS）；lane_cap=builder lane 并发软准入（v2 提速）
 export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3, lane_cap: LANE_CAP };
 export type LimitKey = keyof typeof LIMITS;

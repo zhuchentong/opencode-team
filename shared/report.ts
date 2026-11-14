@@ -6,6 +6,9 @@
 
 export type ReportLevel = "info" | "warn";
 
+// RPC/回执报文截断上限（commands.ts publishOutput 与 rpc-bridge read 同源共用，禁各端散落 64*1024）
+export const PAYLOAD_MAX = 64 * 1024;
+
 // 报告对象（wire 投影不变；id 为幂等消费键，optional 兼容旧载荷）
 export interface Report {
   id: string; // reportId(sessionID, at)

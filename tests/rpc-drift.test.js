@@ -3,13 +3,17 @@
 // 前提——任何一端形状漂移都让事件/调用静默失联（ERR-20261110-008 教训）。此文件逐字段锁死契约。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Wf } from "../shared/rpc.ts";
+import { Wf, RPC_EVENT_PREFIX, RPC_EVENT_UPDATED, RPC_EVENT_REPORT } from "../shared/rpc.ts";
 import { createRpcBridge } from "../server/rpc-bridge.ts";
 // T04：装配收敛 helpers/host-stub
 import { mkHostStub } from "./helpers/host-stub.js";
 
 test("RPC 契约快照：id/methods/events 逐字段锁定", () => {
   assert.equal(Wf.id, "wf"); // wire 前缀 rpc.wf.<name> 的字符串来源
+  // 事件 wire 名常量（shared/rpc.ts 派生）——TUI data.listen 过滤订阅的同源前提
+  assert.equal(RPC_EVENT_PREFIX, "rpc.wf.");
+  assert.equal(RPC_EVENT_UPDATED, "rpc.wf.updated");
+  assert.equal(RPC_EVENT_REPORT, "rpc.wf.report");
   assert.deepEqual(Object.keys(Wf.methods).toSorted(), ["exec", "list", "read", "state"]);
   assert.deepEqual(Object.keys(Wf.events).toSorted(), ["report", "updated"]);
 

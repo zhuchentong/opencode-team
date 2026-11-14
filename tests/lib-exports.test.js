@@ -11,7 +11,7 @@ import * as lib from "../server/lib.ts";
 
 const EXPECTED = [
   "ARTIFACT_BUDGET_KB", "ARTIFACT_BUDGET_L_KB", "ARTIFACT_BUDGET_S_KB", "ARTIFACT_PHASE",
-  "BLOCKING_PHASES", "BRIEF_LINE_MAX", "DEFAULT_ALLOW_MARKERS", "DEFAULT_ALLOW_RES", "EDIT_TOOLS",
+  "BLOCKING_PHASES", "BRIEF_LINE_MAX", "CHUNK_KB", "CHUNK_MAX", "DAY_MS", "DEFAULT_ALLOW_MARKERS", "DEFAULT_ALLOW_RES", "EDIT_TOOLS",
   "FLOWS", "FLOWS_DAILY", "FLOW_CMD_NAMES", "GATES", "GATES_DAILY", "GATE_ERR", "HINT_ENTRY",
   "HINT_TRIGGERS", "KIND_FILES", "LANE_CAP", "LEADER_AGENT", "LEADER_ALIASES", "LIMITS", "NEXT", "NEXT_DAILY",
   "PHASES_DAILY", "PHASES_FULL", "PROFILES", "READONLY_CMDS", "REJECT_NOTES", "REJECT_PREFIX",
@@ -25,8 +25,8 @@ const EXPECTED = [
   "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 72 名全集锁", () => {
-  assert.equal(EXPECTED.length, 73);
+test("T02 导出集零漂移：Object.keys(lib) === 76 名全集锁", () => {
+  assert.equal(EXPECTED.length, 76);
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 

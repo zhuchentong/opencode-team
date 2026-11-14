@@ -4,7 +4,7 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, type Limits, type WfState } from "./lib.ts"; // P1-E：LANE_CAP 动态尾
+import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, CHUNK_KB, type Limits, type WfState } from "./lib.ts"; // P1-E：LANE_CAP 动态尾 // CHUNK_KB：分段阈值单一来源（domain/artifact）
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -62,7 +62,7 @@ export function guidance(phase: string | null | undefined, st: WfState, limits: 
 // M16-r47（A+B）：真机取证 tui-sidebar-elapsed——慢模型×大 payload 单次 tool call 流式窗口过长，
 // ECONNRESET 截断后 harness retry 全量重生成（恶性循环）。契约升级为「小产物单次 content；
 // 大产物分段原生写 + 微小 register 记账」：每段流窗口短、断了只丢一段、续写不重生成。
-const WRITE_CONTRACT = "写入契约：产物由子代理自行落盘（leader 禁止代写——双倍生成成本）；回执只带摘要+路径+证据，勿回传全文。小产物（≤2KB）直接 wf_write_artifact(kind=…, content) 单次写。大产物（>2KB）分段：首段原生 write 到委派指定的产物路径，后续段用 edit 追加（old=文末唯一锚点，每段≤2KB——缩短单次流式窗口防中断截断）；调用失败先 read 产物尾部从断点续写，禁全量重写；**全部段落落盘后**才 wf_write_artifact(kind=…)（不带 content=注册记账）——结论行在首段，提前注册会以截断内容过关卡。修订先读产物原文，优先原生 edit 或 wf_write_artifact patch 只输出变更段（old 逐字摘录，严格未命中自动模糊回退）。plan 修订会清 review 结论与 test-plan 记账，修订后须重新 wf:review（full 模式另须 wf:test-design）。";
+const WRITE_CONTRACT = `写入契约：产物由子代理自行落盘（leader 禁止代写——双倍生成成本）；回执只带摘要+路径+证据，勿回传全文。小产物（≤${CHUNK_KB}KB）直接 wf_write_artifact(kind=…, content) 单次写。大产物（>${CHUNK_KB}KB）分段：首段原生 write 到委派指定的产物路径，后续段用 edit 追加（old=文末唯一锚点，每段≤${CHUNK_KB}KB——缩短单次流式窗口防中断截断）；调用失败先 read 产物尾部从断点续写，禁全量重写；**全部段落落盘后**才 wf_write_artifact(kind=…)（不带 content=注册记账）——结论行在首段，提前注册会以截断内容过关卡。修订先读产物原文，优先原生 edit 或 wf_write_artifact patch 只输出变更段（old 逐字摘录，严格未命中自动模糊回退）。plan 修订会清 review 结论与 test-plan 记账，修订后须重新 wf:review（full 模式另须 wf:test-design）。`;
 // M16-r47：委派 prompt 渲染产物 canonical 目标路径——子代理写前即知确切文件名（含轮次编号产物），
 // 消灭「写错路径→注册报错→重写」浪费（与 KIND_FILES 同源计算，register 以 state 解析为准）。
 function artifactPathLine(st: WfState, kind: string): string {
@@ -97,10 +97,12 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 // S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
 // M/L=planner 拆 T<nn> 功能点 + reviewer 独立五维验证 + builder 逐点 TDD + tester 独立核对。
 const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
-// ── selfmod-concurrency-guard A3：daily building 派发策略绑 size（双任务同版本取证：
-// M 分 2 派 vs L 一派到底=纯裁量漂移；收敛为 size 决定策略，例外须理由）──────────────
-const DISPATCH_L = `L 级：按 plan lane 分组表分批委派 wf/builder（每批 ≤4 个 T<nn>，续用同 session）：lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；互斥证据不足 → 单树串行（不为并行而并行；串行判定须在 plan 写明交叠证据，勿以「不确定」默认串行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
-const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；lane 并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准（写集互斥前提）。`;
+// ── v2 并行优先：派发策略统一为「先判并行，串行=例外须举证」────────────────
+// 旧 A3「size 决定串行/并行」（M 分 2 派 vs L 一派到底=裁量漂移）→ 收敛为：
+// M/L 均按 plan lane 分组表并行优先；总时长 ≥15 分钟（或 T 点 ≥3）时固定开销（冷启动+合并 ~2-3 分钟）
+// << 并行收益（实测 M 级总时长 20-30 分钟），串行判定须附交叠证据。
+const DISPATCH_L = `L 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（每批 ≤4 个 T<nn> 续用同 session；subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；仅当互斥证据不足（plan 写明交叠证据）→ 单树串行（不为并行而并行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
+const DISPATCH_M = `M 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥（总时长 ≥15 分钟或 T 点 ≥3 时并行收益必为正：固定开销 ~2-3 分钟 << 并行节省）→ 多 builder 并行（同 L 级形态：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准）；plan 判单 lane（附交叠证据）或收益线未达 → 单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。串行判定=plan 须举证，勿默认串行。`;
 // R2 T2.1 DispatchStrategy：M/L 派发策略表（tier 判定唯一形态=DISPATCH_BY_TIER[tier]）
 const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L };
 // selfmod-guard T01：引擎自改纪律行（st.selfMod 门控渲染——entry 通道抗 compaction；
@@ -172,7 +174,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
-          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤${CHUNK_KB}KB：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
       lines.push(...dynamicTail(st, L)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread

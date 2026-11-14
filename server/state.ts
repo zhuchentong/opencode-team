@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
-import { type FlowLogEntry, type ReportLevel, type WfState, isLeader, normalizeState } from "./lib.ts";
+import { type FlowLogEntry, type ReportLevel, type WfState, isLeader, normalizeState, DAY_MS } from "./lib.ts";
 import { type Host } from "./host.ts"; // T03：createStore 收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
@@ -115,7 +115,8 @@ export async function withStateRetry(opts: {
   return { ok: false, reason: "write-error" }; // 不可达（末次 attempt 必在循环内返回）
 }
 
-const STALE_MS = 14 * 24 * 3600 * 1000; // A7：done 状态 14 天 GC（原 storage 版语义保留）
+const STALE_MS = 14 * DAY_MS; // A7：done 状态 14 天 GC（原 storage 版语义保留；DAY_MS 单点见 domain/types）
+const DB_BUSY_TIMEOUT_MS = 5000; // SQLite busy_timeout（多会话并发写 wf.db 的写锁等待窗口）
 
 // ── P1-A（arch-maintenance-p1）：selfmod 护栏域拆分至 ./state-scan.ts（与 CAS 红线域文件级隔离；
 // 平铺顶层——swallow-coverage 守卫 readdirSync 非递归，子目录会逃逸静默 catch 扫描）。
@@ -175,7 +176,7 @@ export function createStore(host: Host): Store {
 
   const db: any = new Database(dbFile, { create: true });
   db.run("PRAGMA journal_mode=WAL");
-  db.run("PRAGMA busy_timeout=5000");
+  db.run(`PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`); // SQLite 写锁等待上限（多会话并发写 wf.db 容忍窗口）
   db.run(SCHEMA);
   // selfmod-guard F2 v2：登记本项目库到内存表+持久清单（供引擎自改 intake 跨库扫描；fail-open 见函数内）
   registerProject(dir, dbFile);

@@ -5,11 +5,11 @@
 // 与 state.ts 的关系：单向依赖（本文件不 import state.ts，防环）；state.ts re-export 本文件符号。
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { type ActiveOther } from "./lib.ts";
 export type { ActiveOther }; // state.ts re-export 链用
 import { swallow } from "./observe.ts";
+import { xdgDataDir } from "./paths.ts"; // XDG 派生单点
 
 // ── selfmod-concurrency-guard T01（F2 v2）：跨项目活动任务扫描 ──────────────────
 // v1 进程内存注册表两处盲区（双任务+implant 卡死日志实证）：①休眠未收尾任务不在内存——用户多日
@@ -20,8 +20,7 @@ import { swallow } from "./observe.ts";
 export const PROJECT_DBS = new Map<string, string>();
 export const PROJECTS_FILE_DEFAULT = (() => {
   try {
-    const base = process.env.XDG_DATA_HOME || join(process.env.HOME ?? os.homedir(), ".local", "share");
-    return join(base, "opencode", "wf-projects.jsonl");
+    return xdgDataDir("opencode", "wf-projects.jsonl"); // 派生单点（server/paths.ts）
   } catch { return ""; }
 })();
 export function projectsListFile(): string { return process.env.WF_PROJECTS_FILE || PROJECTS_FILE_DEFAULT; }

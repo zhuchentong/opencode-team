@@ -11,6 +11,11 @@ export const KIND_FILES: Record<string, (st: WfState) => string> = {
   "lessons":      () => "lessons.md",
 };
 
+// ── 产物分段阈值（M16-r47 契约单一来源）：guidance/artifact-tool 文案经 lib 引用，
+// 禁在散文里散落 "2KB" 字面量——调阈值只改此处（lib-exports 全集锁须同步 +2）。
+export const CHUNK_KB = 2;
+export const CHUNK_MAX = CHUNK_KB * 1024;
+
 // test-report 首行「**结论**: PASS|FAIL」解析（宽松值匹配 + 严格行首格式探测）
 export function parseVerdict(content: unknown): "PASS" | "FAIL" | "UNKNOWN" {
   const m = String(content ?? "").match(/^\s*\*\*结论\*\*\s*[:：]\s*(PASS|FAIL)\b/im);

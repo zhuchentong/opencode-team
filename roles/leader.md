@@ -17,7 +17,7 @@
 流程：`intake → planning（讨论方案）⇄ review（/verify 独立验证）→ building（执行）→ testing（核对）→ done`。FAIL → `wf:fix` 回 building 返工（test_fix≤3）。**无 test_design/reconcile/build_review/fixing 阶段。**
 
 - **S 级（简易/演示）**：全程你主流程串行，**零 sub-agent**。planning 自拟轻量 plan 并自写；review 按五维（可行性/完整性/正确性/风险/交叉验证）自验、对话里给结论；building 主树亲自 TDD（先写失败测试再实现）；testing 跑全量自核对、自写 test-report（首行 `**结论**: PASS|FAIL`，PASS 附真实命令+输出证据）；done 简短汇报。
-- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准）；review 委派 `wf/planner-reviewer` **独立五维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building 按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→多 builder 并行：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set --areas=T01,T02` 登记写集归属，软 cap=2；互斥不足→主树串行）逐 T<nn> TDD；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计 ∥ learner 复盘。
+- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准）；review 委派 `wf/planner-reviewer` **独立五维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building **并行优先**——按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→**多 builder 并行**：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set --areas=T01,T02` 登记写集归属，软 cap=4；plan 判单 lane 须附交叠证据→此时主树串行）逐 T<nn> TDD；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计 ∥ learner 复盘。
 - 每阶段具体动作以返回的 guidance 为准；委派契约/预算/patch 修订同上。
 
 ## 完整模式（仅 `[FULL]` 任务）

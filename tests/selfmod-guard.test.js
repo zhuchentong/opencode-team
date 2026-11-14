@@ -177,12 +177,17 @@ test("A2 daily review FAIL 指引=唯一返修路径（wf:plan→wf:review）", 
   assert.match(guidance("review", blank({ mode: "daily", size: "S" })), /唯一返修路径/);
 });
 
-// ── A3 派发策略绑 size ────────────────────────────────────────────────
-test("A3 daily building 派发策略绑 size：L 分批+worktree，M 串行到底", () => {
+// ── A3 派发策略绑 size（v2 并行优先：M/L 均先判并行，串行=例外须举证）──
+test("A3 daily building 派发策略绑 size：M/L 并行优先（lane 表驱动），串行=例外须举证", () => {
   const l = guidance("building", blank({ mode: "daily", size: "L" }));
-  assert.match(l, /分批/, "L 分批委派"); assert.match(l, /每批 ≤4/, "批次粒度写死"); assert.match(l, /worktree/, "L worktree 隔离");
+  assert.match(l, /并行优先/, "L 并行优先"); assert.match(l, /每批 ≤4/, "L 批次粒度写死"); assert.match(l, /worktree/, "L worktree 隔离");
+  assert.match(l, /串行.*例外|互斥证据不足/, "L 串行=例外路径");
   const m2 = guidance("building", blank({ mode: "daily", size: "M" }));
-  assert.match(m2, /一次委派串行到底/, "M 单派到底"); assert.ok(!m2.match(/每批 ≤4/), "M 不分批");
+  assert.match(m2, /并行优先/, "M 并行优先（反转旧「M 串行到底」默认）");
+  assert.match(m2, /lane 分组表.*判并行|lane≥2/, "M 走 lane 表并行授权");
+  assert.match(m2, /一次委派串行到底/, "M 收益线未达/单 lane 时仍串行到底");
+  assert.match(m2, /串行判定=plan 须举证/, "M 串行须举证非默认");
+  assert.ok(!m2.match(/每批 ≤4/), "M 不分批（分批仍 L 专属）");
 });
 
 test("D daily intake 指引：question 批量优先 + 需求基线 baseline.md + gitignore 口径（.learnings 默认入库）", () => {

@@ -1,5 +1,5 @@
 // wf-workflow — domain/policy：hint 触发/leader-only 权限/ping 报告/引擎自改护栏（自 lib.ts 逐字节平移）。
-import { isLeader, LEADER_AGENT, type WfState } from "./types.ts";
+import { isLeader, LEADER_AGENT, DAY_MS, type WfState } from "./types.ts";
 
 // ── P3：superpowers 式自动激活提示（纯函数可测）────────────────────
 // 宿主若提供消息观察 hook：用户消息命中「明确工作流意图」且该会话无 wf 状态时，
@@ -92,7 +92,7 @@ export function isSelfModDir(taskDir: unknown, pluginRoot: unknown): boolean {
 // 休眠=先核实后 done 收尾或 reset 清账）。updatedAt 解析失败按休眠·日期未知（宁保守多提示）。
 export function selfModWarnLine(others: ActiveOther[], now: number = Date.now()): string | null {
   if (!others.length) return null;
-  const DAY = 24 * 3600 * 1000;
+  const DAY = DAY_MS; // 天毫秒单点（domain/types）
   const tag = (o: ActiveOther): string => {
     const label = `${o.slug || "(未定)"}·${o.phase ?? "?"}`;
     const t = Date.parse(String(o.updatedAt ?? ""));

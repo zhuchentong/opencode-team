@@ -8,7 +8,7 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, profileOf, trackRoleSession, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -34,7 +34,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
         "。循环类产物（plan-review/build-review）自动按当前轮次编号。" +
         "三种模式（互斥）：① content=完整内容首写；② patch=[{old,new}] 增量修订（old 逐字摘录、唯一匹配、按序应用；严格未命中自动回退引号/破折号/nbsp 变体与行尾空白容忍的模糊匹配）；" +
         "③ 不带 content 与 patch = 注册（register）：产物已由原生 write/edit 落盘时，只读盘记账+告警+指路——入参极小、几乎不会流中断失败，重试不重新生成内容。" +
-        "大产物（>2KB）推荐分段：首段原生 write、后续 edit 追加（每段≤2KB），失败先 read 尾部断点续写，全部落盘后才 register（结论行在首段，提前 register 会以截断内容过关卡）。",
+        `大产物（>${CHUNK_KB}KB）推荐分段：首段原生 write、后续 edit 追加（每段≤${CHUNK_KB}KB），失败先 read 尾部断点续写，全部落盘后才 register（结论行在首段，提前 register 会以截断内容过关卡）。`,
       input: {
         type: "object",
         properties: {
@@ -105,7 +105,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             finalContent = args.content;
             mode = "write";
           } else {
-            if (!fs.existsSync(target)) return { content: `❌ register 目标不存在：${target}（${kind} 的期望文件名）。先把内容写到该路径（大产物分段 ≤2KB/段）再注册；或首写直接带 content。` };
+            if (!fs.existsSync(target)) return { content: `❌ register 目标不存在：${target}（${kind} 的期望文件名）。先把内容写到该路径（大产物分段 ≤${CHUNK_KB}KB/段）再注册；或首写直接带 content。` };
             finalContent = fs.readFileSync(target, "utf8");
             if (!finalContent.length) return { content: `❌ 产物为空（0 字节）：${target}——疑似截断残留，拒绝注册（补写内容后重试）。` };
             const diskBytes = fs.statSync(target).size;

@@ -158,6 +158,9 @@ var Wf = Rpc.define({
 		} }
 	}
 });
+var RPC_EVENT_PREFIX = `rpc.${Wf.id}.`;
+var RPC_EVENT_UPDATED = `${RPC_EVENT_PREFIX}updated`;
+var RPC_EVENT_REPORT = `${RPC_EVENT_PREFIX}report`;
 // shared/version.ts
 var VERSION = "M16-r47";
 // shared/report.ts
@@ -1058,11 +1061,11 @@ var tui_default = Plugin.define({
 			offData = context.data?.listen?.((ev) => {
 				const details = ev?.details ?? ev;
 				const type = String(details?.type ?? "");
-				if (!type.startsWith("rpc.wf.")) return;
+				if (!type.startsWith(RPC_EVENT_PREFIX)) return;
 				if (!locOk(details)) return;
 				const payload = details?.data ?? details;
-				if (type === "rpc.wf.report") toastReport(payload, "data");
-				else if (type === "rpc.wf.updated") refresh();
+				if (type === RPC_EVENT_REPORT) toastReport(payload, "data");
+				else if (type === RPC_EVENT_UPDATED) refresh();
 			});
 		} catch {}
 		let offConn = null;

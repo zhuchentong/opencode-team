@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import type { ReportLevel } from "./lib.ts";
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账 // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
 import { readTierAgents, TIER_ROLES } from "./model-tier.ts"; // M16-r49：侧边栏档位视图（派生文件实况单一来源）
+import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 
 export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, bus, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
@@ -96,7 +97,7 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
               return { ...deny(`产物已记账但文件缺失：${path}`), path };
             }
             const bytes = Buffer.byteLength(text, "utf8");
-            const MAX = 64 * 1024;
+            const MAX = PAYLOAD_MAX; // shared/report.ts 单一来源（commands wf:open 同源）
             const truncated = bytes > MAX;
             return { text: truncated ? text.slice(0, MAX) : text, bytes, path, truncated };
           } catch (e) {

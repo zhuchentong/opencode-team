@@ -154,3 +154,9 @@ export const Wf = Rpc.define({
     },
   },
 });
+
+// 事件 wire 名（宿主桥按 rpc.<id>.<event> 字符串路由）——TUI data.listen 过滤/订阅由此引用，
+// 禁在各端散落字面量（漂移=事件静默失联，tests/rpc-drift.test.js 快照锁死）。
+export const RPC_EVENT_PREFIX = `rpc.${Wf.id}.` as const;
+export const RPC_EVENT_UPDATED = `${RPC_EVENT_PREFIX}updated` as const;
+export const RPC_EVENT_REPORT = `${RPC_EVENT_PREFIX}report` as const;

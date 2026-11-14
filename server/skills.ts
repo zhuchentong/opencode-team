@@ -5,11 +5,11 @@
 //   + 无标记不覆盖（用户自有文件安全）+ hash 同跳过（防无谓热载）。fail-soft：同步失败不阻塞插件加载。
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { VERSION } from "./lib.ts";
 import { type Host } from "./host.ts"; // T03：registerSkillSync 收 Host
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 import { contentHash12, decideSync, syncAll, type SyncAction, type SyncTarget } from "./managed-sync.ts";
+import { xdgConfigDir } from "./paths.ts"; // XDG 派生单点
 
 export const SKILL_IDS = ["session-lookup", "wf-worktrees"] as const; // P0-E：worktree 清理步协议（latency-v3.1）
 export type SkillId = typeof SKILL_IDS[number];
@@ -59,8 +59,7 @@ export function syncSkills(skillsDir: string, opts: { backup?: boolean } = {}): 
 // 宿主全局 skills 目录解析：options.skillsDir 优先，回退 XDG_CONFIG_HOME 或 ~/.config/opencode/skills
 export function resolveSkillsDir(opt: any): string {
   if (opt?.skillsDir) return String(opt.skillsDir);
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(base, "opencode", "skills");
+  return xdgConfigDir("opencode", "skills"); // 派生单点（server/paths.ts）
 }
 
 // setup 接线（fail-soft，默认开启）：opt.syncSkills 显式 false 才跳过；异常不阻塞插件加载。
