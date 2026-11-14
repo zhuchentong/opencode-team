@@ -144,7 +144,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
         : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。${artifactPathLine(st, "plan")}`,
       ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`,
-        `v2 并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`]),
+        `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
       `完成 → wf_command(name="wf:review")`,
@@ -236,7 +236,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。${artifactPathLine(st, "plan")}`,
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
-      `v2 并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"——那是完整模式口径），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`,
+      `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"——那是完整模式口径），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`,
       WRITE_CONTRACT,
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
