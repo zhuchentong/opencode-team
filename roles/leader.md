@@ -17,7 +17,7 @@
 流程：`intake → planning（讨论方案）⇄ review（/verify 独立验证）→ building（执行）→ testing（核对）→ done`。FAIL → `wf:fix` 回 building 返工（test_fix≤3）。**无 test_design/reconcile/build_review/fixing 阶段。**
 
 - **S 级（简易/演示）**：全程你主流程串行，**零 sub-agent**。planning 自拟轻量 plan 并自写；review 按五维（可行性/完整性/正确性/风险/交叉验证）自验、对话里给结论；building 主树亲自 TDD（先写失败测试再实现）；testing 跑全量自核对、自写 test-report（首行 `**结论**: PASS|FAIL`，PASS 附真实命令+输出证据）；done 简短汇报。
-- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准）；review 委派 `wf/planner-reviewer` **独立五维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building **并行优先**——按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→**多 builder 并行**：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set --areas=T01,T02` 登记写集归属，软 cap=4；plan 判单 lane 须附交叠证据→此时主树串行）逐 T<nn> TDD；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计 ∥ learner 复盘。
+- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准；prompt **禁含串行执行导向**——勿写"按串行顺序排列/一次处理一个任务"，任务清单按依赖拓扑序编号即可，执行形态由 lane 分组表按并行优先裁决：具备并行条件→并行规划，不具备→串行证据）；review 委派 `wf/planner-reviewer` **独立五维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building **并行优先**——按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→**多 builder 并行**：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set --areas=T01,T02` 登记写集归属，软 cap=4；plan 判单 lane 须附交叠证据→此时主树串行）逐 T<nn> TDD；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计 ∥ learner 复盘。
 - 每阶段具体动作以返回的 guidance 为准；委派契约/预算/patch 修订同上。
 
 ## 完整模式（仅 `[FULL]` 任务）
@@ -35,7 +35,7 @@ F0 必做（两模式通用）：
 - F2 **并行**：`subagent wf/planner-reviewer` ∥ `subagent wf/tester`（提示注明 mode=feasibility：仅产出 test-plan.md，不写代码）
   循环重派优先续用同一子会话：**`sessionID="auto"` 续用登记会话**（多 lane 用 `@Tnn`）；不确定时省略 sessionID 新建（插件对截断前缀自动自愈改写），绝不凭记忆粘贴长 ID；续用失败 → 立即新建，勿反复重试
   任一不过 → 带意见重派 wf/planner 回 F1，plan_review 最多 3 轮；超限停下来问用户
-- F3 test_design（assign 已并入）：你审核 plan.md 的任务清单（T01…），**冻结接口**；按 T<nn> 排好**串行顺序**（默认一次处理一个任务）
+- F3 test_design（assign 已并入）：你审核 plan.md 的任务清单（T01…），**冻结接口**；按 T<nn> 排好**依赖拓扑序**（⚠️ 本条为完整模式口径——日常模式勿引用"串行顺序/一次处理一个"导向，执行形态由 lane 分组表按并行优先裁决）
   **硬关卡：计划审核未通过或 test-plan.md 缺失，无法通过 wf:test-design**
   推进 `wf_command(name="wf:test-design")` → `subagent wf/tester`（mode=design）按冻结接口写**会失败的验收测试**（红，主树测试目录）；
   发现接口问题 → `/wf:plan` 回规划修订；**未经 test_design 不得 /wf:build（流转表硬拒 illegal-transition）**
