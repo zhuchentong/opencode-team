@@ -99,7 +99,7 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
 // ── selfmod-concurrency-guard A3：daily building 派发策略绑 size（双任务同版本取证：
 // M 分 2 派 vs L 一派到底=纯裁量漂移；收敛为 size 决定策略，例外须理由）──────────────
-const DISPATCH_L = `L 级：按 plan lane 分组表分批委派 wf/builder（每批 ≤4 个 T<nn>，续用同 session）：lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；互斥证据不足 → 单树串行（不为并行而并行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
+const DISPATCH_L = `L 级：按 plan lane 分组表分批委派 wf/builder（每批 ≤4 个 T<nn>，续用同 session）：lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；互斥证据不足 → 单树串行（不为并行而并行；串行判定须在 plan 写明交叠证据，勿以「不确定」默认串行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
 const DISPATCH_M = `M 级：单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。按批多派=例外须理由；lane 并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准（写集互斥前提）。`;
 // R2 T2.1 DispatchStrategy：M/L 派发策略表（tier 判定唯一形态=DISPATCH_BY_TIER[tier]）
 const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L };
@@ -109,13 +109,14 @@ const SELFMOD_LINE = `引擎自改模式：server/ 下文件正被宿主按内�
 
 // P2.3（arch-maintenance-p2）：building 动态尾单点——后续动态行（观察灯/并发数/新纪律行）只在此追加，
 // 勿再散装 `...(cond ? [line] : [])` 到 lines 数组（散装=增长模式不可控，漏测试锁）。
-function dynamicTail(st: WfState): string[] {
+function dynamicTail(st: WfState, limits: Limits = LIMITS): string[] {
   const lines: string[] = [];
   if (st.delivery?.selfMod) lines.push(SELFMOD_LINE); // selfmod-guard T01（entry 通道抗 compaction）
   const lanes = st.lanes ?? {};
   if (Object.keys(lanes).length) {
     const active = Object.values(lanes).filter((v) => v.status !== "done").length;
-    lines.push(`lanes(${active}/${LANE_CAP} 活跃)：${Object.entries(lanes).map(([k, v]) => `${k}${(v as any).areas?.length ? `[${(v as any).areas.join("+")}]` : ""}${v.status === "done" ? "(空闲可续用)" : ""}`).join(" ")}——续用 @Tnn；写前核对 areas，越界停下回报`);
+    const cap = limits.lane_cap ?? LANE_CAP; // v2 提速：cap 可经 options.limits.lane_cap 实例覆盖
+    lines.push(`lanes(${active}/${cap} 活跃)：${Object.entries(lanes).map(([k, v]) => `${k}${(v as any).areas?.length ? `[${(v as any).areas.join("+")}]` : ""}${v.status === "done" ? "(空闲可续用)" : ""}`).join(" ")}——续用 @Tnn；写前核对 areas，越界停下回报`);
   }
   return lines;
 }
@@ -174,7 +175,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
           `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤2KB：测试命令+红→绿输出摘要+变更文件+未验证项+areas 越界声明）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
-      lines.push(...dynamicTail(st)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread
+      lines.push(...dynamicTail(st, L)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread
       if ((r.test_fix ?? 0) > 0) lines.push(`返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
       if (!S) lines.push(...reuseLines(st, "wf/builder"));
       return lines.join("\n");
@@ -268,6 +269,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `【wf 工作流｜building】slug=${s}`,
       `默认：开一个 worktree，一个 wf/builder 在树内按序串行完成全部 T<nn>（逐任务 TDD 先红后绿）；建树后把 test_design 产出的红测试复制进树并 md5 核对；prompt 给 worktree 绝对路径+按序任务清单（勿贴整份 plan——只给任务行摘录+接口签名，省子代理冷启动）。多树并行=plan lane 分组表+确认卡批准（写集互斥前提），lane 分支 wf/<slug>/lane-<Tnn>。`,
       `全部回执齐备（含红→绿证据）→ wf_command(name="wf:reconcile")`,
+      // v2 提速：full 模式补 lanes 动态尾（与 daily 同源单点；无 lanes 时 dynamicTail 返回空=零渲染）
+      ...dynamicTail(st, L),
     ].join("\n");
     case "reconcile": return [
       `【wf 工作流｜reconcile】slug=${s}`,

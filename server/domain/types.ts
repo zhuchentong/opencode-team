@@ -2,7 +2,12 @@
 // 跨域共享类型与零依赖常量/小函数（自 lib.ts 逐字节平移；REJECT_PREFIX=纯位置移动，红线②不变量
 // 由 tests/brief-level.test.js 锁死）。守卫：tests/domain-acyclic.test.js 规则②（零依赖）/④（无环）。
 
-export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3 };
+// P1-E：builder lane 并发默认上限（软准入——超限告警不阻断；v2 提速默认 4，本地网关挤占风险以
+// 「异常时经 options.limits.lane_cap 显式调低」处置）。常量置顶：LIMITS.lane_cap 引用它（默认值单一来源）。
+export const LANE_CAP = 4;
+
+// P2：limits 可按实例覆盖（partial 覆盖默认 LIMITS）；lane_cap=builder lane 并发软准入（v2 提速）
+export const LIMITS = { plan_review: 3, build_review: 3, test_fix: 3, lane_cap: LANE_CAP };
 export type LimitKey = keyof typeof LIMITS;
 // P2：limits 可按实例覆盖（partial 覆盖默认 LIMITS）
 export type Limits = Partial<Record<LimitKey, number>>;
@@ -84,7 +89,8 @@ export interface WfState {
     doneGit?: { isGit: boolean; hasRemote: boolean };
     selfMod?: boolean;
   };
-  rounds: Record<LimitKey, number> & Record<string, number>;
+  // 键集排除 lane_cap：它是并发准入上限，不是轮次计数器，永不写入 st.rounds（v2 提速）
+  rounds: Record<Exclude<LimitKey, "lane_cap">, number> & Record<string, number>;
   updatedAt?: string;
   prev?: { slug?: string; phase?: string | null; at?: string };
   // P1-E（latency-v3.1 波次3）：lane 并行制度——值对象扩 areas/status/lastUsedAt（内部字段，
@@ -169,8 +175,7 @@ export function normalizeState(st: WfState): WfState {
 
 // R3 T3.1 子步 C：登记表形状单点（session.ts SidAliasInput 等派生用）
 export type RoleSessions = Record<string, { sessionID: SessionId; at: string }>;
-// P1-E：builder lane 并发默认上限（防本地网关互相挤占；软准入——超限告警不阻断）
-export const LANE_CAP = 2;
+// （LANE_CAP 定义置顶于 LIMITS 之前——本文件原 172 行处，因 LIMITS.lane_cap 引用前移，勿在此重复定义）
 
 // from: 允许的来源阶段（"*" = 任意）；counter: 循环轮次计数（null = 非循环）
 export interface FlowDef {

@@ -14,7 +14,7 @@
 // bus（index 装配期创建，bridge/tool/commands 三方共享）。
 import * as fs from "node:fs";
 import {
-  VERSION, BLOCKING_PHASES, LANE_CAP, nextFor, promptText, diagnoseReport, pingReport,
+  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
   FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
@@ -282,7 +282,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
     });
     add({
       name: "wf:lane",
-      description: `登记/查看 lane：set <Tnn> <子会话ID|@别名> [worktree] [--areas=T01,T02] / done <Tnn> / rm <Tnn> / 默认 ls（${VERSION}；并发 cap=${LANE_CAP}）`,
+      description: `登记/查看 lane：set <Tnn> <子会话ID|@别名> [worktree] [--areas=T01,T02] / done <Tnn> / rm <Tnn> / 默认 ls（${VERSION}；并发 cap=${LIMS.lane_cap}）`,
       execute: async (a: any) => {
         const t = promptText(a.prompt).trim().split(/\s+/);
         const op = (t[0] ?? "ls").toLowerCase();
@@ -363,12 +363,12 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           return `❌ 状态保存失败（${res.reason}），lane 变更未生效，请重试。`;
         }
         await emitUpdated(res.st);
-        // P1-E 软准入：并发超 LANE_CAP → 返回值告警（不阻断）；跨库活跃任务数一并提示（复用 scanActiveTasks，勿新建计数器）
+        // P1-E 软准入：并发超 LIMS.lane_cap → 返回值告警（不阻断）；跨库活跃任务数一并提示（复用 scanActiveTasks，勿新建计数器）
         let capNote = "";
         try {
           const active = Object.values(res.st.lanes ?? {}).filter((v) => v.status !== "done").length;
           const others = scanActiveTasks(String(a.sessionID ?? "")).length;
-          if (active > LANE_CAP) capNote = `\n⚠️ 活跃 builder lane ${active} > cap ${LANE_CAP}——本地网关可能互相挤占；其余活跃任务 ${others} 个。超线并行=例外，须说明理由。`;
+          if (active > LIMS.lane_cap) capNote = `\n⚠️ 活跃 builder lane ${active} > cap ${LIMS.lane_cap}——本地网关可能互相挤占；其余活跃任务 ${others} 个。超线并行=例外，须说明理由。`;
         } catch (e) { swallow(e, "commands:lane-cap-note-fail"); }
         return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}${setNote}${capNote}`;
       },
