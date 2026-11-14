@@ -163,6 +163,7 @@ test("guard-hook：wf/builder 子会话 edit（building 非阻断阶段）→ �
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] build" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: leader, prompt: {} });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\nT01" }, { sessionID: "ses_plannerB", agent: "wf/planner" }); // v2：lane 表关卡记账
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: "ses_reviewerB", agent: "wf/planner-reviewer" });
   // M16-r44：wf:build 关卡须方案确认（leader question 观察记账）
   await m.hook()({ tool: "question", sessionID: leader, agent: "workflow",

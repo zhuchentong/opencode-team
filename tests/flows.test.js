@@ -215,7 +215,7 @@ const runDailyToDone = async (h, slug) => {
   await h.run("wf:intake", slug);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
   await h.run("wf:build");
   await h.run("wf:test");
   h.patch({ testReportVerdict: "PASS" });
@@ -292,7 +292,7 @@ test("A5 计时：强制重 intake（!slug）4 字段重置（phaseDurations 回
 const runDailyToDoneNoIntake = async (h) => {
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS" });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
   await h.run("wf:build");
   await h.run("wf:test");
   h.patch({ testReportVerdict: "PASS" });
@@ -412,4 +412,22 @@ test("T03 FLOW_COMMANDS 单一来源：描述表键集 = FLOW_CMD_NAMES（无第
     assert.ok(c && c.description.length > 0, `${name} 注册且描述非空`);
   }
   h.dispose();
+});
+
+test("v2 lane 分组表硬关卡（daily M/L）：evaluateTransition 层拒绝+指路 wf:plan；补记账放行；S 豁免", () => {
+  // M 级：确认+PASS 但缺 laneTableWritten → gate 拒（msg ❌ 开头 + 指路 wf:plan）
+  const m = mkSt("review", { mode: "daily", size: "M", planConfirmedAt: "x", planReviewVerdict: "PASS" });
+  const r = evaluateTransition("wf:build", m, "");
+  assert.equal(r.ok, false);
+  assert.equal(r.note, "gate-rejected");
+  assert.equal(r.gate, "daily-build");
+  assert.match(r.msg, /^❌/, "拒绝文案 REJECT_PREFIX 不变量");
+  assert.match(r.msg, /lane 分组表关卡未过/);
+  assert.match(r.msg, /wf:plan/, "指路 wf:plan 修订补表");
+  // 补记账（laneTableWritten=true）→ 放行
+  m.verdicts.laneTableWritten = true;
+  assert.ok(evaluateTransition("wf:build", m, "").ok, "补 lane 表记账后放行");
+  // S 级豁免：无 lane 表也放行（仅须确认）
+  const s = mkSt("review", { mode: "daily", size: "S", planConfirmedAt: "x" });
+  assert.ok(evaluateTransition("wf:build", s, "").ok, "S 级豁免 lane 表");
 });

@@ -140,6 +140,9 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡；
             // M16-r44：方案确认记账同点作废（plan 内容变更=旧确认失效的最强锚点）
             if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // R3 T3.1 子步 B：plan 修订清双通道+确认记账
+            // v2：lane 分组表解析记账（write/patch/register 三模式 finalContent 均为全文；每次注册重算，
+            // bytes-no-op 早退不进 mark=保留上次记账；daily M/L wf:build 关卡消费，并行优先硬卡）
+            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); v.laneTableWritten = /lane 分组表/.test(finalContent); }
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}` });
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；

@@ -44,7 +44,7 @@ test("T02 daily M：plan-review PASS 后 patch 改 plan → 验证结论被清�
   const sid = "ses_inv_d";
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] inv-daily" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   assert.equal(stOf(sid).verdicts?.planReview, "PASS");
@@ -107,7 +107,7 @@ test("T02 边界：full 双记账并存（PASS+testPlanWritten）→ patch 改 p
   const sid = "ses_inv_both";
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] inv-both" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });

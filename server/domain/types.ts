@@ -75,6 +75,7 @@ export interface WfState {
     testReport?: string;        // ← testReportVerdict
     testPlanWritten?: boolean;  // 同名迁入
     confirmedAt?: string;       // ← planConfirmedAt
+    laneTableWritten?: boolean; // v2：plan.md 含「lane 分组表」（kind=plan 注册时解析记账；daily M/L 级 wf:build 关卡校验——并行优先，串行须以 lane 表书面举证）
     // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
     // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）；
     // intake 重置块清除（跨任务不残留）。保持 R2 形状（id/ok/at）整体迁入。

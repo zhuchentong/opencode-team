@@ -44,7 +44,7 @@ export async function mkWiringHarness(over = {}) {
     // R3 T3.1 子步 B：verdicts 家族平铺键翻译进子对象（与真实写点形状同源——mock 漂移=真机哑火）
     patch: (obj, s = sid) => {
       const st = states.get(s);
-      const VD = { planReviewVerdict: "planReview", testReportVerdict: "testReport", testPlanWritten: "testPlanWritten", planConfirmedAt: "confirmedAt", gateStatus: "gateStatus" };
+      const VD = { planReviewVerdict: "planReview", testReportVerdict: "testReport", testPlanWritten: "testPlanWritten", planConfirmedAt: "confirmedAt", laneTableWritten: "laneTableWritten", gateStatus: "gateStatus" };
       const rest = {};
       for (const [k, v] of Object.entries(obj)) {
         if (k in VD) { st.verdicts = st.verdicts ?? {}; st.verdicts[VD[k]] = v; } else rest[k] = v;

@@ -24,3 +24,9 @@ export const gateAcceptanceMsg = (verdict?: string): string =>
 export const gateDailyVerifyMsg = (verdict?: string): string =>
   `❌ 验证关卡未过：plan-review 结论为「${verdict ?? "未产出"}」（要求 PASS）。` +
   `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；报告若已原生落盘未记账，wf_write_artifact(kind=plan-review)（不带 content=注册）补记账；FAIL → wf:plan 带意见修订后再验。`;
+
+// v2：lane 分组表关卡拒绝文案（daily M/L；并行优先——串行须以 lane 表书面举证）
+export const LANE_TABLE_GATE_MSG =
+  "❌ lane 分组表关卡未过：M/L 级 plan.md 须含「lane 分组表」节（并行优先裁决：≥2 条互斥 lane 即并行；" +
+  "判单 lane 串行须附交叠证据）。请 wf_command(name=\"wf:plan\") 修订补表后再推进 /wf:build（若 plan.md 已原生补写落盘，" +
+  "wf_write_artifact(kind=plan)（不带 content=注册）补记账即可）。";

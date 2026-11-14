@@ -40,3 +40,9 @@ bun tui-tests/tui-render.harness.ts   # 单独跑 TUI harness（非 bun test 文
 - 改 `tui/` 源码：`bun run build` + `./scripts/tui-restart.sh`（宿主对 TUI 插件模块路径级永久缓存，`/reload` 不重读）。
 - 仅改 server/guidance/roles：server 侧按内容指纹热载即效，无需重建。
 - 角色模板改动生效前提：宿主 `opencode.jsonc` 插件 options（v2 起 syncRoles 默认开启，显式 false 才需配置）；改完 `/wf:ping` 确认 8 角色 managed 无 stale。
+
+## v2：lane 分组表硬关卡（daily M/L wf:build）
+
+- 新增校验：daily 模式 M/L 级任务推进 `wf:build` 时，须 plan.md 已含「lane 分组表」节（`wf_write_artifact(kind=plan)` 注册时自动解析记入 `verdicts.laneTableWritten`）；缺失 → 拒绝（❌ lane 分组表关卡未过，指路 wf:plan）。S 级豁免；full 模式不加（在途兼容 + F2/F3 双通道兜底）。
+- **在途任务处置口**：部署前已注册且 bytes 未变的 plan 不会补记账（幂等 no-op 早退）——过卡前 `wf:plan` 做一次 patch 修订（bytes 变化即触发 mark 重算记账），或将 plan.md 原生落盘后 `wf_write_artifact(kind=plan)`（不带 content）重注册。
+- 判定顺序：用户确认（plan:confirm）→ lane 表（M/L）→ plan-review 结论（M/L）；explain 按缺失项精确指认。

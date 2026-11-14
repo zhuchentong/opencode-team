@@ -9,6 +9,7 @@ const VD = {
   testReportVerdict: "testReport",
   testPlanWritten: "testPlanWritten",
   planConfirmedAt: "confirmedAt",
+  laneTableWritten: "laneTableWritten",
   gateStatus: "gateStatus",
 };
 export function withVerdicts(st) {

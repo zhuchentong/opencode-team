@@ -9,7 +9,7 @@
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
 import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type Slug, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
-import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
+import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
 
 // M16-r28（性能审计批次 1/2）：B1-1 shell 误伤翻案（=>/比较符/tee<）+ guard 项目 containment
 //   （项目外写放行，对齐 shell 分支语义）；B1-2~B1-5 guidance 提速（reconcile 去全量、并发委派、
@@ -108,8 +108,13 @@ export const FLOWS_DAILY: Record<string, FlowDef> = {
 export const GATES_DAILY: Record<string, Gate> = {
   "wf:build": {
     id: "daily-build",
-    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt && (tierOf(st.size) === "S" || st.verdicts?.planReview === "PASS"), // R3 T3.1 子步 B
-    explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG : gateDailyVerifyMsg(st.verdicts?.planReview)),
+    // v2：判定顺序=用户确认 → lane 分组表（M/L，并行优先硬卡——串行须以 lane 表书面举证）→ review 结论（M/L）
+    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt
+      && (tierOf(st.size) === "S" || !!st.verdicts?.laneTableWritten)
+      && (tierOf(st.size) === "S" || st.verdicts?.planReview === "PASS"),
+    explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG
+      : (tierOf(st.size) !== "S" && !st.verdicts?.laneTableWritten) ? LANE_TABLE_GATE_MSG
+      : gateDailyVerifyMsg(st.verdicts?.planReview)),
   },
   "wf:done": GATES["wf:done"],
 };
