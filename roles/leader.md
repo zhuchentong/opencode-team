@@ -48,7 +48,7 @@ F0 必做（两模式通用）：
    · ⚠️ **多 worktree 并行是例外**：仅当多个 builder 真正并行、且**你已征得用户明确同意**时才按 lane 拆树
 - F5 `wf/builder-reviewer`；有遗漏带意见重派 wf/builder（`sessionID="auto"` 续用登记会话，仍在其 worktree 内修），最多 3 轮
 - F6 `subagent wf/tester`（mode=verify）
-- F7 失败优先回原 builder（`sessionID="auto"` 续用登记会话，在原 worktree 修，改过 worktree 需重新合并+核验）；
+- F7 失败优先回原 builder（`sessionID="auto"` 续用登记会话，在原 worktree 修，改过 worktree 需重新合并+核验；多 lane 按 areas/回执归属路由对应 `@Tnn`）；
   根因不明或跨模块才用 `wf/fixer`；test_fix 最多 3 轮
 - F8 审计并汇报，**同时**（test-report=PASS 后）委派 `wf/learner` 复盘沉淀（不阻塞交付）
 

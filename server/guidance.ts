@@ -180,7 +180,12 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
       lines.push(...dynamicTail(st, L)); // P2.3：动态尾单点（selfMod 纪律行 + lanes 并发行）——勿再散装 spread
-      if ((r.test_fix ?? 0) > 0) lines.push(`返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
+      if ((r.test_fix ?? 0) > 0) {
+        const multiLane = Object.values(st.lanes ?? {}).filter((v) => v.status !== "done").length >= 2; // 口径同 dynamicTail
+        lines.push(multiLane
+          ? `返工第 ${r.test_fix} 轮（多 lane）：test-report FAIL 项逐条归属 lane（对照 areas 与回执 build-receipt-<Tnn>.md 的变更文件）→ 用 @Tnn 续接对应 builder 在原 worktree 修复（修完该 lane 重合并+md5 核验）；同一文件被 ≥2 条 FAIL 命中（跨 lane 缺陷）或根因不明 → 委派 wf/fixer（主树）统一修，修完逐 lane 回归验收。`
+          : `返工第 ${r.test_fix} 轮：按 test-report FAIL 项修复，复用原 builder sessionID。`);
+      }
       if (!S) lines.push(...reuseLines(st, "wf/builder"));
       return lines.join("\n");
     }
@@ -302,7 +307,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     ].join("\n");
     case "fixing": return [
       `【wf 工作流｜fixing】slug=${s}`,
-      `失败优先回原 builder（复用 sessionID，在其 worktree 内修，修完重新合并核验）；根因不明/跨模块 → wf/fixer。`,
+      `失败优先回原 builder（复用 sessionID，在其 worktree 内修，修完重新合并核验）；多 lane 场景按 areas/回执归属路由对应 @Tnn builder；根因不明/跨模块/同一文件多条 FAIL → wf/fixer。`,
       `修改过 worktree 则先 wf_command(name="wf:reconcile") 回主树合并，再 wf_command(name="wf:test")；超限 → 停下问用户`,
       `轮次：第 ${r.test_fix}/${L.test_fix} 轮`,
       ...reuseLines(st, "wf/builder", "wf/fixer"),

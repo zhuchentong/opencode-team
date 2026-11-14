@@ -63,3 +63,17 @@ test("full 模式 building guidance 也渲染 lanes 动态尾（盲区补齐）"
   const gEmpty = guidance("building", { ...mkSt(), mode: "full" }, LIMITS);
   assert.ok(!gEmpty.includes("lanes("));
 });
+
+test("v2 多 lane 返工路由：building 返工行按活跃 lane 数条件渲染（≥2 走归属路由，否则原文）", () => {
+  const fixSt = (lanes) => ({ ...mkSt(lanes), rounds: { plan_review: 0, build_review: 0, test_fix: 1 } });
+  // ≥2 活跃 lane → 多 lane 路由版
+  const g2 = guidance("building", fixSt(activeLanes(2)));
+  assert.match(g2, /归属 lane/); assert.match(g2, /@Tnn/); assert.match(g2, /wf\/fixer/);
+  // 无 lanes → 原文（复用原 builder），无多 lane 路由
+  const g0 = guidance("building", fixSt());
+  assert.match(g0, /复用原 builder sessionID/); assert.ok(!g0.includes("归属 lane"));
+  // 1 条活跃 lane（其余 done 等价单 builder）→ 原文
+  const one = { ...activeLanes(2), T02: { ...activeLanes(2).T02, status: "done" } };
+  const g1 = guidance("building", fixSt(one));
+  assert.match(g1, /复用原 builder sessionID/); assert.ok(!g1.includes("归属 lane"));
+});
