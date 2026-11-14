@@ -116,7 +116,7 @@ export async function withStateRetry(opts: {
 }
 
 const STALE_MS = 14 * DAY_MS; // A7：done 状态 14 天 GC（原 storage 版语义保留；DAY_MS 单点见 domain/types）
-const DB_BUSY_TIMEOUT_MS = 5000; // SQLite busy_timeout（多会话并发写 wf.db 的写锁等待窗口）
+const DB_BUSY_TIMEOUT_MS = 10000; // SQLite busy_timeout（多会话并发写 wf.db 的写锁等待窗口；test_007 实证 5s 窗口内多 lane 并发登记仍写错误→加倍）
 
 // ── P1-A（arch-maintenance-p1）：selfmod 护栏域拆分至 ./state-scan.ts（与 CAS 红线域文件级隔离；
 // 平铺顶层——swallow-coverage 守卫 readdirSync 非递归，子目录会逃逸静默 catch 扫描）。

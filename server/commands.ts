@@ -201,7 +201,14 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           `slug=${st.slug || "(未定)"}  phase=${st.phase}  mode=${st.mode ?? "full"}  size=${st.size ?? "M"}`,
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
           `gates: testPlan=${st.verdicts?.testPlanWritten ? "✅" : "❌"}  testReport=${st.verdicts?.testReport ?? "-"}  planReview=${st.verdicts?.planReview ?? "-"}  planConfirm=${st.verdicts?.confirmedAt ? "✅" : "❌"}`, // R3 T3.1 子步 B
-          `lanes: ${JSON.stringify(st.lanes ?? {})}`,
+          `lanes: ${Object.entries(st.lanes ?? {}).map(([k, v]: any) => {
+            // v2 耗时观测：done 且双戳齐（at=开工/lastUsedAt=收尾）→ done(Nmin)（口径经 test_007 learner 校准：分钟整数）
+            if (v.status === "done" && v.at && v.lastUsedAt) {
+              const min = Math.max(0, Math.round((new Date(v.lastUsedAt).getTime() - new Date(v.at).getTime()) / 60000));
+              return `${k}=done(${min}min)`;
+            }
+            return `${k}=${v.status ?? "active"}`;
+          }).join(" ") || "{}"}  ${JSON.stringify(st.lanes ?? {})}`,
           `roleSessions: ${JSON.stringify(st.reuse?.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
           `下一步: ${nextFor(st, st.phase)}`,

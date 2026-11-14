@@ -207,3 +207,17 @@ test("wf:status：输出含 roleSessions 行（真机续用取证；诊断命令
   assert.match(out, /roleSessions:/);
   assert.match(out, /ses_pStatus/);
 });
+
+test("v2 lane 耗时显示：status lanes 行 done+双戳齐 → done(Nmin)；active 原样（口径：分钟整数，learner 校准）", async () => {
+  const m = mkCtx(); await plugin.setup(m.ctx);
+  const leader = "ses_lead6";
+  await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] lane-time" } });
+  await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
+  // 登记两条 lane（session 探针失败被 swallow，不阻塞登记）→ 一条 done 一条 active
+  await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: "set T01 ses_laneA --areas=src/a" } });
+  await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: "set T02 ses_laneB --areas=src/b" } });
+  await cmd(m, "wf:lane").execute({ sessionID: leader, prompt: { text: "done T01" } });
+  const out = await cmd(m, "wf:status").execute({ sessionID: leader, prompt: {} });
+  assert.match(out, /T01=done\(\d+min\)/, "done 且双戳齐 → done(Nmin)（set/done 相邻，取整 0min 合法）");
+  assert.match(out, /T02=active/, "活跃 lane 原样显示");
+});
