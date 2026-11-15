@@ -166,7 +166,7 @@ var RPC_EVENT_UPDATED = `${RPC_EVENT_PREFIX}updated`;
 /** report 事件完整 wire 名（命令输出广播，机会性补充通道）。 */
 var RPC_EVENT_REPORT = `${RPC_EVENT_PREFIX}report`;
 // shared/version.ts
-var VERSION = "M16-r47";
+var VERSION = "M16-r53";
 // shared/report.ts
 /**
 * 幂等消费键单一生成点：sessionID|at（TUI 去重/对账一致性的锚）。
