@@ -19,7 +19,7 @@ import {
   FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
 } from "./lib.ts"; // R2 T2.4/T2.5：flowFor/evaluateTransition/leaderOnlyReject/isSelfModDir/selfModWarnLine/briefFallback 随体迁出；+renderReport 文本链单点
-import { briefFor } from "./guidance.ts"; // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
+import { briefFor, guidanceBytesLine } from "./guidance.ts"; // r53 批次 3：注入预算仪表 // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
 import { ENTRY_KEY, HINT_KEY, withStateRetry, scanActiveTasks, type Store } from "./state.ts"; // P1-E：lane 准入复用跨库扫描（勿新建计数器）
 import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 import { type Observer, swallow, listSwallows } from "./observe.ts";
@@ -34,11 +34,13 @@ import { TIER_ROLES, readTierAgents } from "./model-tier.ts"; // M16-r43：档�
 import { readFile as fsReadFile } from "node:fs/promises"; // R2：fsIo（mkdir/writeFile）随 tierCheck 迁出
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
+/** 降级轨报告的消息标记 key（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）。 */
 export const REPORT_META = "wf.report";
 
 // notification-brief-display T03（B 意见）：流转命令名唯一来源在 lib.FLOW_CMD_NAMES；
 // 本表只持 name→description（注册时按名单遍历取值）。键集与 FLOW_CMD_NAMES 相等由
 // tests/flows.test.js 断言锁死（新增/删除流转命令只改 lib 名单 + 此表补描述）。
+/** 10 个流转命令的 name→description 注册表（键集与 lib.FLOW_CMD_NAMES 相等由 tests 锁死）。 */
 export const FLOW_DESCRIPTIONS: Record<string, string> = {
   "wf:intake": "工作流入口：澄清需求/读 .learnings/补 gitignore（.workflow 与 .learnings 默认 ignore）（参数=slug）",
   "wf:plan": "进入 planning：委派 wf/planner 产出 plan.md",
@@ -92,6 +94,12 @@ const roleGuardText = (opt: any) => {
   } catch { return ""; }
 };
 
+/** 注册全部 wf 命令与输出编排：10 流转命令（表驱动）+6 辅助命令，统一经 CommandBus（三入口同调）；
+ * 双轨输出=publishOutput（reports 表+report 事件）与 injectReport（降级轨 prompt 注入，按 metadata 标记剥离）；
+ * 另注册 context/compaction/generate/title 剥离 hook。
+ * @param host T03 防腐层（commands.transform/sessions.hook/instructions/rpc.client 访问面）
+ * @param deps 显式注入依赖（CommandDeps 契约）
+ * @returns dispose 句柄（注销命令注册与全部 hook；逐项 try/catch fail-soft） */
 export async function registerCommands(host: Host, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
     putReport, removeState, dumpStates, bus } = deps;
@@ -262,7 +270,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
               tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
             }
           } catch (e) { swallow(e, "commands:ping-tier-read-fail"); }
-          return pingReport(res, tierLine) + roleGuardText(host.options); // 档位行经 pingReport 前置（截断显示面可见）
+          return pingReport(res, tierLine) + roleGuardText(host.options) + `\n${guidanceBytesLine(LIMS)}`; // 档位行经 pingReport 前置（截断显示面可见）；r53 批次 3：guidance 注入字节数仪表（观测不管控，零 RPC 形状变化）
         } catch (e) {
           return `wf 角色查询失败：${(e as Error)?.message ?? e}（host API 形状待 _debug/agent-probe.json 确认）`;
         }

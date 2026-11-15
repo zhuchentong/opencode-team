@@ -45,3 +45,17 @@ test("entryValue：overrides 透传；done 阶段不带", () => {
   const done = entryValue({ phase: "done", slug: "d", rounds: {} }, undefined, ["builder.md"]);
   assert.ok(!done.includes("📌"), "done 只留一行提示");
 });
+
+// ── r53 批次 3：guidance 注入预算仪表（ping 显示面）────────────────────────────
+import { guidanceBytesLine } from "../server/guidance.ts";
+
+test("r53 仪表：guidanceBytesLine 键集=daily 6 阶段序，逐项为正数 k 值（固定口径可跨任务比较）", () => {
+  const line = guidanceBytesLine();
+  for (const ph of ["intake", "planning", "review", "building", "testing", "done"]) {
+    assert.match(line, new RegExp(`${ph}=[0-9]+\\.[0-9]k`), `${ph} 计入`);
+  }
+  assert.match(line, /📐 guidance 注入（典型形态）：/);
+  // done 只留一行 DONE_ENTRY，数值应显著小于 building（口径合理性抽查）
+  const get = (ph) => Number(line.match(new RegExp(`${ph}=([0-9.]+)k`))[1]);
+  assert.ok(get("done") < get("building"), "done 注入应远小于 building（口径锚）");
+});

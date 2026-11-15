@@ -4,7 +4,9 @@
 // （禁 lib re-export guidance 兜底，防 lib→guidance→lib 环）。
 // entryValue/guidance 消费方：commands.ts inject/transition 与 tests（daily-mode/p3-hint/
 // p2-limits/artifact-budget/diagnose/phase-discipline/m4-smoke）。
-import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, CHUNK_KB, type Limits, type WfState } from "./lib.ts"; // P1-E：LANE_CAP 动态尾 // CHUNK_KB：分段阈值单一来源（domain/artifact）
+import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_USAGE, nextFor, clipBrief, FLOW_CMD_NAMES, isRejectReport, briefFallback, CHUNK_KB, type Limits, type WfState } from "./lib.ts";
+import { makeInitialWfState } from "./lib.ts"; // r53 批次 3：仪表用典型形态构造
+import { DAILY_STAGE_ORDER } from "../shared/phases.ts"; // r53 批次 3：默认流阶段序 // P1-E：LANE_CAP 动态尾 // CHUNK_KB：分段阈值单一来源（domain/artifact）
 
 // P1：写入 instructions entry 的值——机器可读头行 + 完整阶段 guidance。
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
@@ -43,6 +45,18 @@ export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: stri
     return `${DONE_ENTRY}${git ? `\n${git}` : ""}\n${head}`;
   }
   return `${guidance(st.phase, st, limits, overrides)}\n${head}`;
+}
+
+// r53 批次 3：guidance 注入预算仪表（观测不管控）——ping 显示分阶段典型注入字节数，
+// 给「模型可见文本瘦身」线供仪表。口径固化：各阶段 r=1、无 lanes/selfMod 的典型形态
+// （entryValue 输出随动态尾浮动，不定口径则数字不可比）；daily 6 阶段序（默认流）。
+export function guidanceBytesLine(limits: Limits = LIMITS): string {
+  const cells = DAILY_STAGE_ORDER.map((ph) => {
+    const st = makeInitialWfState("ses_probe");
+    st.phase = ph;
+    return `${ph}=${(Buffer.byteLength(entryValue(st, limits)) / 1024).toFixed(1)}k`;
+  });
+  return `📐 guidance 注入（典型形态）：${cells.join(" ")}`;
 }
 
 // R2 T2.1：模式派发注册表（Strategy 消费面，键=profile.id；完整性守卫=tests/profile-shape.test.js
