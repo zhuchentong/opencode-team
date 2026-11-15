@@ -14,7 +14,7 @@
 // bus（index 装配期创建，bridge/tool/commands 三方共享）。
 import * as fs from "node:fs";
 import {
-  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport,
+  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport, orphanArtifactLines,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
   FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
@@ -238,7 +238,29 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
         const dir = await resolveProjectDir(st, a.sessionID);
         let artifactFiles: string[] = [];
         try { artifactFiles = fs.readdirSync(`${dir}/.workflow/${st.slug}`); } catch (e) { swallow(e, "commands:diagnose-readdir-fail"); }
-        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows() });
+        // r54 批次 B：孤儿产物对账（IO 采集在此，判定纯函数 orphanArtifactLines）——已知 slug 集
+        // =当前 st.slug ∪ 本库全部任务 slug（dumpStates 复用，零新 SQL；跨项目 slug 天然并入抑制集）
+        let orphanLines: string[] = [];
+        try {
+          const wfDir = `${dir}/.workflow`;
+          const knownSlugs = new Set<string>([String(st.slug ?? "")]);
+          for (const row of await dumpStates()) {
+            const v: any = row?.value;
+            if (v && typeof v === "object" && v.slug) knownSlugs.add(String(v.slug));
+          }
+          const dirs = fs.readdirSync(wfDir, { withFileTypes: true })
+            .filter((e: any) => e.isDirectory())
+            .map((e: any) => {
+              let hasMd = false, mtimeMs = 0;
+              try {
+                mtimeMs = fs.statSync(`${wfDir}/${e.name}`).mtimeMs;
+                hasMd = fs.readdirSync(`${wfDir}/${e.name}`).some((f: string) => f.endsWith(".md"));
+              } catch (err) { swallow(err, "commands:diagnose-dir-stat-fail"); }
+              return { name: String(e.name), mtimeMs, hasMd };
+            });
+          orphanLines = orphanArtifactLines(dirs, [...knownSlugs], Date.now());
+        } catch (e) { swallow(e, "commands:diagnose-wfdir-fail"); }
+        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows(), orphanLines });
       },
     });
     add({

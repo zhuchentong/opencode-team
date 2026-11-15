@@ -1,6 +1,6 @@
 // wf-workflow — domain/diagnose：wf:diagnose 报告生成（自 lib.ts 逐字节平移，含 T01 🔇 静默失败摘要节）。
 // 白名单内部边（plan §0 实测最小集）：flow(nextFor)/artifact(KIND_FILES)/session(SID_ALIAS_USAGE)。
-import { LIMITS, type Limits, type SwallowEntry, type WfState } from "./types.ts";
+import { LIMITS, type Limits, type SwallowEntry, type WfState, DAY_MS } from "./types.ts";
 import { nextFor } from "./flow.ts";
 import { KIND_FILES } from "./artifact.ts";
 import { SID_ALIAS_USAGE } from "./session.ts";
@@ -18,6 +18,33 @@ export interface DiagnoseFacts {
   rpcErr?: string | null; // M16-r39 T06：bridge rpcErr 形状同源（string|null）
   limits?: Limits;
   swallows?: SwallowEntry[]; // T01：静默失败环形采样（缺省/空 → 摘要节零行，存量输出逐字不变）
+  orphanLines?: string[]; // r54 批次 B：孤儿产物目录告警行（orphanArtifactLines 产出；缺省/空=零新增行）
+}
+
+// ── r54 批次 B（test_008 实证）：孤儿产物对账——.workflow 子目录近期有产物但 tasks 无对应
+// slug（审计可能整体丢失的显式告警，消除「静默丢状态」盲区）。纯函数，bun test 直测。
+/** 孤儿产物检查的目录事实（commands 侧 IO 采集：readdir + stat + md 探测）。 */
+export interface OrphanDir { name: string; mtimeMs: number; hasMd: boolean }
+/** 孤儿产物目录判定（信息行，非拒绝文案——不加 ❌ 前缀，brief 级别互斥不变量）。
+ * 边界：① 非 md 目录跳过（纯 .db 杂物归 r53 F3 检查）；② `_debug`/`overrides`/点文件跳过；
+ * ③ mtime 超 14 天跳过——与 done GC 窗口对齐，完工超期的正常项目不误报（已知局限：mtime 可被
+ * touch 干扰，见 HOST-CONTRACT r54）。
+ * @param dirs 目录事实清单（含排除项，由本函数过滤）
+ * @param knownSlugs tasks 表已知 slug 集（含当前 st.slug）
+ * @param nowMs 当前时钟（ms）
+ * @returns 告警行（无孤儿=空数组，报告零新增行） */
+export function orphanArtifactLines(dirs: OrphanDir[], knownSlugs: string[], nowMs: number): string[] {
+  const known = new Set(knownSlugs.map(String));
+  const out: string[] = [];
+  for (const d of dirs) {
+    if (!d?.name || d.name.startsWith(".")) continue;
+    if (d.name === "_debug" || d.name === "overrides") continue;
+    if (!d.hasMd) continue; // 纯 .db 杂物目录归 r53 F3 检查，此处不重复
+    if (known.has(d.name)) continue;
+    if (nowMs - (d.mtimeMs || 0) > 14 * DAY_MS) continue;
+    out.push(`⚠️ 产物目录 ${d.name} 无对应任务状态（近期活动但审计缺失，勿据此取数）`);
+  }
+  return out;
 }
 /**
  * wf:diagnose 报告生成：汇总审计轨迹（拒绝/阻断按 note 归组+细分子行）、续接自愈计数、
@@ -89,6 +116,9 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   // 误导 learner 取数且污染产物目录。只提示不删（文件归属裁决留用户）。
   const strayDb = (facts.artifactFiles ?? []).filter((f) => /\.db(-wal|-shm)?$/.test(f));
   if (strayDb.length) out.push(`  ⚠️ 产物目录含状态库残留：${strayDb.join(", ")}（正常状态库只在 <项目>/.workflow/wf.db——确认无引用后可手动删除）`);
+
+  // r54 批次 B：孤儿产物目录（commands 侧 IO 采集 + orphanArtifactLines 纯函数判定；空=零新增行）
+  for (const l of facts.orphanLines ?? []) out.push(`  ${l}`);
 
   // 5) 注入/观测通道异常
   if (st.entryErr) out.push(`  ⚠️ 阶段注入失败（guidance 可能未进系统提示）：${st.entryErr}`);

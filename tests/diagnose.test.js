@@ -154,3 +154,39 @@ test("F3 无 .db 残留 → 不出提示行（常态零噪音）", () => {
   const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["plan.md", "test-report.md"] });
   assert.ok(!r.includes("状态库残留"));
 });
+
+// ── r54 批次 B（test_008 实证）：孤儿产物对账——目录有近期产物但 tasks 无对应 slug ──
+import { orphanArtifactLines, DAY_MS } from "../server/lib.ts";
+
+test("r54 B 孤儿判定：近期 md 目录且 slug 未知 → ⚠️ 告警行", () => {
+  const now = 1_800_000_000_000;
+  const lines = orphanArtifactLines(
+    [{ name: "lost-task", mtimeMs: now - 2 * DAY_MS, hasMd: true }],
+    ["known-task"], now,
+  );
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /⚠️ 产物目录 lost-task 无对应任务状态/);
+  assert.ok(!lines[0].startsWith("❌"), "信息行不加 ❌ 前缀（brief 级别互斥不变量）");
+});
+
+test("r54 B 孤儿判定：known 覆盖 / 非 md 目录 / _debug·overrides·点文件 / 超期目录 全部跳过", () => {
+  const now = 1_800_000_000_000;
+  const lines = orphanArtifactLines([
+    { name: "known-task", mtimeMs: now - DAY_MS, hasMd: true },            // 已知 slug
+    { name: "db-junk", mtimeMs: now - DAY_MS, hasMd: false },              // 纯 .db 杂物（归 F3）
+    { name: "_debug", mtimeMs: now - DAY_MS, hasMd: true },                // 排除名
+    { name: "overrides", mtimeMs: now - DAY_MS, hasMd: true },             // 排除名
+    { name: ".hidden", mtimeMs: now - DAY_MS, hasMd: true },               // 点文件
+    { name: "old-finished", mtimeMs: now - 15 * DAY_MS, hasMd: true },     // 超 GC 窗口的正常完工项目
+  ], ["known-task"], now);
+  assert.deepEqual(lines, [], "六类边界全部不告警");
+});
+
+test("r54 B 接线：orphanLines 进报告缩进行；空数组=零新增行（存量输出逐字不变）", () => {
+  const st = { sessionID: "s", slug: "demo", phase: "testing", rounds: {}, artifacts: {} };
+  const withOrphan = diagnoseReport(st, { version: "TEST", artifactFiles: [], orphanLines: ["⚠️ 产物目录 x 无对应任务状态"] });
+  assert.match(withOrphan, /  ⚠️ 产物目录 x 无对应任务状态/);
+  const baseline = diagnoseReport(st, { version: "TEST", artifactFiles: [] });
+  const clean = diagnoseReport(st, { version: "TEST", artifactFiles: [], orphanLines: [] });
+  assert.equal(clean, baseline, "orphanLines 空 → 与缺省逐字一致");
+});
