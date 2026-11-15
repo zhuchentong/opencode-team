@@ -130,10 +130,12 @@ export default Plugin.define({
     // r54 D2：空闲轮询退避——旧实现对无状态/done 项目恒 5s 全量 RPC（test_008 实证 done 后仍持续
     // 轮询）。守 harness R7 锚（单 setInterval/无 setTimeout）：节拍不变，空闲拍经 pollSkip 跳过
     // RPC（5s×6=等效 30s）；活跃态每拍照旧。事件推送/重连重拉通道不受影响。
+    // 真机修正（test_010）：rpc state.active 有状态行即 true（done 也不例外——r35 done 面板依赖），
+    // 空闲判定须用 phase==="done"，用 !active 会使退避永不生效。
     let pollTick = 0;
     const timer = setInterval(() => {
       const cur = snap();
-      const idle = !cur || !!cur.err || !cur.st?.active;
+      const idle = !cur || !!cur.err || !cur.st || cur.st?.phase === "done";
       if (pollSkip(idle, ++pollTick)) return;
       void refresh();
     }, 5000);

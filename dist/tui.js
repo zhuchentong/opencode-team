@@ -1319,7 +1319,7 @@ var tui_default = Plugin.define({
 		let pollTick = 0;
 		const timer = setInterval(() => {
 			const cur = snap();
-			if (pollSkip(!cur || !!cur.err || !cur.st?.active, ++pollTick)) return;
+			if (pollSkip(!cur || !!cur.err || !cur.st || cur.st?.phase === "done", ++pollTick)) return;
 			refresh();
 		}, 5e3);
 		let containers = 0;
