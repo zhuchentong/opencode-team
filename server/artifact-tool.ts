@@ -8,9 +8,13 @@
 // P4 公告（goopspec blocked-append）：test-report 落盘后按 verdict 在工具输出里指路
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
+import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
 import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
+
+/** 内容 hash：sha256 前 12 位 hex（与 managed-sync 两域同源；bytes 弱比较的强复核锚）。 */
+const hashOf = (buf: Buffer | string): string => createHash("sha256").update(buf).digest("hex").slice(0, 12);
 
 // M16-r39 T06：deps 类型化（ArtifactDeps 契约；宿主入参 ctx 保留 any）
 export interface ArtifactDeps {
@@ -22,6 +26,10 @@ export interface ArtifactDeps {
   logToolsOnce: Observer["logToolsOnce"];
 }
 
+/** 注册 wf_write_artifact 工具：产物落盘/修订/注册三模式 + 记账（artifacts/verdicts/lane 表）与告警指路。
+ * @param host T03 防腐层（tools.transform 注册面）
+ * @param deps 显式注入依赖（ArtifactDeps 契约）：resolveState/resolveProjectDir/save/emitUpdated/probeOnce/logToolsOnce
+ * @returns 工具注册 dispose 句柄（host.tools.transform 返回值透传） */
 export function registerArtifactTool(host: import("./host.ts").Host, deps: ArtifactDeps) { // T03：ctx→Host
   const { resolveState, resolveProjectDir, save, emitUpdated, probeOnce, logToolsOnce } = deps;
   return host.tools.transform((draft: any) => {
@@ -110,9 +118,16 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             if (!finalContent.length) return { content: `❌ 产物为空（0 字节）：${target}——疑似截断残留，拒绝注册（补写内容后重试）。` };
             const diskBytes = fs.statSync(target).size;
             // M16-r47 plan 幂等守卫：盘上 bytes 与记账一致 → no-op 早退，不清 review 记账——
-            // register 调用廉价，误调/重放不得放大「修订即清」锐边（bytes 弱比较，碰撞局限见 HOST-CONTRACT）
+            // register 调用廉价，误调/重放不得放大「修订即清」锐边。
+            // r53 批次 1：bytes 一致再 sha256 复核（消除同 bytes 异内容碰撞的文档化局限）；
+            // 存量记账无 hash → 退回 bytes 弱比较（向后兼容，保持 no-op 不放大锐边）；
+            // bytes 同 hash 异 → 不早退，落到下方 mark 的「修订即清」路径+审计照记。
             if (kind === "plan" && initial.artifacts?.[file]?.bytes === diskBytes) {
-              return { content: `✅ [${VERSION}] ${target} 已注册且内容未变化（${diskBytes} bytes）：记账不重放（review 结论/test-plan/方案确认记账保留）。` };
+              const prevHash = initial.artifacts?.[file]?.hash;
+              const diskHash = hashOf(fs.readFileSync(target));
+              if (prevHash === undefined || prevHash === diskHash) {
+                return { content: `✅ [${VERSION}] ${target} 已注册且内容未变化（${diskBytes} bytes）：记账不重放（review 结论/test-plan/方案确认记账保留）。` };
+              }
             }
             mode = "register";
           }
@@ -121,6 +136,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             fs.writeFileSync(target, finalContent.endsWith("\n") ? finalContent : `${finalContent}\n`);
           }
           const bytes = fs.statSync(target).size;
+          const hash = hashOf(fs.readFileSync(target)); // r53 批次 1：落盘结果 hash（write 补 \n 后以盘上为准）
           // M16-r33：verdict 从**结果全文**解析（patch 模式入参无 content，必须读结果，否则 done 关卡误拦）
           // M16-r34：plan-review 也解析 verdict（日常模式 M/L 独立验证结论，wf:build 关卡校验）
           const verdict = (kind === "test-report" || kind === "plan-review") ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
@@ -130,7 +146,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             // 产物写入者（planner/reviewer/tester/builder-reviewer/learner）在此暴露子会话身份
             trackRoleSession(row, context?.agent, context?.sessionID);
             row.artifacts = row.artifacts ?? {};
-            row.artifacts[file] = { at: new Date().toISOString(), bytes };
+            row.artifacts[file] = { at: new Date().toISOString(), bytes, hash };
             // R3 T3.1 子步 B：verdicts 记账改子对象写点（row 经 load 已 normalize，内存恒新形）
             row.verdicts = row.verdicts ?? {};
             if (kind === "test-plan") row.verdicts.testPlanWritten = true;
@@ -143,7 +159,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             // v2：lane 分组表解析记账（write/patch/register 三模式 finalContent 均为全文；每次注册重算，
             // bytes-no-op 早退不进 mark=保留上次记账；daily M/L wf:build 关卡消费，并行优先硬卡）
             if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); v.laneTableWritten = /lane 分组表/.test(finalContent); }
-            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}` });
+            logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}`, detail: `hash=${hash}` }); // r53 批次 1：hash 入审计 detail（wf.db 不进模型上下文）
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
           // load(1)=初始 st、load(n)=resolveState 最新快照（无 slug→null=gone，行被并发清除）

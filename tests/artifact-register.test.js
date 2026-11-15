@@ -174,3 +174,58 @@ test("M16-r47 register：超预算产物注册仍告警（字节计，不阻断�
   assert.ok(stOf(sid).artifacts["plan.md"], "告警不阻断记账");
   dispose?.();
 });
+
+// ── r53 批次 1：register 幂等守卫 hash 复核（bytes 弱比较升级 sha256 前 12 位）─────────
+const setupPlan = async (m, sid, slug) => {
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: slug } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
+  await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
+  await tool(m).execute({ kind: "plan", content: "# 计划 v1\n" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n\n干净。\n" }, { sessionID: sid, agent: "wf/planner-reviewer" });
+  await confirm(m, sid);
+};
+
+test("r53 hash 复核：bytes 同 hash 异（等长改写）→ 不 no-op，走修订即清；hash 入记账与审计", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_r53h";
+  await setupPlan(m, sid, "r53-collision");
+  assert.ok(stOf(sid).artifacts["plan.md"].hash, "记账含 hash 字段");
+  // 等长异内容改写（12 bytes → 12 bytes）：bytes 弱比较判不变，hash 复判=变更
+  nativeWrite("r53-collision", "plan.md", "# 计划 v2\n");
+  const rev = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(rev.content, /plan 已修订/, "hash 判变 → 修订即清（不再误 no-op）");
+  assert.equal(stOf(sid).verdicts?.planReview, undefined, "review 结论被清");
+  const log = stOf(sid).log.filter((e) => e.cmd === "tool:wf_write_artifact");
+  assert.match(String(log.at(-1).detail), /hash=[0-9a-f]{12}/, "审计 detail 含 hash");
+  dispose?.();
+});
+
+test("r53 hash 复核：同内容重放 → hash 一致 no-op（既有语义保持）", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_r53n";
+  await setupPlan(m, sid, "r53-noop");
+  const noop = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(noop.content, /已注册且内容未变化/);
+  assert.equal(stOf(sid).verdicts?.planReview, "PASS", "no-op 不清账");
+  dispose?.();
+});
+
+test("r53 hash 复核：存量记账无 hash → 退回 bytes 弱比较（向后兼容 no-op）", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_r53l";
+  await setupPlan(m, sid, "r53-legacy");
+  // 手工摘除 hash 模拟存量形状（直改 state_json）
+  const d = new Database(DB);
+  const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid);
+  const st = JSON.parse(row.state_json);
+  delete st.artifacts["plan.md"].hash;
+  d.query("UPDATE tasks SET state_json = ? WHERE session_id = ?").run(JSON.stringify(st), sid);
+  d.close();
+  const noop = await tool(m).execute({ kind: "plan" }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(noop.content, /已注册且内容未变化/, "无 hash → bytes 比较维持 no-op 不放大锐边");
+  assert.equal(stOf(sid).verdicts?.planReview, "PASS");
+  dispose?.();
+});
