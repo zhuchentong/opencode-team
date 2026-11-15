@@ -220,6 +220,13 @@ function selfMtimeIso() {
 		return "";
 	}
 }
+/** r54 D2 空闲轮询跳拍判定（纯函数，bun test 直测）：空闲（无状态/err/done）时每 6 拍执行 1 次
+* （5s 节拍 ×6=等效 30s 退避），活跃态每拍执行。守锚约束：单 setInterval、无新 timer
+* （harness R7）——故不做 setInterval 重排，改为节拍内跳过 RPC 调用。
+* @param idle 当前是否空闲（无活跃任务/错误态）
+* @param tick 5s 节拍计数（自增序号，1 起）
+* @returns true=本拍跳过 refresh 调用 */
+var pollSkip = (idle, tick) => idle && tick % 6 !== 0;
 /**
 * 创建 TUI 调试探针：WF_DEBUG=1 时把诊断事件追加写入 .workflow/_debug/tui-refresh.log，默认关闭。
 * @param context 宿主注入的插件上下文（取 location.directory 定位仓库根）。
@@ -1309,7 +1316,10 @@ var tui_default = Plugin.define({
 			hasDataListen: !!offData,
 			hasConn: !!offConn
 		});
+		let pollTick = 0;
 		const timer = setInterval(() => {
+			const cur = snap();
+			if (pollSkip(!cur || !!cur.err || !cur.st?.active, ++pollTick)) return;
 			refresh();
 		}, 5e3);
 		let containers = 0;

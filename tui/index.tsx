@@ -22,7 +22,7 @@ import { createDeduper } from "./dedup.ts"; // R3 T3.3：去重单实现（serve
 import { setupNotify } from "./notify.ts"; // R3 T3.4：toast+OS 通知层
 import { boxEl, textEl, buildRows, zhOf, insert, setProp, setupArtifactPreview } from "./panel.tsx"; // R3 T3.4：渲染层
 import { installExecIntercept } from "./exec-intercept.ts"; // R3 T3.4：return 键拦截
-import { str, errMsg, setupProbe, selfMtimeIso } from "./util.ts";
+import { str, errMsg, setupProbe, selfMtimeIso, pollSkip } from "./util.ts";
 import { setupRefresh } from "./data.ts"; // R3 T3.4：对账拉取
 
 /** 当前构建版本号（与 server 同源 shared/version.ts，随探针落盘对账）。 */
@@ -127,7 +127,16 @@ export default Plugin.define({
     } catch { /* data.on 不可用则轮询兜底 */ }
     probe({ evt: "subscribed", hasDataListen: !!offData, hasConn: !!offConn });
 
-    const timer = setInterval(() => { void refresh(); }, 5000);
+    // r54 D2：空闲轮询退避——旧实现对无状态/done 项目恒 5s 全量 RPC（test_008 实证 done 后仍持续
+    // 轮询）。守 harness R7 锚（单 setInterval/无 setTimeout）：节拍不变，空闲拍经 pollSkip 跳过
+    // RPC（5s×6=等效 30s）；活跃态每拍照旧。事件推送/重连重拉通道不受影响。
+    let pollTick = 0;
+    const timer = setInterval(() => {
+      const cur = snap();
+      const idle = !cur || !!cur.err || !cur.st?.active;
+      if (pollSkip(idle, ++pollTick)) return;
+      void refresh();
+    }, 5000);
 
     // ── 渲染：P0 探针逐字形态（真机 build 30+ 次容器内换树零崩溃）——P4 禁改（harness 守卫）──
     let containers = 0;

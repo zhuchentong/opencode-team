@@ -16,6 +16,13 @@ export function selfMtimeIso(): string {
     return statSync(decodeURIComponent(new URL(import.meta.url).pathname)).mtime.toISOString();
   } catch { return ""; }
 }
+/** r54 D2 空闲轮询跳拍判定（纯函数，bun test 直测）：空闲（无状态/err/done）时每 6 拍执行 1 次
+ * （5s 节拍 ×6=等效 30s 退避），活跃态每拍执行。守锚约束：单 setInterval、无新 timer
+ * （harness R7）——故不做 setInterval 重排，改为节拍内跳过 RPC 调用。
+ * @param idle 当前是否空闲（无活跃任务/错误态）
+ * @param tick 5s 节拍计数（自增序号，1 起）
+ * @returns true=本拍跳过 refresh 调用 */
+export const pollSkip = (idle: boolean, tick: number): boolean => idle && tick % 6 !== 0;
 
 // R3 T3.4：探针工厂（自 index.tsx setup 拆出；REPO 兜底/loaded 时间戳/序列号在此闭环）。
 // P6 收敛：默认关闭（WF_DEBUG=1 ./scripts/tui-restart.sh 开启）；写 .workflow/_debug/tui-refresh.log。
