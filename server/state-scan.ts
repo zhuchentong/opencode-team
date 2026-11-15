@@ -30,7 +30,39 @@ export const PROJECTS_FILE_DEFAULT = (() => {
 export function projectsListFile(): string { return process.env.WF_PROJECTS_FILE || PROJECTS_FILE_DEFAULT; }
 // 登记（createStore 调用）：内存恒记；文件仅在未设 WF_PROJECTS_FILE 时追加（env 钩子=完全接管语义）。
 // JSONL 逐行 append：无读-改-写竞态（多进程并发安全，坏行=撕裂写，扫描侧跳过）。
-/** 登记项目库：内存表恒记；文件仅在未设 WF_PROJECTS_FILE 时 JSONL 追加（append 多进程并发安全）。
+// r54 批次 C（test_008 实证 98KB/数百重复行）：进程内 SEEN 去重——同 dir 同 dbFile 不再重复 append；
+// 每次热载模块重初始化后由惰性基线回读补齐（历史文件中的既有 dir 不重复追加）。
+// 已知边界：多进程各自冷启动仍各追一行（有限重复，可接受；扫描侧 Set 天然去重）。
+const SEEN = new Map<string, string>(); // dir → dbFile 进程内登记（含基线回读）
+let baselineLoaded = false;
+/** 惰性一次性回读现有清单建去重基线（失败静默降级：基线为空=宁可多写一行也不丢登记）。 */
+const loadBaselineOnce = (): void => {
+  if (baselineLoaded) return;
+  baselineLoaded = true;
+  try {
+    const txt = fs.readFileSync(projectsListFile(), "utf8");
+    for (const line of txt.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const o = JSON.parse(line);
+        if (o && typeof o.dir === "string" && o.dir && typeof o.dbFile === "string" && o.dbFile) SEEN.set(o.dir, o.dbFile);
+      } catch (e) { swallow(e, "state-scan:projects-baseline-line-bad"); }
+    }
+  } catch (e) { swallow(e, "state-scan:projects-baseline-read-fail"); }
+};
+/** r54 C 追加判定（bun test 直测；含登记副作用——返回 true 即调用方必须执行 append）：
+ * 同 dir+dbFile 已在 SEEN（进程内或惰性基线回读命中）→ false 不追加；否则登记并返回 true。
+ * @param dir 项目根目录
+ * @param dbFile 该项目 wf.db 路径
+ * @returns 是否需要 append（true=SEEN 已登记本条，调用方须落盘） */
+export const projectAppendNeeded = (dir: string, dbFile: string): boolean => {
+  if (SEEN.get(dir) === dbFile) return false;
+  loadBaselineOnce();
+  if (SEEN.get(dir) === dbFile) return false;
+  SEEN.set(dir, dbFile);
+  return true;
+};
+/** 登记项目库：内存表恒记；文件仅在未设 WF_PROJECTS_FILE 时 JSONL 追加（append 多进程并发安全；r54 同 dir+dbFile 去重）。
  * @param dir 项目根目录（内存表键）
  * @param dbFile 该项目 wf.db 绝对路径
  * @returns 无；任何失败 swallow 记账（state-scan:projects-file-append-fail），不抛出 */
@@ -40,7 +72,7 @@ export function registerProject(dir: string, dbFile: string): void {
     PROJECT_DBS.set(dir, dbFile);
     if (process.env.WF_PROJECTS_FILE !== undefined) return;
     const f = projectsListFile();
-    if (!f) return;
+    if (!f || !projectAppendNeeded(dir, dbFile)) return;
     fs.mkdirSync(dirname(f), { recursive: true });
     fs.appendFileSync(f, JSON.stringify({ dir, dbFile }) + "\n");
   } catch (e) { swallow(e, "state-scan:projects-file-append-fail"); }
