@@ -79,3 +79,53 @@ test("v2 多 lane 返工路由：building 返工行按活跃 lane 数条件渲�
   const g1 = guidance("building", fixSt(one));
   assert.match(g1, /复用原 builder sessionID/); assert.ok(!g1.includes("归属 lane"));
 });
+
+// ── r53 F1（test_007 实证）：done 即 lanes 自动收尾 ──────────────────────────────
+// 任务推 done 后残留 active lane 会被跨库并发护栏/软准入口径误判为在途并行；
+// transition.ts done 分支统一置 done（幂等、不删条目、lastUsedAt 刷新）。
+import { mkWiringHarness } from "./helpers/wiring.js";
+
+const toDoneWithLanes = async (t, dir, withLanes = true) => {
+  const h = await mkWiringHarness({ sessionID: `ses_${t}`, dir });
+  await h.run("wf:intake", `f1-${t}`);
+  await h.run("wf:plan");
+  await h.run("wf:review");
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
+  await h.run("wf:build");
+  await h.run("wf:test");
+  h.patch({ testReportVerdict: "PASS" });
+  if (withLanes) h.patch({ lanes: { ...activeLanes(2), T02: { ...activeLanes(2).T02, status: "done" } } }); // 混合形态：1 active + 1 done
+  return { h, out: await h.run("wf:done") };
+};
+
+test("F1 done 流转后 lanes 全部置 done（active 收尾、done 保持、lastUsedAt 刷新）", async () => {
+  const { h } = await toDoneWithLanes("done-lanes", "/tmp/opencode/wf-f1");
+  const lanes = h.st().lanes;
+  assert.equal(h.st().phase, "done");
+  for (const [id, v] of Object.entries(lanes)) {
+    assert.equal(v.status, "done", `lane ${id} 应收尾`);
+    assert.ok(v.lastUsedAt, "lastUsedAt 刷新（done(Nmin) 显示口径）");
+  }
+  assert.ok(lanes.T01.sessionID, "条目保留不删（续用提示）");
+});
+
+test("F1 幂等：无 lanes 任务推 done 零改动不抛错", async () => {
+  const { h } = await toDoneWithLanes("done-nolanes", "/tmp/opencode/wf-f1b", false);
+  assert.equal(h.st().phase, "done");
+  assert.deepEqual(h.st().lanes, {}, "无 lanes 不造键");
+});
+
+// ── r53 F2：/wf:status lanes 行附 worktree 尾段（回填取证）────────────────────────
+// 经 registerCommands 真实驱动 status 输出断言（wf:lane set 带 worktree 路径 → active 行显示树尾段）。
+test("F2 wf:lane set 带 worktree → status lanes 行显示路径尾段；缺省显示 @无树", async () => {
+  const h = await mkWiringHarness({ sessionID: "ses_f2", dir: "/tmp/opencode/wf-f2" });
+  await h.run("wf:intake", "f2-wt");
+  const setOut = await h.run("wf:lane", "set T01 ses_f2 /tmp/opencode/wf-f2/wt/lane-T01 --areas=T01");
+  assert.ok(!setOut.startsWith("❌"), `lane set 应成功：${setOut}`);
+  const out = await h.run("wf:status");
+  assert.match(out, /T01=active@lane-T01/, "worktree 尾段回显");
+  // 缺 worktree → @无树
+  await h.run("wf:lane", "set T02 ses_f2");
+  const out2 = await h.run("wf:status");
+  assert.match(out2, /T02=active@无树/);
+});

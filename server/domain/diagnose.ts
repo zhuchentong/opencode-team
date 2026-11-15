@@ -10,6 +10,7 @@ import { redactIds } from "../../shared/redact.ts";
 // facts = { version, artifactFiles: 磁盘上实际存在的产物名[], entryErr?, rpcErr?, limits? }
 // 证据来源：st.log（每次流转/拒绝/阻断都记账）+ 关卡记账 + 磁盘对账。
 
+/** wf:diagnose 的外部事实输入（版本、磁盘产物清单、entry/rpc 异常、limits 覆盖、静默失败采样）。 */
 export interface DiagnoseFacts {
   version?: string;
   artifactFiles?: string[];
@@ -18,6 +19,13 @@ export interface DiagnoseFacts {
   limits?: Limits;
   swallows?: SwallowEntry[]; // T01：静默失败环形采样（缺省/空 → 摘要节零行，存量输出逐字不变）
 }
+/**
+ * wf:diagnose 报告生成：汇总审计轨迹（拒绝/阻断按 note 归组+细分子行）、续接自愈计数、
+ * 轮次余量、关卡记账、产物对账（state vs 磁盘）、注入/观测通道异常、静默失败摘要与下一步指引。
+ * @param st 当前工作流状态
+ * @param facts 外部事实（磁盘对账清单、异常、limits 覆盖等；缺省=只报状态侧）
+ * @returns 多行诊断报告文本
+ */
 export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   const out: string[] = [];
   const r: Record<string, number> = st.rounds ?? {};
@@ -76,6 +84,11 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   if (missing.length) out.push(`  ⚠️ 记账但磁盘缺失：${missing.join(", ")}`);
   if (untracked.length) out.push(`  ⚠️ 磁盘有但未记账：${untracked.join(", ")}（产物若经原生 write/edit 落盘，用 wf_write_artifact(kind=…) 不带 content 注册补记账即可）`);
   if (!missing.length && !untracked.length) out.push(`  ✅ 产物对账一致（${recorded.length} 项）`);
+
+  // r53 F3（test_007 实证）：产物目录内状态库残留检查——目录解析错位会落杂物 wf.db（空库无表），
+  // 误导 learner 取数且污染产物目录。只提示不删（文件归属裁决留用户）。
+  const strayDb = (facts.artifactFiles ?? []).filter((f) => /\.db(-wal|-shm)?$/.test(f));
+  if (strayDb.length) out.push(`  ⚠️ 产物目录含状态库残留：${strayDb.join(", ")}（正常状态库只在 <项目>/.workflow/wf.db——确认无引用后可手动删除）`);
 
   // 5) 注入/观测通道异常
   if (st.entryErr) out.push(`  ⚠️ 阶段注入失败（guidance 可能未进系统提示）：${st.entryErr}`);

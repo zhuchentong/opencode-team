@@ -36,6 +36,9 @@ const listOverrides = (dir: string) => {
 // done-git-delivery-confirm T01：done 流转的 git 环境检测（模块级 IO 纯函数，fail-open 由调用方兜底）。
 // isGit = <dir>/.git 存在（目录或 linked worktree 的 gitdir 指针文件均算）；
 // hasRemote = git config 匹配 [remote "...]（.git 文件 → 解析 gitdir: 指针取 <gitdir>/config；读失败保守 false）。
+/** done 流转的 git 环境检测（模块级 IO 纯函数）：<dir>/.git 存在即 isGit；hasRemote 匹配 config 的 [remote 段。
+ * @param dir 项目目录（linked worktree 的 .git 指针文件同样解析）
+ * @returns {isGit, hasRemote}；读失败保守降级（isGit=true, hasRemote=false），不抛出 */
 export function detectDoneGit(dir: string): { isGit: boolean; hasRemote: boolean } {
   const gitPath = `${dir}/.git`;
   if (!fs.existsSync(gitPath)) return { isGit: false, hasRemote: false };
@@ -58,6 +61,9 @@ export interface TransitionDeps {
   emitUpdated: (st: WfState) => Promise<void>;
 }
 
+/** 状态机推进编排工厂：构造 transition 闭包（load→校验→应用→inject→save 重试循环）与 inject。
+ * @param deps 显式注入依赖：host（Host 防腐层）/load/save/resolveProjectDir（Store 契约）/LIMS（生效上限）/emitUpdated（TUI 广播）
+ * @returns { transition(sessionID, cmd, text?): Promise<string>——guidance 或 ❌ 拒绝/失败文案；inject(st)——entry 指引写入（entryErr 记账不抛出） } */
 export function createTransition(deps: TransitionDeps) {
   const { host, load, save, resolveProjectDir, LIMS, emitUpdated } = deps;
 
@@ -124,6 +130,14 @@ export function createTransition(deps: TransitionDeps) {
         (st.timing ??= {}).phaseEnteredAt = at;
         if (flow.to === "done" && st.timing?.startedAt && !st.timing.finishedAt) st.timing.finishedAt = at;
         // 存量（无 startedAt）推 done 不置 finishedAt（总耗时保持 null 降级 ·）
+        // r53 F1（test_007 实证）：done 即 lanes 自动收尾——任务已完，残留 active lane 会被
+        // 跨库并发护栏/软准入口径误判为在途并行。幂等（重复推 done/无 lanes 零改动）；
+        // 只动 status 不删条目（done 子命令同款：留作续用提示；wf:reset 清任务行时随库消失）。
+        if (flow.to === "done" && st.lanes) {
+          for (const id of Object.keys(st.lanes)) {
+            if (st.lanes[id]?.status !== "done") st.lanes[id] = { ...st.lanes[id], status: "done", lastUsedAt: at };
+          }
+        }
         // M10-b：一次性补全 projectID/directory（供索引与子会话落盘定位）
         if (!st.projectID) {
           try {

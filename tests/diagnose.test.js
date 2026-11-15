@@ -139,3 +139,18 @@ test("R2 T2.3：细化 note（gate-rejected:<id>）按 base 归组 + └ 明细�
   assert.match(r, /agent-rejected ×1/);
   assert.match(r, /└ wf\/builder ×1/);
 });
+
+// ── r53 F3（test_007 实证）：产物目录状态库残留检查 ──────────────────────────────
+// 目录解析错位会落杂物 wf.db（空库无表）误导 learner 取数；diagnose 只提示不删。
+test("F3 产物目录含 .db 残留 → ⚠️ 提示行（含可删指引）", () => {
+  const st = { sessionID: "s", slug: "demo", phase: "testing", rounds: {}, artifacts: {} };
+  const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["plan.md", "wf.db", "wf.db-wal"] });
+  assert.match(r, /状态库残留：wf\.db, wf\.db-wal/);
+  assert.match(r, /可手动删除/);
+});
+
+test("F3 无 .db 残留 → 不出提示行（常态零噪音）", () => {
+  const st = { sessionID: "s", slug: "demo", phase: "testing", rounds: {}, artifacts: {} };
+  const r = diagnoseReport(st, { version: "TEST", artifactFiles: ["plan.md", "test-report.md"] });
+  assert.ok(!r.includes("状态库残留"));
+});

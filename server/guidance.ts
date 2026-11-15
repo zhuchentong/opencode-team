@@ -10,6 +10,7 @@ import { LANE_CAP, LIMITS, profileOf, budgetFor, tierOf, KIND_FILES, SID_ALIAS_U
 // 依据（官方 docs/build/plugins/server §Sessions）：entries 渲染为系统提示中的
 // <context key="..."> 块，每次模型调用从存储重新组装 ⇒ 天然抗 compaction（superpowers 的
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
+/** done 终态 entry 值：一行完成提示（不长期占用系统提示；git 交付确认指令仅在记账存在时渲染）。 */
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
 // done-git-delivery-confirm T01：done 交付确认指令——仅 st.doneGit.isGit 时渲染（无记账=输出字节级不变，
 // 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
@@ -28,6 +29,11 @@ function doneGitLine(st: WfState): string | null {
     "提交范围=本任务代码（.learnings/ 已默认 ignore 不入提交，M16-r52；确认前落盘，提交后不得再写），" +
     "只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
 }
+/** 组装 instructions entry 值：完整阶段 guidance + 机器可读头行（易变内容殿后保 prompt cache）；done 只留一行。
+ * @param st 工作流状态快照
+ * @param limits 生效上限（缺省 LIMITS）
+ * @param overrides 项目级角色定制文件名列表（.workflow/overrides/*.md）
+ * @returns entry 槽写入的完整文本 */
 export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   // 易变区纪律（借鉴 my-opencode-deepseek-config 字节稳定前缀）：静态指引在前，
   // 易变内容（轮次/续用 sessionID/head 行）殿后——返工同阶段 r+1、子会话登记只打穿尾部，静态段保 prompt cache。
@@ -46,6 +52,12 @@ const GUIDANCE_BY_ID: Record<string, (phase: string | null | undefined, st: WfSt
   daily: guidanceDaily,
 };
 
+/** 渲染阶段指引：按 profileOf(st).id 注册表派发（full/daily），有 overrides 时追加项目级角色定制提示。
+ * @param phase 当前阶段（未知阶段返回兜底行）
+ * @param st 工作流状态快照（供轮次/lane/记账条件渲染）
+ * @param limits 生效上限（缺省 LIMITS）
+ * @param overrides 项目级角色定制文件名列表
+ * @returns 多行指引文本 */
 export function guidance(phase: string | null | undefined, st: WfState, limits: Limits = LIMITS, overrides: string[] = []): string {
   // M16-r34：daily 模式用日常习惯流指引（tier 分支）；full/存量用 guidanceBase
   // R2 T2.1：isDaily 三元 → profileOf(st).id 注册表派发（模式判定单点在 profileOf）
@@ -102,8 +114,8 @@ const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf
 // 旧 A3「size 决定串行/并行」（M 分 2 派 vs L 一派到底=裁量漂移）→ 收敛为：
 // M/L 均按 plan lane 分组表并行优先；总时长 ≥15 分钟（或 T 点 ≥3）时固定开销（冷启动+合并 ~2-3 分钟）
 // << 并行收益（实测 M 级总时长 20-30 分钟），串行判定须附交叠证据。
-const DISPATCH_L = `L 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（每批 ≤4 个 T<nn> 续用同 session；subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；仅当互斥证据不足（plan 写明交叠证据）→ 单树串行（不为并行而并行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
-const DISPATCH_M = `M 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥（总时长 ≥15 分钟或 T 点 ≥3 时并行收益必为正：固定开销 ~2-3 分钟 << 并行节省）→ 多 builder 并行（同 L 级形态：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md；并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准）；plan 判单 lane（附交叠证据）或收益线未达 → 单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。串行判定=plan 须举证，勿默认串行。`;
+const DISPATCH_L = `L 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥证据充分（plan 有 lane 表+areas）→ 多 builder 并行（每批 ≤4 个 T<nn> 续用同 session；subagent background=true、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 别名续接、回执 build-receipt-<Tnn>.md；wf:lane set 须带 worktree 绝对路径回填登记——缺路径则返工路由只能靠分支命名反查；并行授权=plan:confirm 卡已展示 lane 划分+预计耗时，批准即生效，不再重复问）；仅当互斥证据不足（plan 写明交叠证据）→ 单树串行（不为并行而并行）。worktree 隔离执行、全部批次完成后合并回主树统一核验（wf-worktrees skill）。一派到底=例外须在回执说明理由。`;
+const DISPATCH_M = `M 级（并行优先）：先按 plan lane 分组表判并行——lane≥2 且写集互斥（总时长 ≥15 分钟或 T 点 ≥3 时并行收益必为正：固定开销 ~2-3 分钟 << 并行节省）→ 多 builder 并行（同 L 级形态：独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、wf:lane set 带 worktree 绝对路径回填；并行授权=plan:confirm 卡展示 lane 划分+预计耗时且批准）；plan 判单 lane（附交叠证据）或收益线未达 → 单 wf/builder 一次委派串行到底（主树），按 T<nn> 逐点 TDD（红测试从 plan 验收标准写，先红后绿），返工续用同 session。串行判定=plan 须举证，勿默认串行。`;
 // R2 T2.1 DispatchStrategy：M/L 派发策略表（tier 判定唯一形态=DISPATCH_BY_TIER[tier]）
 const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L };
 // selfmod-guard T01：引擎自改纪律行（st.selfMod 门控渲染——entry 通道抗 compaction；
@@ -336,6 +348,10 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
 // 消费方：commands.ts publishOutput（T03 接线）→ reports 行/report 事件/exec 返回三通道。
 // 零回显（A/G-2）：每行过 clipBrief（≤100 码点截断加 … + redactIds）——slug 理论上可含
 // 任意串，脱敏兜底保证「无 ses_」不变量（tests/brief-level.test.js 逐例断言不放宽）。
+/** 流转成功报告的 4 行结构化 brief（纯结构化生成，逐行过 clipBrief 脱敏截断）。
+ * @param st 工作流状态快照
+ * @param limits 生效上限（缺省 LIMITS）
+ * @returns 【标题/行动/轮次/指路】四行文本 */
 export function briefForTransition(st: WfState, limits: Limits = LIMITS): string {
   const L = { ...LIMITS, ...limits };
   const modeLabel = profileOf(st).id === "daily" ? "日常模式" : "完整模式"; // R2 T2.1：isDaily 消费改 profile 单点
@@ -357,6 +373,12 @@ export function briefForTransition(st: WfState, limits: Limits = LIMITS): string
 
 // 分派（§4 冻结）：流转命令 + 非拒绝文本 + st 有相位 → 结构化 transition brief；
 // 其余（非流转命令成功报告/一切拒绝(halt)文案/st 不可得）→ briefFallback 2 行。
+/** brief 分派：流转命令+非拒绝文本+有相位 → 结构化 transition brief；其余 → briefFallback 两行。
+ * @param cmd 命令名
+ * @param text 命令输出全文
+ * @param st 工作流状态（不可得为 null）
+ * @param limits 生效上限（缺省 LIMITS）
+ * @returns brief 文本（保证无 ses_ 子串） */
 export function briefFor(cmd: string, text: string, st: WfState | null, limits: Limits = LIMITS): string {
   if (FLOW_CMD_NAMES.has(cmd) && !isRejectReport(text) && st?.phase) return briefForTransition(st, limits);
   return briefFallback(cmd, text);

@@ -207,7 +207,9 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
               const min = Math.max(0, Math.round((new Date(v.lastUsedAt).getTime() - new Date(v.at).getTime()) / 60000));
               return `${k}=done(${min}min)`;
             }
-            return `${k}=${v.status ?? "active"}`;
+            // r53 F2：active lane 附 worktree 路径尾段（回填取证——返工路由 @Tnn 定位）
+            const wtTail = v.worktree ? `@${String(v.worktree).split("/").filter(Boolean).pop()}` : "@无树";
+            return `${k}=${v.status ?? "active"}${wtTail}`;
           }).join(" ") || "{}"}  ${JSON.stringify(st.lanes ?? {})}`,
           `roleSessions: ${JSON.stringify(st.reuse?.roleSessions ?? {})}`, // M16-r40：角色→子会话自动登记（续用取证）
           `artifacts: ${JSON.stringify(st.artifacts ?? {})}`,
