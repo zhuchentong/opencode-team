@@ -9,8 +9,11 @@
 // setup(ctx:any) 入口签名不动（宿主契约）；adaptHost 是全仓唯一收 ctx 的函数。
 import { swallow } from "./observe.ts";
 
+/** 通用注销句柄（宿主 transform/hook 注册返回的 dispose 统一形状）。 */
 export interface HostDisposer { dispose: () => void }
 
+/** 宿主能力防腐层接口：全仓唯一允许 ctx.<prop> 语义的抽象面（方法语义见 adaptHost 注释——
+ * 旧站可选链降级的保持缺失→undefined/null，依赖 try/catch 的保持缺失→rejected TypeError）。 */
 export interface Host {
   options: Record<string, any>;
   location: { directory: string | undefined };
@@ -50,6 +53,9 @@ export interface Host {
 const missing = (what: string): Promise<never> =>
   Promise.reject(new TypeError(`[wf-host] ${what} unavailable`));
 
+/** 把宿主注入 ctx 包装为 Host 防腐层（全仓唯一收 ctx 的函数；构造期零解引用，残缺 ctx 直喂仍活）。
+ * @param ctx 宿主注入的插件上下文（官方无类型，显式 any 边界）
+ * @returns Host：options/location 为活读 getter；各方法为旧裸戳点的薄透传（降级语义逐字保留） */
 export function adaptHost(ctx: any): Host {
   return {
     get options() { return ctx?.options ?? {}; },

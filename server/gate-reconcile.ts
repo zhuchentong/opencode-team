@@ -10,7 +10,9 @@ import { KIND_FILES, parseVerdict, type WfState } from "./lib.ts";
 import { logAdd } from "./state.ts";
 import { swallow } from "./observe.ts";
 
-/** hash：sha256 前 12 位（与 artifact-tool/managed-sync 同源口径）。 */
+/** hash：sha256 前 12 位（与 artifact-tool/managed-sync 同源口径）。
+ * @param buf 待哈希内容（Buffer）。
+ * @returns sha256 前 12 位 hex 串。 */
 const hashOf = (buf: Buffer): string => createHash("sha256").update(buf).digest("hex").slice(0, 12);
 
 /** 命令 → gate 依赖产物 kind（关卡的文件面；确认类记账 confirmedAt 经 question 观测，不在文件面内）。 */
@@ -24,6 +26,11 @@ const GATE_KINDS: Record<string, string[]> = {
  * gate 拒绝路径对账：cmd 关卡依赖的产物若「盘上已落盘且未记账」则补 register 记账（内存 st 就地改，
  * 随调用侧 apply 的 save 落盘）。返回是否发生补记（true=调用侧可重放评估一次）。
  * fail-soft：任何 IO 异常按单 kind 跳过，不影响拒绝主路径。
+ * @param st 内存状态对象（就地补记账，随调用侧 apply 落盘）。
+ * @param cmd 触发 gate 的命令名（wf:build / wf:test-design / wf:done）。
+ * @param dir 项目根目录（对账文件按 `<dir>/.workflow/<slug>/` 定位）。
+ * @param at 记账时间戳（ISO 串，写入 artifacts/审计）。
+ * @returns 是否发生补记（true=调用侧可重放评估一次）。
  */
 export function reconcileGateArtifacts(st: WfState, cmd: string, dir: string, at: string): boolean {
   const kinds = GATE_KINDS[cmd];

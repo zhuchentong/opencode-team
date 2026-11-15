@@ -22,6 +22,11 @@ const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentI
 // M16-r34：mode 感知（daily 用 NEXT_DAILY）；模块级纯函数，只捕获模块 import，不依赖闭包
 const nextHint = (st: any, phase: string) => `当前阶段「${phase}」下一步：${nextFor(st, phase)}（leader 调用 wf_command(name=…) 推进，用户手敲亦可）。`;
 
+/** 注册 execute.before 工具钩子：阶段越权硬阻断 + subagent sessionID 自愈/别名改写 + question 方案确认记账 + 委派观察灯。
+ * 抛出含 GATE_ERR 标记的异常=拦截工具调用；其余内部异常 fail-open 不阻断。
+ * @param host T03 防腐层（tools.hook("execute.before") 注册面）
+ * @param deps 宿主注入依赖（显式 any 边界）：resolveState/isAllowed/allowHint/probeOnce/save/resolveProjectDir
+ * @returns 钩子注册句柄（host.tools.hook 返回值透传） */
 export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
   const { resolveState, isAllowed, allowHint, probeOnce, save, resolveProjectDir } = deps;
 

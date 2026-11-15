@@ -50,6 +50,12 @@ export function entryValue(st: WfState, limits: Limits = LIMITS, overrides: stri
 // r53 批次 3：guidance 注入预算仪表（观测不管控）——ping 显示分阶段典型注入字节数，
 // 给「模型可见文本瘦身」线供仪表。口径固化：各阶段 r=1、无 lanes/selfMod 的典型形态
 // （entryValue 输出随动态尾浮动，不定口径则数字不可比）；daily 6 阶段序（默认流）。
+/**
+ * 注入预算仪表行：按 daily 阶段序输出各阶段典型 guidance 字节数（k，一位小数）。
+ * 口径固定为 r=1、无 lanes/selfMod 的典型形态（见上方批次说明），仅供观测对比。
+ * @param limits 预算限额（缺省取模块 LIMITS）
+ * @returns 形如 "📐 guidance 注入（典型形态）：intake=1.2k …" 的单行字符串
+ */
 export function guidanceBytesLine(limits: Limits = LIMITS): string {
   const cells = DAILY_STAGE_ORDER.map((ph) => {
     const st = makeInitialWfState("ses_probe");

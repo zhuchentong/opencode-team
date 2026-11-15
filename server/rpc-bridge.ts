@@ -11,6 +11,16 @@ import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一�
 // rpc read 通用拒绝/错误载荷（纯函数，不捕获外层——顶层定义）
 const readDeny = (error: string) => ({ text: "", bytes: 0, path: "", truncated: false, error });
 
+/** 创建 RPC 桥：注册 shared/rpc.ts Wf 定义（state/list/read/exec 四方法供 TUI 订阅）与 updated/report 事件发射。
+ * 注册失败 fail-soft（rpcErr 记账供 /wf:diagnose），不抛出。
+ * @param host T03 防腐层（rpc.register/client 通道）
+ * @param deps 注入依赖（显式 any 形状如实描述）：load/scanStates/getReport（Store 契约）/bus（CommandBus）/resolveProjectDir
+ * @param deps.load 按会话 ID 读状态（Store 契约透传）。
+ * @param deps.scanStates 跨项目扫描活动任务列表。
+ * @param deps.getReport 读命令报告（Store 契约透传）。
+ * @param deps.bus 命令总线（exec 主轨按名调度）。
+ * @param deps.resolveProjectDir 产物落盘目录三级回退解析。
+ * @returns 桥对象：rpcReg 注册句柄、rpcErr 失败文案、WfDef 定义、emitUpdated(st) 流转刷新事件、emitReport(sid,text,at,meta?) 命令输出事件（返回通道形状诊断）。 */
 export async function createRpcBridge(host: import("./host.ts").Host, { load, scanStates, getReport, bus, resolveProjectDir }: {
   load: (sessionID: string) => Promise<any>;
   scanStates: (projectID?: string | null, directory?: string | null) => Promise<any>;

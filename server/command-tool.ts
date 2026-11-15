@@ -13,6 +13,11 @@ import { FLOWS, isLeader } from "./lib.ts";
 
 const FLOW_NAMES = Object.keys(FLOWS); // 10 个流转命令（wf:intake…wf:done；M16-r28 assign 并入 test-design）
 
+/** 注册 wf_command 工具（模型侧状态机入口）：经 bus.call 与用户 /wf:* 同语义推进。
+ * 属主硬边界按「会话是否自持状态行」判定：有行全放行；无行仅 wf:intake 且限主会话；其余拒绝。
+ * @param host T03 防腐层（tools.transform 注册面）
+ * @param deps 宿主注入依赖（显式 any 边界）：load（Store.load）/bus（CommandBus）/probeOnce（Observer.probeOnce）
+ * @returns 工具注册 dispose 句柄（host.tools.transform 返回值透传） */
 export function registerCommandTool(host: import("./host.ts").Host, deps: any) { // T03：ctx→Host
   const { load, bus, probeOnce } = deps;
   return host.tools.transform((draft: any) => {

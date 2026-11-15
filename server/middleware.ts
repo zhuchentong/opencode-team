@@ -32,8 +32,13 @@ export type CommandMiddleware = (next: CommandHandler) => CommandHandler;
 
 // 组合顺序（数组头=最外层）。语义锚：leaderGate 外层=拒绝时 base/tierSync 均不执行
 //（含审计落盘后短路 return rej）；tierSync 内层=base 成功后附加 note，fail-open 吞异常。
+/** 中间件组合顺序唯一来源（数组头=最外层）：leaderGate 短路在先，tierSync 附加在后。 */
 export const CMD_MW_ORDER = ["leaderGate", "tierSync"] as const;
 
+/** 右折叠组合中间件链：mws 按数组顺序应用（头=最外层）。
+ * @param mws 中间件数组（外层在前）
+ * @param base 最终处理器
+ * @returns 组合后的命令处理器 */
 export function composeMW(mws: CommandMiddleware[], base: CommandHandler): CommandHandler {
   return mws.reduceRight((next, mw) => mw(next), base);
 }
@@ -46,6 +51,9 @@ export interface GuardDeps {
   resolveProjectDir: Store["resolveProjectDir"];
 }
 
+/** 命令守卫工厂：leaderGate（变更类仅 leader，拒绝落 agent-rejected 审计）× tierSync（成功后档位跟随附加）。
+ * @param deps 显式注入：host/load/save/probeOnce/resolveProjectDir
+ * @returns 守卫集合对象——guard(name)(base)：按 CMD_MW_ORDER 组合的守卫包装器；tierCheck(cmd, a)：档位跟随校验（fail-open，返回提示句或 ""）。 */
 export function createCommandGuard(deps: GuardDeps) {
   const { host, load, save, probeOnce, resolveProjectDir } = deps;
 

@@ -4,11 +4,14 @@
 // shared 下层：server 与 TUI 均可 import（两进程各自打包，结构同一由 tests/rpc-drift.test.js 源码级守卫）。
 // 详见 docs/HOST-CONTRACT.md「Transactional Outbox」节。
 
+/** 报告级别（warn 触发 OS 通知；与 server/domain/types 同名类型，shared 下层投影）。 */
 export type ReportLevel = "info" | "warn";
 
+/** RPC/回执报文截断上限（publishOutput 与 rpc-bridge read 同源共用）。 */
 // RPC/回执报文截断上限（commands.ts publishOutput 与 rpc-bridge read 同源共用，禁各端散落 64*1024）
 export const PAYLOAD_MAX = 64 * 1024;
 
+/** 报告对象（outbox 事实源的 wire 投影；id 为幂等消费键，optional 字段兼容旧载荷）。 */
 // 报告对象（wire 投影不变；id 为幂等消费键，optional 兼容旧载荷）
 export interface Report {
   id: string; // reportId(sessionID, at)
@@ -19,6 +22,12 @@ export interface Report {
 }
 
 // 幂等消费键单一生成点（TUI 去重/对账一致性的锚）
+/**
+ * 幂等消费键单一生成点：sessionID|at（TUI 去重/对账一致性的锚）。
+ * @param sessionID 会话 ID
+ * @param at 报告时刻（ISO）
+ * @returns 幂等消费键
+ */
 export function reportId(sessionID: string, at: string): string {
   return `${sessionID}|${at}`;
 }
@@ -27,6 +36,12 @@ export function reportId(sessionID: string, at: string): string {
 // 语义与原 TUI 行为逐字等价：
 //   过期（now-atMs > ttlMs）→ false（跳过，且不登记——与原「stale-skipped 不入 Set」一致）；
 //   重复（key 已登记）→ false；首见 → 登记（FIFO 淘汰最旧超 cap）并返回 true（应处理）。
+/**
+ * 去重器工厂（server/TUI 共用单实现，语义与原 TUI 行为逐字等价）：
+ * 过期跳过且不登记、重复跳过、首见登记（FIFO 淘汰最旧超 cap）并返回 true。
+ * @param opts ttlMs（默认 60s）/cap（默认 50）/now 时钟注入（测试用）
+ * @returns 携 seen(key, atMs?) 谓词的去重器
+ */
 export function createDeduper(opts?: {
   ttlMs?: number; // 默认 60000（60s ≫ 轮询 5s：存活窗口内报告最迟 5s 被 poll 捞到且仍在门内）
   cap?: number;   // 默认 50（FIFO 淘汰最旧）

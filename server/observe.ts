@@ -9,9 +9,13 @@ import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
 // ── T01：静默失败审计环形缓冲（纯内存 push／零 IO／绝不再抛；FIFO 超限丢最旧）──────
 // SwallowEntry 类型单一来源在 lib.ts（T02 归 domain/types.ts——零依赖叶子，observe/diagnose 同型引用）。
 // clearSwallows 供测试隔离（bun test 同进程共享模块态）。
+/** 静默失败审计环形缓冲上限（FIFO 超限丢最旧）。 */
 export const SWALLOW_RING_MAX = 200;
 const swallowRing: SwallowEntry[] = [];
 
+/** 记一条静默失败进环形审计缓冲（纯内存/零 IO/绝不再抛；toString 抛错亦兜底）。
+ * @param err 捕获的异常（unknown）
+ * @param code 文件基名前缀的 swallow code（如 "state:gc-fail"，swallow-coverage 守卫扫描口径） */
 export function swallow(err: unknown, code: string): void {
   let msg: string;
   try { msg = String(err); } catch { msg = "(err unstringifiable)"; } // toString 抛错兜底（体非空，不计静默 catch）
@@ -19,10 +23,13 @@ export function swallow(err: unknown, code: string): void {
   swallowRing.push({ code, msg, at: new Date().toISOString() });
 }
 
+/** 取环形缓冲时序快照（逐项拷贝，外部改动不触及环；wf:diagnose 消费）。
+ * @returns swallow 记录数组（时序快照拷贝）。 */
 export function listSwallows(): SwallowEntry[] {
   return swallowRing.map((e) => ({ ...e })); // 时序快照拷贝：外部改动不触及环
 }
 
+/** 清空环形缓冲（bun test 同进程共享模块态，供测试隔离）。 */
 export function clearSwallows(): void {
   swallowRing.length = 0;
 }
@@ -34,6 +41,10 @@ export interface Observer {
   logToolsOnce(namesPromise: Promise<unknown>, sessionID: string): Promise<void>;
 }
 
+/** 观测通道工厂：debug 目录按会话解析 + 首次触发探针/工具注册证据落盘（probe:false 且非 WF_DEBUG=1 时全部 no-op）。
+ * @param host T03 防腐层（sessions.get 用于解析会话项目目录）
+ * @param opt 插件 options（宿主注入显式 any 边界）：debugDir 覆盖 / probe 开关
+ * @returns Observer 契约实现（debugDirFor/probeOnce/logToolsOnce） */
 export function createObserver(host: Host, opt: any): Observer { // T03：ctx→Host（Observer 契约不变）
   // P0-a：debug 目录惰性按会话解析（修 REPO 硬编码）——显式 options.debugDir 优先，
   // 回退会话项目目录（实测工具回调无 directory，须 session.get），再回退进程 cwd。

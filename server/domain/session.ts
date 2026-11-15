@@ -6,6 +6,14 @@ import { isLeader, type RoleSessions, type SessionId, type WfState } from "./typ
 // 仅 wf/* 非 leader 子会话、ses_ 合法形状才登记；同角色 sessionID 未变化返回 false
 // （调用方据此决定是否落盘，避免每次工具调用都 save）。返回 true=已改写 st.roleSessions。
 // leader 自身（workflow / wf/leader）与普通 agent（build 等）不登记。
+/**
+ * 角色→子会话自动登记：仅 wf/* 非 leader 子会话且 sid 合法 ses_ 形状才写入登记表。
+ * 同角色 sessionID 未变化返回 false（调用方据此省 save）。
+ * @param st 当前状态（命中时原地改写 st.reuse.roleSessions）
+ * @param agent 子代理 agent 名
+ * @param sessionID 子会话 ID
+ * @returns true=登记表已改写需落盘，false=未变
+ */
 export function trackRoleSession(st: WfState, agent: unknown, sessionID: unknown): boolean {
   const a = String(agent ?? "");
   const sid = String(sessionID ?? "");
@@ -21,19 +29,30 @@ export function trackRoleSession(st: WfState, agent: unknown, sessionID: unknown
 // 根因：leader/guard 纠正后仍要模型逐字复述完整 ID——复述本身就是失真源。别名把「续用」
 //   语义收敛到服务端解析：sessionID="auto"=该角色已登记会话；"@Tnn"=lanes 反查；"@wf/xx"=roleSessions 反查。
 // 多 lane 安全：lanes 非空即多 lane 语境 → auto 一律拒绝，强制 @Tnn 显式指定（防续错 lane 静默分叉）。
+/** auto 别名字面量：sessionID="auto"=续用该角色已登记会话（多 lane 语境下被拒）。 */
 export const SID_ALIAS_AUTO = "auto";
 // 别名用法提示（guidance/错误文案同源；leader.md 与 SKILL.md 为静态托管文件，靠测试内容锚对齐）
+/** 别名用法提示文案（guidance/错误消息同源，诊断/文档亦引用）。 */
 export const SID_ALIAS_USAGE = `sessionID="auto"（无 lane 登记时即续用该角色唯一登记会话；"@Tnn" 仅限 wf:lane 已登记的 lane 使用）`;
 
+/** resolveSidAlias 的登记表输入（目标角色 + 两张登记表）。 */
 export interface SidAliasInput {
   role?: string; // 目标角色（auto 只解析该角色自身登记，杜绝跨角色误续）
   roleSessions?: RoleSessions; // R3 T3.1 子步 C：登记表形状单点派生
   lanes?: WfState["lanes"];
 }
+/** 别名解析结果：命中（sid+via 渠道）或失败（reason 文案，candidates 供 @ 补全提示）。 */
 export type SidAliasResult =
   | { ok: true; sid: string; via: string }
   | { ok: false; reason: string; candidates?: string[] };
 
+/**
+ * 会话 ID 别名解析（零转录续接核心）：auto=该角色登记会话（多 lane 语境拒绝）；
+ * "@Tnn"=lanes 反查；"@wf/xx"/"@xx"=roleSessions 反查。把「续用」语义收敛到服务端。
+ * @param raw 用户传入的 sessionID 原值（别名或其它）
+ * @param input 目标角色与登记表
+ * @returns 命中或带 candidates 的失败原因
+ */
 export function resolveSidAlias(raw: unknown, input: SidAliasInput = {}): SidAliasResult {
   const t = String(raw ?? "").trim();
   const rs = input.roleSessions ?? {};
@@ -60,6 +79,12 @@ export function resolveSidAlias(raw: unknown, input: SidAliasInput = {}): SidAli
 }
 
 // lane set 前缀补全：raw 为已知 ID 的唯一真前缀 → 补全；多候选/零候选由调用方处置。
+/**
+ * lane set 前缀补全：raw 为已知 ID 的唯一真前缀时补全为完整 ID（截断自愈入口）。
+ * @param raw 用户传入的疑似截断 ID
+ * @param known 候选 ID 全集（登记表/lanes 的去重由实现内处理）
+ * @returns exact/completed/ambiguous/unknown 四态
+ */
 export function completeSidPrefix(
   raw: unknown,
   known: string[],
@@ -73,6 +98,12 @@ export function completeSidPrefix(
 }
 
 // 近似截断判定：公共前缀 ≥ tracked 长度 60% 且编辑距离 ≤4（供 guard-hook 对「中间位错」复述纠错）。
+/**
+ * 近似截断判定：公共前缀 ≥60% 且编辑距离 ≤4 即视为同一 ID 的失真复述（纠错自愈依据）。
+ * @param passed 复述的 ID
+ * @param tracked 原始登记 ID
+ * @returns 视为同一 ID 的失真复述时为 true
+ */
 export function isNearTruncation(passed: string, tracked: string): boolean {
   if (!passed || !tracked || passed === tracked) return false;
   let common = 0;

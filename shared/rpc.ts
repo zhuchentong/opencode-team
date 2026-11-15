@@ -4,6 +4,7 @@
 import { Rpc } from "@opencode/plugin/rpc";
 
 // 状态输出（TUI 侧边栏所需最小集）
+/** wf.state 输出 schema：TUI 侧边栏所需最小集（additionalProperties 容错，形状变更须过 rpc-drift 快照）。 */
 const stateSchema = {
   type: "object",
   properties: {
@@ -31,6 +32,7 @@ const stateSchema = {
 };
 
 // 列表项（M8-b 面板看板）
+/** wf.list 会话列表项 schema（M8-b 面板看板行）。 */
 const listItemSchema = {
   type: "object",
   properties: {
@@ -46,6 +48,7 @@ const listItemSchema = {
   additionalProperties: true,
 };
 
+/** wf RPC 契约单点：state/list/read/exec 四方法 + updated/report 两事件（server 注册、TUI 调用同源）。 */
 export const Wf = Rpc.define({
   id: "wf",
   methods: {
@@ -157,6 +160,9 @@ export const Wf = Rpc.define({
 
 // 事件 wire 名（宿主桥按 rpc.<id>.<event> 字符串路由）——TUI data.listen 过滤/订阅由此引用，
 // 禁在各端散落字面量（漂移=事件静默失联，tests/rpc-drift.test.js 快照锁死）。
+/** RPC 事件 wire 名前缀（宿主桥路由字符串，禁各端散落字面量，rpc-drift 快照锁死）。 */
 export const RPC_EVENT_PREFIX = `rpc.${Wf.id}.` as const;
+/** updated 事件完整 wire 名（流转/产物落盘广播）。 */
 export const RPC_EVENT_UPDATED = `${RPC_EVENT_PREFIX}updated` as const;
+/** report 事件完整 wire 名（命令输出广播，机会性补充通道）。 */
 export const RPC_EVENT_REPORT = `${RPC_EVENT_PREFIX}report` as const;

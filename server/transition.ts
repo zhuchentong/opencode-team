@@ -64,7 +64,7 @@ export interface TransitionDeps {
 
 /** 状态机推进编排工厂：构造 transition 闭包（load→校验→应用→inject→save 重试循环）与 inject。
  * @param deps 显式注入依赖：host（Host 防腐层）/load/save/resolveProjectDir（Store 契约）/LIMS（生效上限）/emitUpdated（TUI 广播）
- * @returns { transition(sessionID, cmd, text?): Promise<string>——guidance 或 ❌ 拒绝/失败文案；inject(st)——entry 指引写入（entryErr 记账不抛出） } */
+ * @returns 编排闭包集合——transition(sessionID, cmd, text?): Promise<string>，guidance 或 ❌ 拒绝/失败文案；inject(st)：entry 指引写入（entryErr 记账不抛出）。 */
 export function createTransition(deps: TransitionDeps) {
   const { host, load, save, resolveProjectDir, LIMS, emitUpdated } = deps;
 

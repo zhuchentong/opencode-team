@@ -16,14 +16,18 @@ import { type FlowLogEntry, type ReportLevel, type WfState, isLeader, normalizeS
 import { type Host } from "./host.ts"; // T03：createStore 收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
-// instructions.entry 的 key（非存储键——P1 不动 entry 通道）
+/** instructions.entry 阶段指引槽 key（写入宿主系统提示 context 块，非存储键）。 */
 export const ENTRY_KEY = "wf.phase";
+/** 自动激活一次性提示槽 key（P3 hint 通道；reset 一并清除）。 */
 export const HINT_KEY = "wf.hint"; // P3：自动激活一次性提示（不入状态机，reset 一并清除）
-
 // 旧 storage 行前缀（仅一次性迁移使用）
 export const STATE_PREFIX = "wf-workflow/state/";
 export const REPORT_PREFIX = "wf-workflow/report/";
 
+/** 追加一条流转审计日志：维护单调序号 logSeq（截断 50 不影响 events 增量判定），超 50 条裁最旧。
+ * @param st 工作流状态快照（原地修改 st.log/st.logSeq）
+ * @param entry 流水条目（at/cmd/from/to/ok/note…）
+ * @returns 无 */
 export const logAdd = (st: WfState, entry: FlowLogEntry) => {
   st.log = Array.isArray(st.log) ? st.log : [];
   // M16-r39 T01：单调序号——截断 50 不影响 events 增量判定（修审计停追）；
@@ -42,6 +46,11 @@ export interface TaskRow {
   projectID: string | null; directory: string | null;
   isActive: number | null; updatedAt: string; stateJson: string;
 }
+/** 单语句 CAS 原子写 tasks 行：null→INSERT rev=1（UNIQUE 冲突=并发抢先）；number→UPDATE…WHERE rev 比对。
+ * @param db 已打开的 SQLite 连接（bun:sqlite）
+ * @param row 投影列行（TaskRow 形状）
+ * @param expectedRev 期望的当前 rev（null=新建插入）
+ * @returns {ok:true, rev} 写入后的新 rev；或 {ok:false, reason:"stale-rev"|"write-error"}（UNIQUE 冲突归 stale-rev 可重试） */
 export function writeTaskRow(db: Database, row: TaskRow, expectedRev: number | null):
   { ok: true; rev: number } | { ok: false; reason: "stale-rev" | "write-error" } {
   try {
@@ -95,6 +104,10 @@ export interface Store {
 // save ok→{ok:true,st}；stale-rev 且 attempt<max→重载重放；否则终败（reason 归一）。
 // apply 每 attempt 恰一次（审计记账不翻倍）；load(1) 由调用方决定复用首快照或新建。
 export type RetryResult = { ok: true; st: WfState } | { ok: false; reason: string; msg?: string };
+/** 状态写回重试归一（transition/lane/artifact 记账三处同源）：attempt=1..max；load null→gone；
+ * apply 返回串→halt（不重试）；save stale-rev 且未达上限→重载重放；apply 每 attempt 恰一次（审计不翻倍）。
+ * @param opts load（返回克隆或 null）/apply（返回 halt 文案或 null）/save/maxAttempts（缺省 3）
+ * @returns {ok:true, st} 落库后的最新快照；或 {ok:false, reason, msg?}（gone/halt/stale-rev/write-error） */
 export async function withStateRetry(opts: {
   load: (attempt: number) => Promise<WfState | null>;
   apply: (st: WfState, attempt: number) => string | null | Promise<string | null>;
@@ -164,6 +177,10 @@ const parse = (row: any): WfState | null => {
   try { return normalizeState(JSON.parse(row.state_json)); } catch { return null; }
 };
 
+/** 创建 SQLite 状态存取层：<项目>/.workflow/wf.db（WAL + busy_timeout），含建表、reports 加列迁移、
+ * 一次性旧 ctx.storage 导入（ready）与 done GC/幽灵行清理。load 出口经 normalizeState 收敛旧形状。
+ * @param host T03 防腐层（location.directory 定库；sessions/storage 用于反查与迁移）
+ * @returns Store 契约实现（load/save/removeState/resolveState/resolveProjectDir/scanStates/putReport/getReport/dumpStates/ready/close） */
 export function createStore(host: Host): Store {
   const dir = host.location.directory ?? process.cwd();
   const dbFile = join(dir, ".workflow", "wf.db");

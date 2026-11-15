@@ -20,6 +20,9 @@ export interface SyncTarget {
 }
 
 // 内容 hash：sha256 前 12 位 hex（两域同源，替代 roles.bodyHash / skills.contentHash 本地实现）
+/** 内容 hash：sha256 前 12 位 hex（roles/skills 两域同源）。
+ * @param s 待哈希的文本内容。
+ * @returns sha256 前 12 位 hex 串。 */
 export const contentHash12 = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
 // 拆分宿主文件 frontmatter 与 body（--- 块含尾换行原样保留；自 roles.ts 私有实现同形搬移）
@@ -41,6 +44,11 @@ function stripMarker(content: string, pos: "head" | "tail"): string {
 
 // 纯决策（表驱动对齐旧 syncDecision/skillSyncDecision）：null→create；无标记→unmanaged；
 // hash 同（基数=去标记行内容）→skip；异→write。
+/** 纯同步决策（表驱动）：文件缺失→create；无标记→unmanaged；去标记内容 hash 同→skip；异→write。
+ * @param content 宿主文件现内容（null=不存在）
+ * @param rendered 仓库渲染产物
+ * @param t 标记位置与解析器（markerPosition/parseHashMarker）
+ * @returns 四值动作之一 */
 export function decideSync(content: string | null, rendered: string, t: Pick<SyncTarget, "markerPosition" | "parseHashMarker">): SyncAction {
   if (content === null) return "create";
   if (!t.parseHashMarker(markerLine(content, t.markerPosition))) return "unmanaged";
@@ -49,6 +57,9 @@ export function decideSync(content: string | null, rendered: string, t: Pick<Syn
 
 // fs 执行：create=mkdir -p + frontmatter（此刻才读惰性 getter）+ rendered；write=保既有 fm
 // （仅 head 域取）+ 写前备份；unmanaged/skip 零写。备份失败 swallow 记账不阻塞。
+/** 执行托管同步 IO：create=mkdir+frontmatter+rendered；write=保既有 fm+写前备份；unmanaged/skip 零写。
+ * @param targets 目标清单（items 已预渲染；frontmatter 可为惰性 getter，仅 create 分支消费）
+ * @returns 逐项同步报告（name→action） */
 export function syncAll(targets: SyncTarget[]): SyncReport[] {
   const report: SyncReport[] = [];
   for (const t of targets) {
@@ -72,6 +83,9 @@ export function syncAll(targets: SyncTarget[]): SyncReport[] {
 }
 
 // 漂移视图（wf:ping 用）：skip→managed／write→stale／无标记→unmanaged／文件缺失→missing
+/** 漂移视图（wf:ping 用）：文件缺失→missing；其余按 decideSync 映射 skip/write/无标记→managed/stale/unmanaged。
+ * @param targets 目标清单（同 syncAll）
+ * @returns 逐项漂移状态列表 */
 export function statusAll(targets: SyncTarget[]): { name: string; status: SyncStatus }[] {
   const out: { name: string; status: SyncStatus }[] = [];
   for (const t of targets) {

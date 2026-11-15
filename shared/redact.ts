@@ -4,6 +4,11 @@
 // !includes("ses_") 不变量断言必红（tests/brief-level.test.js 锁死）。
 // 形状对齐 lib.ts trackRoleSession/completeSidPrefix 的 /ses_[A-Za-z0-9]+/ ID 约定。
 
+/**
+ * 会话 ID 零回显脱敏：ses_* 替换为「〔已隐去〕」（token 必不含 ses_ 子串，G-1 不变量）。
+ * @param text 任意文本
+ * @returns 脱敏后的文本
+ */
 export function redactIds(text: string): string {
   return String(text ?? "").replace(/ses_[A-Za-z0-9]+/g, "〔已隐去〕");
 }

@@ -2,12 +2,23 @@
 // B1-1 翻案（=>/比较符/tee<）与 fail-closed 取舍注释保留原位；BLOCKING 单一来源见 shared/phases.ts。
 import { BLOCKING } from "../../shared/phases.ts"; // M10-d A1：阶段闸门单一来源（原 lib.ts 顶层 import 随迁）
 
+/** 视为写文件的宿主工具名集合（越权判定对象）。 */
 export const EDIT_TOOLS: Set<string> = new Set(["edit", "write", "patch"]);
+/** 受闸阶段集合（这些阶段业务写被拒；单一来源 shared/phases BLOCKING）。 */
 export const BLOCKING_PHASES: Set<string> = new Set<string>(BLOCKING); // M10-d A1：见 shared/phases.ts
+/** 默认放行路径标记（工作流产物/测试目录等，任何 agent 可写）。 */
 export const DEFAULT_ALLOW_MARKERS = ["/.workflow/", "/.learnings/", "/tests/", "/test/", "/__tests__/"];
+/** 默认放行测试文件名正则（与 marker 并列的第二放行通道）。 */
 export const DEFAULT_ALLOW_RES = [/\.(test|spec)\.[cm]?[jt]sx?$/i, /(^|\/)test_[^/]*\.(py|go)$/i];
 
 // ── M4：越权路径提取 ────────────────────────────────────────────────
+/**
+ * 越权路径提取：从工具调用参数里解析出写目标路径（patch 工具扫 "*** Add/Update/Delete File:" 行，
+ * 其余取 path/filePath/file 字段）。
+ * @param tool 宿主工具名
+ * @param args 工具调用参数（ctx 边界形状，任意对象）
+ * @returns 提取到的路径数组（无法解析时为空数组）
+ */
 export function extractPaths(tool: string, args: Record<string, unknown> | null | undefined): string[] {
   if (!args || typeof args !== "object") return [];
   if (tool === "patch") {
@@ -21,6 +32,12 @@ export function extractPaths(tool: string, args: Record<string, unknown> | null 
 }
 
 // 放行判定工厂（M10-a：闸门拒绝文案与 allowlist 同源生成，I2 防漂移）
+/**
+ * 放行判定工厂：由 marker 列表与正则列表生成路径谓词（闸门拒绝文案与 allowlist 同源生成，I2 防漂移）。
+ * @param allowMarkers 路径包含标记（形如 "/.workflow/"，兼容相对路径无前导斜杠）
+ * @param allowRes 文件名正则（测试文件等）
+ * @returns (p) => boolean 谓词，true=放行
+ */
 export function makeAllowChecker(allowMarkers: string[], allowRes: RegExp[]): (p: unknown) => boolean {
   return (p) => {
     // 兼容绝对/相对路径：marker 形如 "/.workflow/"，相对路径没有前导斜杠，两种都比对
@@ -39,6 +56,12 @@ export function makeAllowChecker(allowMarkers: string[], allowRes: RegExp[]): (p
 //   （变量拼接无法判定具体文件，与尾参分支既有过滤同语义）；③尾参过滤 <>&| 起始 token。
 // 仍保留 fail-closed：纯数字目标（`> 2`）视为代码比较跳过；无法解析的形态宁可漏判不误伤。
 const SHELL_DEST_CMDS: Set<string> = new Set(["touch", "mkdir", "rm", "mv", "cp", "tee", "rsync", "ln", "install"]);
+/**
+ * shell 写目标解析：重定向目标 + 写/删类命令尾参（越权判定的 shell 侧证据）。
+ * 形态无法解析时宁可漏判不误伤（fail-open 方向，B1-1 翻案后语义）。
+ * @param cmd shell 命令行原文
+ * @returns 解析到的写目标路径数组（去重）
+ */
 export function shellWriteTargets(cmd: unknown): string[] {
   const found = new Set<string>();
   if (!cmd || typeof cmd !== "string") return [];

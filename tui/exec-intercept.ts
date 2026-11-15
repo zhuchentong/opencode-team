@@ -3,6 +3,17 @@
 // → 本地产物预览，其余透传 execLocal（全文/清单 toast 降级轨）。
 import { str } from "./util.ts";
 
+/**
+ * 注册 return 键拦截层：编辑器内容以 /wf: 开头时本地调度（wf:open 带参走产物预览，其余透传
+ * execLocal），否则返回 false 交还宿主默认行为（quota 式 P0⑧：run 必须同步返回）。
+ * @param context 宿主注入的插件上下文（keymap.layer / renderer 取焦点编辑器）。
+ * @param deps 依赖注入对象（execLocal/openArtifact/isRouterOk/probe）。
+ * @param deps.execLocal 主轨执行函数（RPC exec + toast/刷新）。
+ * @param deps.openArtifact 本地产物预览打开函数。
+ * @param deps.isRouterOk 预览 route 是否可用的判定（返回 false 时 wf:open 走 server 降级轨）。
+ * @param deps.probe 调试探针函数（记录 intercept-hit 事件）。
+ * @returns 无返回值（副作用：向 keymap 注册 wf.exec 命令层）。
+ */
 export function installExecIntercept(
   context: any,
   deps: {

@@ -1,9 +1,22 @@
 // tui/util.ts — R3 T3.4 拆分共用小工具（str/errMsg；panel/notify/index 三处同源）
+/** 空值安全转字符串：null/undefined 归一为空串，其余 String()。
+ * @param v 任意输入值。
+ * @returns 字符串形式（null/undefined 归一为空串）。 */
 export const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+/** 任意抛出值转错误消息串（优先 Error.message，兜底 String(e)）。
+ * @param e 任意抛出值（catch 入参）。
+ * @returns 错误消息串。 */
 export const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
 
 // R3 T3.4：探针工厂（自 index.tsx setup 拆出；REPO 兜底/loaded 时间戳/序列号在此闭环）。
 // P6 收敛：默认关闭（WF_DEBUG=1 ./scripts/tui-restart.sh 开启）；写 .workflow/_debug/tui-refresh.log。
+/**
+ * 创建 TUI 调试探针：WF_DEBUG=1 时把诊断事件追加写入 .workflow/_debug/tui-refresh.log，默认关闭。
+ * @param context 宿主注入的插件上下文（取 location.directory 定位仓库根）。
+ * @param opts 选项对象。
+ * @param opts.build 当前构建版本号（随日志行落盘，便于跨重启对账）。
+ * @returns REPO（解析出的仓库根目录）与 probe（异步追加写日志的探针函数，失败静默不影响 UI）。
+ */
 export function setupProbe(context: any, opts: { build: string }) {
   // REPO 兜底：location 缺失时由模块 URL 反推仓库根（P3a 疑点：探针可能写错位置）
   const REPO = String(context?.location?.directory ?? "") || decodeURIComponent(new URL(/* @vite-ignore */ "../../", import.meta.url).pathname).replace(/\/$/, "");

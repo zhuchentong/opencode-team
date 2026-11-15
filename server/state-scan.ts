@@ -17,15 +17,23 @@ import { xdgDataDir } from "./paths.ts"; // XDG 派生单点
 // v2 = PROJECT_DBS 内存表（加速）∪ 持久项目清单（append-only JSONL，热载后仍在）；扫描逐库校验
 //   存在性。全链 fail-open：只产告警素材绝不阻断流转；单坏库跳过不影响其它；写清单失败静默降级纯内存。
 // 隔离钩子：WF_PROJECTS_FILE 显式设置=只读该文件、忽略内存表与写入（测试确定性，防同进程他文件库污染）。
+/** 本进程已知的项目状态库登记表（dir → dbFile 内存加速索引；热载清零后由持久清单补齐）。 */
 export const PROJECT_DBS = new Map<string, string>();
+/** 持久项目清单默认路径（XDG 数据目录）；派生失败为 ""（写入静默降级纯内存）。 */
 export const PROJECTS_FILE_DEFAULT = (() => {
   try {
     return xdgDataDir("opencode", "wf-projects.jsonl"); // 派生单点（server/paths.ts）
   } catch { return ""; }
 })();
+/** 生效的项目清单路径：WF_PROJECTS_FILE 显式设置=测试隔离钩子（只读该文件、注册不落文件），否则默认路径。
+ * @returns 生效的项目清单文件路径（env 覆盖优先）。 */
 export function projectsListFile(): string { return process.env.WF_PROJECTS_FILE || PROJECTS_FILE_DEFAULT; }
 // 登记（createStore 调用）：内存恒记；文件仅在未设 WF_PROJECTS_FILE 时追加（env 钩子=完全接管语义）。
 // JSONL 逐行 append：无读-改-写竞态（多进程并发安全，坏行=撕裂写，扫描侧跳过）。
+/** 登记项目库：内存表恒记；文件仅在未设 WF_PROJECTS_FILE 时 JSONL 追加（append 多进程并发安全）。
+ * @param dir 项目根目录（内存表键）
+ * @param dbFile 该项目 wf.db 绝对路径
+ * @returns 无；任何失败 swallow 记账（state-scan:projects-file-append-fail），不抛出 */
 export function registerProject(dir: string, dbFile: string): void {
   try {
     if (!dir || !dbFile) return;
@@ -53,6 +61,9 @@ function readProjectsList(): string[] {
 }
 // 扫描其它会话的活动任务（intake 自改命中时调用）。排除自身会话行；防御性过滤（无 slug/done 行
 // 即使 is_active=1 也不展示——外部写库形状漂移兜底）。updatedAt 原样带出（lib 侧分级措辞消费）。
+/** 扫描其它会话的活动任务（intake 引擎自改命中时调用）：内存表 ∪ 持久清单逐库只读查询。
+ * @param excludeSessionID 要排除的自身会话 ID（防自查误报）
+ * @returns 活动任务列表（排除自身与 done 行；updatedAt 原样带出供分级措辞），按 updatedAt 降序；全链 fail-open，坏库跳过不抛出 */
 export function scanActiveTasks(excludeSessionID: string): ActiveOther[] {
   const sid = String(excludeSessionID ?? "");
   const files = new Set<string>();

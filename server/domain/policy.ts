@@ -4,15 +4,22 @@ import { isLeader, LEADER_AGENT, DAY_MS, type WfState } from "./types.ts";
 // ── P3：superpowers 式自动激活提示（纯函数可测）────────────────────
 // 宿主若提供消息观察 hook：用户消息命中「明确工作流意图」且该会话无 wf 状态时，
 // 注入一次性 hint entry（不自动开任务，仅提示 /wf:intake）。误触率优先于召回率。
+/** 「明确工作流意图」触发词表（误触率优先于召回率，仅提示不自动开任务）。 */
 export const HINT_TRIGGERS = [
   "工作流", "流程开发", "按流程", "完整流程", "走流程", "planned development",
   "superpowers", "wf workflow", "formal workflow",
 ];
+/**
+ * 判定用户消息是否命中 hint 触发词（大小写不敏感）。
+ * @param text 用户消息文本（容错）
+ * @returns 命中任一触发词时为 true
+ */
 export function isHintWorthy(text: unknown): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t) return false;
   return HINT_TRIGGERS.some((k) => t.includes(k.toLowerCase()));
 }
+/** 一次性自动激活提示全文（注入 entry 通道，提示 /wf:intake 而不自动开任务）。 */
 export const HINT_ENTRY = [
   "💡 检测到你在表达「流程化开发」意图。本项目装有 wf 工作流插件（规划→审核∥可行性→红测试→单树 TDD 执行→审核→验证→修复→复盘）。",
   "若想让本任务走工作流：执行 /wf:intake <任务slug>。若不需要，忽略本提示（不影响任何功能）。",
@@ -21,6 +28,7 @@ export const HINT_ENTRY = [
 
 // 只读/清理豁免集：任何 agent 可用（用户自助诊断/清理不受限）。
 // M16-r46 批2：+wf:open（产物查看只读——TUI 键盘路径与非 TUI 客户端降级轨入口）。
+/** 只读/清理豁免命令集（任何 agent 可用，用户自助诊断/清理不受限）。 */
 export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf:reset", "wf:open"]);
 // 判定：豁免集放行；其余仅 leader（workflow，兼容 wf/leader）；agent 不可确认 → 变更类 fail-closed。
 // lane 整体 leader-only（含 ls，有意收紧：lane 属任务内部细节）。返回拒绝文案或 null（放行）。
@@ -28,6 +36,14 @@ export const READONLY_CMDS = new Set(["wf:status", "wf:diagnose", "wf:ping", "wf
 // leader 会话，只是 agent 被切走」，旧文案「请切换到 workflow 会话」误导开新会话接管（新会话拿不到
 // 任务行，done 永远推不动）。两出口并列：切回 workflow 重跑 / 直接 /wf:reset 清账（reset 在豁免集）。
 // st 缺省或无任务 → 旧文案逐字（存量断言零改动）。
+/**
+ * leader-only 权限判定：豁免集与 leader 放行（null）；其余 agent 返回 ❌ 拒绝文案
+ * （含「本会话即 leader 会话」的两出口改道文案，F1 修复）。
+ * @param agent 当前 agent 名（空=身份不可确认，fail-closed）
+ * @param cmd 待执行的 wf 命令名
+ * @param st 本会话状态快照（可选；持任务时启用改道文案）
+ * @returns 拒绝文案，null=放行
+ */
 export function leaderOnlyReject(agent: string, cmd: string, st?: WfState | null): string | null {
   if (READONLY_CMDS.has(cmd)) return null;
   if (isLeader(agent)) return null;
@@ -44,13 +60,22 @@ export function leaderOnlyReject(agent: string, cmd: string, st?: WfState | null
 // WF_ROLES = 工作流契约的 7 个 subagent 角色（leader 除外，leader 是当前会话）。
 // agents 形状容错：数组、{agents} 或 {data}（2.2.6 真机 ctx.agent.list() 实际返回
 // {location, data:[...]}——agent-probe.json 2026-11-10 实证），项取 name/id 与 model.providerID/model.id。
+/** 工作流契约的 7 个 subagent 角色名（leader 除外；wf:ping 缺失/额外判定基准）。 */
 export const WF_ROLES = ["wf/planner", "wf/planner-reviewer", "wf/tester", "wf/builder",
   "wf/builder-reviewer", "wf/fixer", "wf/learner"];
+/** agent 注册项的宽松形状（ctx.agent.list() 边界容错投影）。 */
 export interface AgentLike {
   name?: string;
   id?: string;
   model?: { providerID?: string; id?: string };
 }
+/**
+ * wf:ping 角色健康检查报告：对宿主 agent 注册表（数组或 {agents}/{data} 包装）归一后
+ * 与 WF_ROLES 交集计数，输出已注册清单、档位行、缺失/额外角色。
+ * @param agents 宿主 agent 列表（形状容错：数组、{agents} 或 {data}）
+ * @param tierLine 可选档位行（前置插入，折叠显示面也能看到档位实况）
+ * @returns 多行报告文本
+ */
 export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: AgentLike[] } | null | undefined, tierLine?: string | null): string {
   const arr = Array.isArray(agents) ? agents : (agents?.agents ?? agents?.data ?? []);
   const norm = arr.map((a) => ({
@@ -78,9 +103,16 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
 // v1 进程内存注册表盲区（implant×build 卡死 1.5 天实证 + 多日 resume 习惯取证）：休眠未收尾任务
 //   不在内存、热载即清零 → v2 改跨库扫描：PROJECT_DBS 内存表 ∪ 持久项目清单逐库查 is_active=1；
 //   updatedAt 分级活跃/休眠（休眠=可能已废弃，同样先裁决再开工——唤醒后即干扰源）。
+/** 其它项目活动任务的投影（跨库扫描结果，selfMod 告警分级输入）。 */
 export interface ActiveOther { slug: string; phase: string | null; directory: string | null; updatedAt: string | null }
 // 目录比较（尾斜杠归一；任一侧空=false=判不出不算自改，fail-open 宁缺勿滥告警）
 const normDir = (d: unknown) => String(d ?? "").replace(/[\\/]+$/, "");
+/**
+ * 引擎自改判定：任务目录与插件仓库根相同（尾斜杠归一；任一侧为空判不出即 false，fail-open）。
+ * @param taskDir 任务目录
+ * @param pluginRoot 插件仓库根目录
+ * @returns 两者归一后相同为 true
+ */
 export function isSelfModDir(taskDir: unknown, pluginRoot: unknown): boolean {
   const a = normDir(taskDir), b = normDir(pluginRoot);
   return !!a && !!b && a === b;
@@ -90,6 +122,13 @@ export function isSelfModDir(taskDir: unknown, pluginRoot: unknown): boolean {
 // F2 v2 分级：updated_at 距 now <24h=活跃；否则=休眠（≥N 天未更新+最后时刻 MM-DD，可能已废弃）——
 // 休眠任务被唤醒后同样是热载干扰源（implant 实证），文案给出各自处置出口（活跃=暂停/同意并发；
 // 休眠=先核实后 done 收尾或 reset 清账）。updatedAt 解析失败按休眠·日期未知（宁保守多提示）。
+/**
+ * 引擎自改并发告警行：跨项目活动任务按 updatedAt 分级（<24h 活跃 / 其余休眠含天数与日期），
+ * 输出 ⚠️ 处置出口文案（advisory 不阻断，❌ 前缀互斥不变量守卫）。
+ * @param others 其它活动任务列表（>5 折叠防长单行）
+ * @param now 当前毫秒（注入便于测试）
+ * @returns 告警文案，无其它任务时 null
+ */
 export function selfModWarnLine(others: ActiveOther[], now: number = Date.now()): string | null {
   if (!others.length) return null;
   const DAY = DAY_MS; // 天毫秒单点（domain/types）

@@ -15,6 +15,7 @@ import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, LANE_TABLE_GATE_MSG, gateAccep
 //   （项目外写放行，对齐 shell 分支语义）；B1-2~B1-5 guidance 提速（reconcile 去全量、并发委派、
 //   委派上下文契约、review 增量复审）；批次 2：assign 阶段并入 test_design（实测 assign 零实质工作，
 //   双通道关卡随迁至 wf:test-design 入口；LEGACY_PHASES 兼容在途任务）。
+/** 完整模式（full）流转表：命令→流转边（来源阶段白名单+循环计数键），阶段推进合法性唯一依据。 */
 export const FLOWS: Record<string, FlowDef> = {
   "wf:intake":       { to: "intake",       from: ["*"],                                        counter: null },
   // M10-a：补返工边——review 不过回 planning；执行审核遗漏回 building；返工/修复后回 reconcile 重合并
@@ -33,6 +34,7 @@ export const FLOWS: Record<string, FlowDef> = {
 
 // ── T2.2：PhaseDef 单点注册（next = 旧 NEXT 表值逐字；blocking ⇔ shared/phases BLOCKING——
 //   装配一致性由 tests/phases.test.js 守卫双向锁死，此处字面即唯一注册面）──
+/** full 模式 9+1 阶段注册表：next=下一步指引，blocking=业务写受闸（与 shared BLOCKING 双向守卫锁死）。 */
 export const PHASES_FULL: Record<string, PhaseDef> = {
   intake: { next: "/wf:plan" },
   planning: { next: "/wf:review", blocking: true },
@@ -47,6 +49,7 @@ export const PHASES_FULL: Record<string, PhaseDef> = {
   fixing: { next: "/wf:test" },
   done: { next: "（终态；git 项目按「总结→提交/不提交→完成」串行）" },
 };
+/** daily 模式 6 阶段注册表（习惯流：plan→review→build→test→done）。 */
 export const PHASES_DAILY: Record<string, PhaseDef> = {
   intake: { next: "/wf:plan" },
   planning: { next: "/wf:review", blocking: true },
@@ -60,7 +63,9 @@ export const PHASES_DAILY: Record<string, PhaseDef> = {
 // tests/brief-level/daily-mode 消费零改动；新代码消费请走 nextFor/phases，勿新增对本表的直接依赖）。
 const fromPhases = (p: Record<string, PhaseDef>): Record<string, string> =>
   Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.next]));
+/** full 模式阶段→下一步指引只读视图（旧字面表逐字节等价；新代码请走 nextFor/phases）。 */
 export const NEXT: Record<string, string> = fromPhases(PHASES_FULL);
+/** daily 模式阶段→下一步指引只读视图。 */
 export const NEXT_DAILY: Record<string, string> = fromPhases(PHASES_DAILY);
 
 // ── M5：命令级进阶关卡（Gate 对象化后语义不变：不满足=拒绝，explain=拒绝理由）──────────
@@ -68,6 +73,7 @@ export const NEXT_DAILY: Record<string, string> = fromPhases(PHASES_DAILY);
 //   语义不变：计划审核（流转合法性）之外，还须 tester 已产出 test-plan.md（M3 记账 testPlanWritten）
 // wf:done 验收：test-report.md 的「**结论**」必须为 PASS（wf_write_artifact 解析记账 testReportVerdict）
 // R2 T2.3：判定（isSatisfiedBy 纯谓词）与解释（explain 文案模板）分离；id=审计/诊断细分维度。
+/** full 模式命令级关卡表：双通道（test-design 入口）/方案确认（wf:build）/验收（wf:done）。 */
 export const GATES: Record<string, Gate> = {
   "wf:test-design": {
     id: "dual-channel",
@@ -90,6 +96,7 @@ export const GATES: Record<string, Gate> = {
 // ── M16-r34：日常模式（daily）——自动化用户 5 步习惯 plan→verify→修订→执行→核对 ──────────
 // 一条流全 tier（S/M/L），tier 只改委派与否（guidance 分支）；砍 test_design/reconcile/build_review/fixing。
 // 完整 FLOWS 不动（full 模式/存量在途任务用），daily 用本子表。FAIL 返工复用 wf:fix（改指 building）+ test_fix 计数。
+/** daily 模式流转子表：5 步习惯流；FAIL 修订唯一路径 wf:plan（review→review 直推边已移除）。 */
 export const FLOWS_DAILY: Record<string, FlowDef> = {
   "wf:intake": { to: "intake",   from: ["*"],                          counter: null },
   "wf:plan":   { to: "planning", from: ["intake", "planning", "review"], counter: null },
@@ -105,6 +112,7 @@ export const FLOWS_DAILY: Record<string, FlowDef> = {
 };
 // R2 T2.3：daily wf:build 关卡=确认（全 tier 必经）+ M/L 独立验证结论双要素；
 // S 只跳结论不跳确认；size 判定走 tierOf（T2.1 TierCtx 纪律：`st.size ===` 字面清零）。
+/** daily 模式关卡表：wf:build 三要素判定（确认→lane 表→review 结论，S 级只跳后两者）。 */
 export const GATES_DAILY: Record<string, Gate> = {
   "wf:build": {
     id: "daily-build",
@@ -123,17 +131,51 @@ export const GATES_DAILY: Record<string, Gate> = {
 // 模式=数据三元组（flows/gates/phases）；guidance 文案派发留在编排层 guidance.ts
 // （GUIDANCE_BY_ID 按 profile.id 查表，键集一致性由 tests/profile-shape.test.js 锁死）。
 // 新增模式=registerProfile 一处 + GUIDANCE_BY_ID 一行（成对守卫，漏一处即测试红）。
+/** WorkflowProfile 注册表（Strategy 唯一消费面）：新增模式=registerProfile 一处注册。 */
 export const PROFILES: Record<string, WorkflowProfile> = {};
+/**
+ * 注册一个模式 profile（id 为唯一键，重复注册即覆盖）。
+ * @param p 待注册的模式 profile
+ * @returns 无返回值（写入模块级 PROFILES 表）
+ */
 export function registerProfile(p: WorkflowProfile): void { PROFILES[p.id] = p; }
 // mode 选择：存量无 mode → full（兼容）；daily 用子表。所有流转/关卡/指引/下一步提示同源此判定
 //（isDaily 判定点全仓唯一=本函数；其余消费方一律 profileOf(st).id）。
+/**
+ * 按状态取所属模式 profile（isDaily 唯一判定点的下游出口；存量无 mode 视为 full）。
+ * @param st 当前工作流状态
+ * @returns 状态所属模式的 profile
+ */
 export function profileOf(st: WfState): WorkflowProfile { return PROFILES[isDaily(st) ? "daily" : "full"]; }
 registerProfile({ id: "full", flows: FLOWS, gates: GATES, phases: PHASES_FULL });
 registerProfile({ id: "daily", flows: FLOWS_DAILY, gates: GATES_DAILY, phases: PHASES_DAILY });
 
+/**
+ * 判定状态是否日常模式（mode 缺省视为 full，存量兼容）——isDaily 判定点全仓唯一。
+ * @param st 当前工作流状态
+ * @returns 日常模式为 true，否则 false
+ */
 export function isDaily(st: WfState): boolean { return (st.mode ?? "full") === "daily"; }
+/**
+ * 查状态所属模式的流转边定义。
+ * @param st 当前工作流状态
+ * @param cmd 命令名
+ * @returns 对应流转边定义，未注册时 undefined
+ */
 export function flowFor(st: WfState, cmd: string): FlowDef | undefined { return profileOf(st).flows[cmd]; }
+/**
+ * 查状态所属模式的命令级关卡。
+ * @param st 当前工作流状态
+ * @param cmd 命令名
+ * @returns 对应关卡定义，未注册时 undefined
+ */
 export function gateFor(st: WfState, cmd: string): Gate | undefined { return profileOf(st).gates[cmd]; }
+/**
+ * 查状态所属模式的下一步指引（未知阶段回退 /wf:intake）。
+ * @param st 当前工作流状态
+ * @param phase 当前阶段名
+ * @returns 下一步指引文案
+ */
 export function nextFor(st: WfState, phase: string | null | undefined): string {
   return profileOf(st).phases[phase ?? ""]?.next ?? "/wf:intake";
 }
@@ -146,6 +188,18 @@ export function nextFor(st: WfState, phase: string | null | undefined): string {
 // st 须带 rounds: { plan_review, build_review, test_fix }。
 // P2：limits 可按实例覆盖（options.limits），默认取模块 LIMITS。
 
+/**
+ * 流转校验+应用核心：按序做命令存在性→来源阶段合法性→关卡判定（附 gateStatus 快照）→
+ * 循环计数（进入即计数）→ intake 守卫与任务重置/slug/size/mode 解析。
+ * 通过=原地完成计数与重置（调用方随后设 phase/updatedAt 并 log/save/inject/emit）；
+ * 拒绝=不消耗循环额度（计数发生在拒绝之后）。
+ * @param cmd 流转命令名（如 "wf:plan"）
+ * @param st 当前状态（须带 rounds，允许被原地改写）
+ * @param text 命令原始参数（intake 解析 [S]/[M]/[L]/[FULL] 前缀与 ! 强制符）
+ * @param at 判定时刻（写 gateStatus 快照与 timing）
+ * @param limits 循环上限覆盖（缺省模块 LIMITS）
+ * @returns {ok:true} 或 {ok:false, note, msg, gate?}（gate 仅关卡拒绝时附 Gate.id）
+ */
 export function evaluateTransition(cmd: string, st: WfState, text: unknown, at = new Date().toISOString(), limits: Limits = LIMITS): TransitionResult {
   // M16-r34：mode 选择流转表/关卡/下一步（daily 子表 vs full；存量无 mode → full 兼容）
   // R2 T2.1：经 profileOf 单点判定（p.id 取代 daily 布尔消费）

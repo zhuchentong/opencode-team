@@ -11,6 +11,7 @@ import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计�
 import { contentHash12, decideSync, syncAll, type SyncAction, type SyncTarget } from "./managed-sync.ts";
 import { xdgConfigDir } from "./paths.ts"; // XDG 派生单点
 
+/** 托管 skill 清单（session-lookup + wf-worktrees；仓库 skills/ 为单一来源）。 */
 export const SKILL_IDS = ["session-lookup", "wf-worktrees"] as const; // P0-E：worktree 清理步协议（latency-v3.1）
 export type SkillId = typeof SKILL_IDS[number];
 export type { SyncAction };
@@ -19,14 +20,24 @@ export type { SyncAction };
 const SKILLS_SRC_DIR = path.join(import.meta.dirname, "..", "skills");
 
 // 托管标记置于文件**末行**；hash 覆盖标记之前的全部内容（与 roles.ts 首行标记语义对偶）
+/** 生成 skill 托管标记行（置于文件末行，frontmatter 首行语义不受影响）：id + version + 内容 hash。
+ * @param id skill ID
+ * @param content 标记之前的全部内容（hash 基数）
+ * @returns "<!-- wf-workflow:managed-skill … -->" */
 export function skillMarker(id: SkillId, content: string): string {
   return `<!-- wf-workflow:managed-skill id=${id} version=${VERSION} hash=${contentHash12(content)} -->`;
 }
+/** 渲染 skill 全文 = 仓库 SKILL.md 原文 + 末行托管标记（hash 基数=原文）。
+ * @param id skill ID
+ * @returns 待同步的完整文件内容 */
 export function renderSkill(id: SkillId): string {
   const src = fs.readFileSync(path.join(SKILLS_SRC_DIR, id, "SKILL.md"), "utf8");
   return `${src.endsWith("\n") ? src : `${src}\n`}${skillMarker(id, src)}\n`;
 }
 // 解析末行托管标记 → {id, version, hash}；非标记 → null（对 managed-sync 行级解析器签名兼容：取末行语义幂等）
+/** 解析文件末行托管标记 → {id, version, hash}；非标记 → null（行级解析器签名与 managed-sync 兼容）。
+ * @param fileContent 宿主文件全文
+ * @returns 标记字段或 null */
 export function parseSkillMarker(fileContent: string): { id: string; version: string; hash: string } | null {
   const last = fileContent.trimEnd().split("\n").pop()?.trim() ?? "";
   const m = /^<!-- wf-workflow:managed-skill id=(\S+) version=(\S+) hash=([0-9a-f]{12}) -->$/.exec(last);
@@ -34,6 +45,10 @@ export function parseSkillMarker(fileContent: string): { id: string; version: st
 }
 // 同步决策转发（旧签名返回动作字符串；消费位 tests/sid-reliability 零改动。输入恒非 null，
 // hash 基数=去末行标记内容重算——不能只比标记行，防陈旧 body 带旧标记漏判漂移）。
+/** 同步决策转发（旧签名返回动作字符串）：hash 基数=去末行标记内容重算，防陈旧 body 带旧标记漏判漂移。
+ * @param existing 宿主文件现内容
+ * @param rendered 渲染产物
+ * @returns "skip" | "write" | "unmanaged"（create 不可达，保守兜底 write） */
 export function skillSyncDecision(existing: string, rendered: string): "skip" | "write" | "unmanaged" {
   const a = decideSync(existing, rendered, { markerPosition: "tail", parseHashMarker: parseSkillMarker });
   return a === "skip" || a === "write" || a === "unmanaged" ? a : "write"; // create 不可达（保守兜底 write）
@@ -51,18 +66,29 @@ const skillTarget = (skillsDir: string, backup: boolean): SyncTarget => ({
 });
 
 // 文件同步（委托 managed-sync：create 全文落盘、write 备份+覆盖、skip/unmanaged 零写）
+/** skill 文件同步（委托 managed-sync）：create 全文落盘、write 备份+覆盖、skip/unmanaged 零写。
+ * @param skillsDir 宿主目标目录（~/.config/opencode/skills）
+ * @param opts backup 写前 .bak-<ts>（缺省 true）
+ * @returns 逐 skill 同步报告 */
 export function syncSkills(skillsDir: string, opts: { backup?: boolean } = {}): SkillSyncReport[] {
   return syncAll([skillTarget(skillsDir, opts.backup !== false)])
     .map((r) => ({ id: r.name as SkillId, action: r.action }));
 }
 
 // 宿主全局 skills 目录解析：options.skillsDir 优先，回退 XDG_CONFIG_HOME 或 ~/.config/opencode/skills
+/** 宿主全局 skills 目录解析：options.skillsDir 优先，回退 XDG 配置目录。
+ * @param opt 插件 options（宿主注入显式 any 边界）
+ * @returns 目录绝对路径 */
 export function resolveSkillsDir(opt: any): string {
   if (opt?.skillsDir) return String(opt.skillsDir);
   return xdgConfigDir("opencode", "skills"); // 派生单点（server/paths.ts）
 }
 
 // setup 接线（fail-soft，默认开启）：opt.syncSkills 显式 false 才跳过；异常不阻塞插件加载。
+/** setup 接线（fail-soft，默认开启）：options.syncSkills 显式 false 才跳过；同步一次并 notify 汇总与 unmanaged 告警；异常不阻塞插件加载。
+ * @param host T03 防腐层（notify 通道）
+ * @param opt 插件 options（宿主注入显式 any 边界）
+ * @returns dispose 句柄（空实现，保持组装一致） */
 export function registerSkillSync(host: Host, opt: any): { dispose: () => void } {
   try {
     if (opt?.syncSkills === false) return { dispose() {} };

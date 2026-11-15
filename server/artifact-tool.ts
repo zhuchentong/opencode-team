@@ -13,7 +13,9 @@ import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseW
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
-/** 内容 hash：sha256 前 12 位 hex（与 managed-sync 两域同源；bytes 弱比较的强复核锚）。 */
+/** 内容 hash：sha256 前 12 位 hex（与 managed-sync 两域同源；bytes 弱比较的强复核锚）。
+ * @param buf 待哈希内容（Buffer 或字符串）。
+ * @returns sha256 前 12 位 hex 串。 */
 const hashOf = (buf: Buffer | string): string => createHash("sha256").update(buf).digest("hex").slice(0, 12);
 
 // M16-r39 T06：deps 类型化（ArtifactDeps 契约；宿主入参 ctx 保留 any）

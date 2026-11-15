@@ -7,6 +7,11 @@ import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计�
 import { type Host } from "./host.ts";
 
 // host 为 T03 防腐层（adaptHost(ctx)）；opt 插件 options；deps 由 index.ts 注入。
+/** 注册自动激活提示：观察聊天消息，对 leader 的「值得提示」首条消息注入一次性 entry 指引。
+ * @param host T03 防腐层（adaptHost(ctx) 产物），用其 chatMessages/instructions 能力
+ * @param opt 宿主注入的插件 options（宿主注入边界为显式 any）：opt.hint===false 整体禁用
+ * @param deps index.ts 注入的依赖：resolveState/probeOnce/sessionGet（形状同 Store/Observer 契约）
+ * @returns 聊天 hook 注册句柄（禁用或注册失败为 null），可 dispose */
 export function registerHint(host: Host, opt: any, deps: any) {
   const { resolveState, probeOnce, sessionGet } = deps;
 

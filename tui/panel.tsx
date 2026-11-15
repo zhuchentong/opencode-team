@@ -6,18 +6,30 @@
 // （真机崩溃形态 e.length，HOST-CONTRACT.md / LRN-20261111-006）。
 import * as ot from "@opentui/solid";
 const { createElement, insert, setProp } = ot as any; // 低层原语（宿主注入运行时实例，P0 同款）
+/**
+ * 转发低层原语 insert/setProp：index.tsx 的 slot render 顶层（流派 A 唯一动态点）仍需这两件。
+ */
 export { insert, setProp }; // index.tsx slot render 顶层（唯一动态点）仍需这两件原语
+/**
+ * 转发 index 装配面所需渲染原语（boxEl/textEl 容器与文本节点、zhOf 阶段中文名）。
+ */
 export { boxEl, textEl, zhOf }; // index 装配面（compact 行渲染；listLine/buildRows 本已带 export）
 import { STAGE_ORDER, FOLD, CANON, DAILY_STAGE_ORDER } from "../shared/phases.ts";
 import { redactIds } from "../shared/redact.ts"; // notification-brief-display T04：legacy 降级脱敏同源（G-1/A）
 import { errMsg, str } from "./util.ts";
 
+/** 侧边栏恒定行数（表格化布局的行几何基准）。 */
 const ROWS = 20;
 
 
 // notification-brief-display T04（plan §4 冻结）：toast/通知文案选择——brief 非空用 brief；
 // 否则旧行/旧事件（brief=null）本地降级：text 前两行各截 100 码点并过 redactIds（零回显 A/G-1）。
 // 模块级纯函数供 harness 直测；60s 新鲜度门保证降级形态只短暂可见。
+/**
+ * 选择 toast/通知文案：brief 非空直接用；否则旧行降级（text 前两行各截 100 码点 + redactIds 脱敏）。
+ * @param d 报告负载（含 brief/text 字段）。
+ * @returns 呈现文案（无内容时返回空串）。
+ */
 export function briefOf(d: any): string {
   const b = str(d?.brief);
   if (b) return b;
@@ -28,11 +40,19 @@ export function briefOf(d: any): string {
     return redactIds(cps.length > 100 ? cps.slice(0, 100).join("") + "…" : l);
   }).join("\n");
 }
+/** 行内文本消毒：折叠换行为空格并截前 200 字符（保证 textEl 插入文本恒非空）。
+ * @param s 原始文本。
+ * @returns 消毒后的单行文本（恒非空）。 */
 const sanitize = (s: string) => (String(s ?? "").replace(/[\r\n]+/g, " ").slice(0, 200) || " ");
 
 // ── M16-r37 表格化：显示宽度（CJK=2 cell）与 cell 补位 ────────────────
 // 对齐列内只允许 CJK+ASCII（状态词 完成/进行/待办 各 4 cell、占位 ·），
 // 歧义宽度字符（●○▶✓✗—）一律留在非表格行，杜绝终端宽度分歧导致的错列。
+/**
+ * 计算字符串的终端显示宽度（CJK/全角/韩文按 2 cell，其余按 1）。
+ * @param s 待测量字符串。
+ * @returns 显示宽度（cell 数）。
+ */
 export const dispW = (s: string) => {
   let w = 0;
   for (const ch of String(s ?? "")) {
@@ -41,8 +61,20 @@ export const dispW = (s: string) => {
   }
   return w;
 };
+/** 右侧补空格到目标显示宽度。
+ * @param s 原始字符串。
+ * @param w 目标显示宽度（cell 数）。
+ * @returns 右侧补空格后的字符串。 */
 const padE = (s: string, w: number) => s + " ".repeat(Math.max(0, w - dispW(s)));
+/** 左侧补空格到目标显示宽度（右对齐）。
+ * @param s 原始字符串。
+ * @param w 目标显示宽度（cell 数）。
+ * @returns 左侧补空格后的字符串。 */
 const padS = (s: string, w: number) => " ".repeat(Math.max(0, w - dispW(s))) + s;
+/** 按显示宽度截断并补齐（不切断 CJK 双宽字符）。
+ * @param s 原始字符串。
+ * @param w 目标显示宽度（cell 数）。
+ * @returns 截断并右补齐到目标宽度的字符串。 */
 const fit = (s: string, w: number) => {
   let out = "";
   let acc = 0;
@@ -55,6 +87,9 @@ const fit = (s: string, w: number) => {
   return padE(out, w);
 };
 // tui-sidebar-elapsed：耗时格式 m:ss（负数钳 0；>999:59 由 padS/fit 自然截，>16.6h 极端场景接受截断）
+/** 秒数格式化为 m:ss（负数钳 0，>16.6h 极端场景接受截断）。
+ * @param sec 秒数。
+ * @returns m:ss 格式串。 */
 export const fmtElapsed = (sec: number): string => { const s2 = Math.max(0, Math.floor(sec)); return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, "0")}`; };
 // 中文阶段名（TUI 显示层本地映射；shared/phases.ts 语义常量不动，折叠语义沿用 FOLD）
 const ZH: Record<string, string> = {
@@ -62,20 +97,46 @@ const ZH: Record<string, string> = {
   building: "执行", reconcile: "合并", build_review: "执行审核", testing: "测试",
   fixing: "修复", done: "交付", retrospect: "交付", assign: "测试设计",
 };
+/** 阶段名转中文显示名（经 FOLD 归一；未知值回退原串或 ?）。
+ * @param phase 阶段名（任意值）。
+ * @returns 中文显示名。 */
 const zhOf = (phase: any) => ZH[FOLD[phase] ?? phase] ?? str(phase ?? "?");
+/** 状态标记符号：完成=✓、未完成=✗。
+ * @param ok 是否完成。
+ * @returns 状态符号（✓ 或 ✗）。 */
 const mark = (ok: boolean) => (ok ? "✓" : "✗");
 // M16-r49：phase→role 映射（经 FOLD 归一，reconcile=building）；intake=leader 会话无派生角色；
 // 未派生/缺字段静默不显示。模块级纯函数（不捕获渲染闭包变量）。
+/**
+ * 阶段名映射当前执行角色（经 FOLD 归一，reconcile=building；intake=leader 会话无派生角色）。
+ * @param ph 阶段名（可为 null）。
+ * @returns 角色 slug（如 "wf/builder"）或 null（未派生/未知阶段）。
+ */
 const roleOf = (ph: string | null): string | null =>
   ({ planning: "wf/planner", review: "wf/planner-reviewer", test_design: "wf/tester",
      building: "wf/builder", reconcile: "wf/builder", build_review: "wf/builder-reviewer",
      testing: "wf/tester", fixing: "wf/fixer", done: "wf/learner", retrospect: "wf/learner" } as Record<string, string | null>)[FOLD[ph ?? ""] ?? ph ?? ""] ?? null;
 // M16-r46 批1：产物清单格式化（KB 大小 0.5k/1.2k；行=▸+名字 fit 18+✓/✗/免+大小）——模块级纯函数
+/** 字节数格式化为 KB 串（一位小数、去尾零，如 0.5k/1.2k；非正数返回空串）。
+ * @param b 字节数（任意值，弱转 Number）。
+ * @returns KB 格式串；非正数返回空串。 */
 const fmtKB = (b: unknown) => { const n = Number(b ?? 0); return n > 0 ? `${(n / 1024).toFixed(1).replace(/\.0$/, "")}k` : ""; };
+/** 构造产物清单行（▸ + 名字 fit 18 + ✓/✗/免 + KB 大小）。
+ * @param name 产物文件名。
+ * @param ok 是否已记账/通过。
+ * @param kb KB 大小串（空串则不显示）。
+ * @param exempt 是否豁免（显示「免」）。
+ * @returns 产物清单行文本。 */
 const artLine = (name: string, ok: boolean, kb: string, exempt?: boolean) =>
   `  ▸ ${fit(name, 18)} ${exempt ? "免" : mark(ok)}${exempt || !kb ? "" : ` ${kb}`}`;
 
 // ── 节点构造：P0 探针逐字收敛（真机不崩的形态）────────────────────
+/**
+ * 构造 text 文本节点（恒非空内容、wrapMode none，fg 可选，全部 fail-soft）。
+ * @param s 文本内容（经 sanitize 消毒）。
+ * @param fg 前景色（主题色值，可选）。
+ * @returns @opentui 的 text 元素。
+ */
 function textEl(s: string, fg?: any) {
   const t = createElement("text");
   try { if (fg) setProp(t, "fg", fg); } catch { /* ignore */ }
@@ -83,6 +144,12 @@ function textEl(s: string, fg?: any) {
   insert(t, [sanitize(s)]); // 数组形态（P0 实证）；文本恒非空
   return t;
 }
+/**
+ * 构造 box 容器节点（width 100%、column 布局，逐个插入非空子节点）。
+ * @param children 子节点数组（null/undefined/false 项跳过）。
+ * @param height 可选高度字符串（宿主不支持该 prop 时静默跳过）。
+ * @returns @opentui 的 box 元素。
+ */
 function boxEl(children: unknown[], height?: string) {
   const b = createElement("box");
   setProp(b, "width", "100%");
@@ -113,9 +180,19 @@ import("@opentui/core").then(
 // catalogue 缺 markdown（旧版宿主）或构造/建块异常 → createElement/setProp 构造期同步 throw → 返回 null，
 // 调用方走纯文本逐行降级轨；onError 由 setup 闭包注入（probe 归因 hasMd）。
 // 注意：content 原文直喂，不经 sanitize——sanitize 折叠换行+截 200 字符会毁整篇块语义（表格/围栏必须完整行）。
+/** 查询宿主组件目录是否有 markdown 组件（异常时返回 "unknown"）。
+ * @returns 是否有 markdown 组件；探测异常返回 "unknown"。 */
 const hasMdCatalogue = (): boolean | "unknown" => {
   try { return !!(ot as any).getComponentCatalogue?.().markdown; } catch { return "unknown"; }
 };
+/**
+ * 构造 markdown 正文节点：先设 syntaxStyle（缓存按 nativeScene owner 分键）再设 content，
+ * 构造异常时销毁半成品并返回 null（调用方走纯文本逐行降级轨）。content 原文直喂不经 sanitize。
+ * @param content markdown 原文。
+ * @param onError 构造失败回调（携带错误信息与目录探测结果）。
+ * @param onStyle syntaxStyle 接线结果回调（ok/err/import-err 分型，仅进探针）。
+ * @returns markdown 元素，或 null（降级轨）。
+ */
 function mdEl(content: string, onError?: (info: { err: string; hasMd: boolean | "unknown" }) => void, onStyle?: (info: Record<string, unknown>) => void) {
   let m: any = null;
   try {
@@ -149,9 +226,18 @@ function mdEl(content: string, onError?: (info: { err: string; hasMd: boolean | 
 // 头尾固定行由调用方留在外层。flexGrow 1 占满外层 column 剩余高度（外层 height 约束，不在本元素设
 // height:100%——那会挤出兄弟固定行）。catalogue 缺 scrollbox（旧宿主）→ 构造期同步 throw → null，
 // 调用方正文直挂（=现状行为）。
+/** 查询宿主组件目录是否有 scrollbox 组件（异常时返回 "unknown"）。
+ * @returns 是否有 scrollbox 组件；探测异常返回 "unknown"。 */
 const hasScrollCatalogue = (): boolean | "unknown" => {
   try { return !!(ot as any).getComponentCatalogue?.().scrollbox; } catch { return "unknown"; }
 };
+/**
+ * 构造正文滚动容器：width 100% + flexGrow 1 占满外层剩余高度，逐个插入非空子节点；
+ * 构造异常时销毁半成品并返回 null（调用方正文直挂=现状行为）。
+ * @param children 滚动内容节点数组。
+ * @param onError 构造失败回调（携带错误信息与目录探测结果）。
+ * @returns scrollbox 元素，或 null（正文直挂降级）。
+ */
 function scrollEl(children: unknown[], onError?: (info: { err: string; hasScroll: boolean | "unknown" }) => void) {
   let s: any = null;
   try {
@@ -167,12 +253,21 @@ function scrollEl(children: unknown[], onError?: (info: { err: string; hasScroll
   }
 }
 
+/** 阶段名在推进序列中的下标（未知阶段视为 0）。
+ * @param phase 阶段名（任意值）。
+ * @param order 推进序列（默认 STAGE_ORDER）。
+ * @returns 序列下标（未知阶段视为 0）。 */
 const stageOf = (phase: any, order: string[] = STAGE_ORDER) => {
   const p = FOLD[phase] ?? phase;
   const i = order.indexOf(p);
   return i < 0 ? 0 : i;
 };
 
+/**
+ * 把活动任务摘要压成一行（slug fit 14 + 阶段中文 fit 8 + 三轮次计数），供 inactive 回退列表使用。
+ * @param x 任务摘要对象（slug/phase/rounds）。
+ * @returns 单行文本。
+ */
 export const listLine = (x: any) => {
   const r = x?.rounds ?? {};
   return `${fit(str(x?.slug || "(未定)"), 14)} ${fit(zhOf(x?.phase), 8)} ${r.plan_review ?? 0}/${r.build_review ?? 0}/${r.test_fix ?? 0}`;
@@ -182,6 +277,18 @@ export const listLine = (x: any) => {
 // 阶段行列几何 1+2+1+8+2+4+2+4+2+6=32 cell（状态词偏移恒 14、轮次右对齐 4 cell 20-23、
 // 耗时右对齐 6 cell 26-31；tui-sidebar-elapsed）；装饰线拉满 w（缺省 80，超宽靠 wrapMode:"none" 硬裁剪）。
 // 导出供 harness P11 纯函数直测 + P12 真渲染复核（绕开 testRender 信号→换树盲区）；渲染结构不变。
+/**
+ * 构造侧边栏恒定 20 行表格视图（行文本 t / 颜色 c / 可点击产物文件名 af 三数组），
+ * daily/full 双模式：6 行或 9 行阶段表 + 关卡行 + 产物区（daily 逐文件清单 / full 紧凑两行）。
+ * @param s 任务状态投影（active=false 或 null 时走错误/回退/空态分支）。
+ * @param err 拉取错误文案（非 null 时首行展示错误）。
+ * @param oth inactive 回退列表行（listLine 产物，至多 3 行）。
+ * @param othScope 回退列表作用域标签（"本项目" / "全局·其它项目"）。
+ * @param T 主题色板（text.muted/base/feedback/action）。
+ * @param now 当前时间戳（驱动进行中耗时与总耗时；缺省不追加耗时）。
+ * @param w 面板显示宽度（fail-soft 缺省 80，下限 24）。
+ * @returns { t, c, af }——行文本数组、行颜色数组、行可点击产物文件名（null=不可点击）。
+ */
 export const buildRows = (s: any, err: string | null, oth: string[], othScope: string, T: any, now?: number, w?: number) => {
   const t: string[] = Array.from({ length: ROWS }, () => " ");
   const c: any[] = Array.from({ length: ROWS }, () => T.text.muted);
@@ -330,12 +437,28 @@ export const buildRows = (s: any, err: string | null, oth: string[], othScope: s
 // ── R3 T3.4：产物预览 route 装配（原 index.tsx setup 内联段，依赖显式注入）──────
 // API 面实证状态：onMouseDown 命中=本地 harness 实证（P14）；router=2.2.6 二进制取证。
 // 降级链：router 不可用 → toast 路径；read 错误 → toast 文案；navigate 抛错 → 同上。
+/**
+ * 装配产物预览：注册 wf-artifact route（markdown 主轨 + 纯文本逐行降级轨，均入 scrollbox）
+ * 与 q 关闭键层，返回 openArtifact（rpc.read + navigate，降级 toast）与 routerOk。
+ * @param context 宿主注入的插件上下文（ui.router/ui.toast/keymap.layer/theme）。
+ * @param deps 依赖注入对象（probe/getSid/rpc/rpcOpts）。
+ * @param deps.probe 调试探针函数。
+ * @param deps.getSid 当前会话 ID 读取器（空则 openArtifact 直接跳过）。
+ * @param deps.rpc RPC 客户端工厂（read 调用）。
+ * @param deps.rpcOpts RPC 调用选项工厂（location 必带）。
+ * @returns { openArtifact } 打开产物预览；{ routerOk } route 是否注册成功。
+ */
 export function setupArtifactPreview(
   context: any,
   deps: { probe: (d: Record<string, unknown>) => void; getSid: () => string; rpc: () => any; rpcOpts: () => any },
 ) {
   const { probe, getSid, rpc, rpcOpts } = deps;
   const ROUTE_NAME = "wf-artifact";
+  /**
+   * 打开产物预览：rpc.read 拉全文后优先 navigate 到 wf-artifact route，route 不可用/失败降级 toast。
+   * @param file 产物文件名（artifacts key）。
+   * @returns 无返回值（失败路径均以 toast 反馈）。
+   */
   const openArtifact = async (file: string) => {
     const sid = getSid();
     if (!sid || !file) return;

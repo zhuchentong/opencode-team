@@ -25,9 +25,23 @@ import { installExecIntercept } from "./exec-intercept.ts"; // R3 T3.4：return 
 import { str, errMsg, setupProbe } from "./util.ts";
 import { setupRefresh } from "./data.ts"; // R3 T3.4：对账拉取
 
+/** 当前构建版本号（与 server 同源 shared/version.ts，随探针落盘对账）。 */
 const TUI_BUILD = VERSION;
 // harness/外部消费兼容面（拆分后仍可经 index 命名导入——实现体在 panel.tsx）
+/**
+ * 兼容面再导出：拆分后外部/harness 仍可经 index 命名导入（briefOf/buildRows/listLine/dispW/fmtElapsed），
+ * 实现体在 panel.tsx，本文件不复制实现。
+ */
 export { briefOf, buildRows, listLine, dispW, fmtElapsed } from "./panel.tsx";
+/**
+ * TUI 插件入口（流派 A 结构约束本体：本文件禁 JSX、slot render 顶层零响应式、唯一动态点
+ * insert(accessor)——真机实证的唯一不崩形态，勿为注释/重构改动该结构）。
+ * setup 内装配：探针、数据订阅（事件/data.listen/server.connected/5s 轮询）、通知去重、
+ * 产物预览 route、slot 渲染与 return 键拦截；返回的清理函数一次性收口所有订阅与定时器。
+ * @param context.setup 入参 context——宿主注入的插件上下文（ui/client/data/keymap/theme/renderer 等，
+ *   无官方类型，边界显式 any）。
+ * @returns 清理函数（dispose 时清 interval、abort 信号并逐项摘除订阅/注册）。
+ */
 export default Plugin.define({
   id: "wf-workflow-tui",
   setup(context: any) {
@@ -66,6 +80,12 @@ export default Plugin.define({
 
 
     // 主轨命令：RPC exec 本地执行（返回值渲染；同 at 登记去重键，压掉事件/轮询二次弹）
+    /**
+     * 主轨本地执行：RPC exec 运行 /wf:* 命令，透传 brief/level 弹 toast（同 at 登记去重键）并刷新 snap。
+     * @param name 命令名（如 "wf:status"）。
+     * @param promptText 命令参数文本（可为空串）。
+     * @returns Promise（失败路径以 error toast 反馈，不向外抛）。
+     */
     const execLocal = async (name: string, promptText: string) => {
       try {
         const r = await rpc().exec({ sessionID: latestSid, name, prompt: promptText }, rpcOpts());

@@ -7,6 +7,7 @@
 import { briefFallback, levelFor, type ReportLevel } from "./lib.ts";
 
 export type CmdHandler = (a: any) => Promise<unknown>;
+/** 单条命令执行结果：text=命令输出全文（无输出为 ""）；at=ISO 时间戳；brief/level=双轨报告元数据（未知命令或无 text 时为 fallback/null 语义见实现）。 */
 export type DispatchResult = { text: string; at: string; brief: string | null; level: ReportLevel | null };
 export type PublishFn = (name: string, text: string, at: string, a: any) => Promise<{ brief: string; level: ReportLevel }>;
 
@@ -18,6 +19,8 @@ export interface CommandBus {
   call(name: string, a: any): Promise<DispatchResult>;
 }
 
+/** 创建命令总线：Map 注册表 + publish 回调槽，解 bridge↔commands 装配环（setup 早期共享引用）。
+ * @returns CommandBus 实例（register/has/names/attachPublish/call；call 语义=旧 runner.run 逐字节迁移） */
 export function createCommandBus(): CommandBus {
   const m = new Map<string, CmdHandler>();
   let publish: PublishFn | null = null;
