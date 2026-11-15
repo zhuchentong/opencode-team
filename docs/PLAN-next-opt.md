@@ -1,3 +1,32 @@
+# PLAN — r54 优化批次方案（test_008 日志实证驱动，2026-11-15）
+
+> 状态:**已执行完毕**(2026-11-15)——批次 A/B/C/D1/D2 分别落 f34bb6f/a20ab7f/(C commit)/c76a86f/(D2 commit),每批门禁 EXIT=0(421→427 pass+TUI 189+oxlint 0);D 批触 tui/ 已随建 dist,**生效须 `./scripts/tui-restart.sh` 完全重启**(宿主对 TUI 模块路径级永久缓存);契约记录见 HOST-CONTRACT M16-r54 条。
+> 数据来源:test_008 全流程日志(.workflow/_debug 11 探针+tui-refresh.log 1625 行+跨库 wf.db 实况+宿主进程 fd 实况);交叉验证后 D2 换靶(fingerprint 桶→interval 跳拍)、撤销"扫描连接 LRU"(scanActiveTasks 已 finally close,常驻连接属设计内)、新增 A3(GC 5s 空转,比原方案收益更大)。
+
+## 批次 A · state.ts 数据安全(f34bb6f)
+- **A3 GC 节流**(新发现,最高收益):scanStates 60s 窗口跳过 qGc/qGhost——TUI 对空闲项目每 5s 调 list→scanStates 白跑 2 条 DELETE 写事务(实证:~/.workflow、插件库 -wal/-shm mtime 任务结束后仍在刷新)。
+- **A1 WAL 收口**:done/reset 后显式 `wal_checkpoint(TRUNCATE)` + `wal_autocheckpoint` 1000→64 页(默认 1000 页≈4MB 是 45KB WAL 悬唯一副本永不收拢的根因;test_008 状态库空库事故暴露面)。
+
+## 批次 B · diagnose 孤儿产物对账(a20ab7f)
+`orphanArtifactLines` 纯函数(lib 出口,77 名全集锁同步)+wf:diagnose 接线(dumpStates 复用零新 SQL):.workflow 子目录近期(≤14 天,与 done GC 窗口对齐防完工误报)含 md 但 tasks 无 slug → ⚠️ 信息行(不加 ❌ 前缀)。已知局限:mtime 可被 touch 干扰(HOST-CONTRACT r54)。
+
+## 批次 C · wf-projects.jsonl 去重
+registerProject 同 dir+dbFile 去重(进程内 SEEN+惰性基线回读);判定抽 `projectAppendNeeded` 直测——WF_PROJECTS_FILE 钩子既有契约(env 设置=注册完全不落盘)保持不变,故写入面经判定函数测试。存量 98KB 重复行不写迁移代码,diagnose 观测+手工去重即可。
+
+## 批次 D · TUI 两项(生效须完全重启)
+- **D1(c76a86f)**:loaded 探针加 distMtime(selfMtimeIso,import.meta.url 先例)——版本标签陈旧归因锚(test_008 实证 10:35 跑 build=M16-r47/11:18 重建才 r53)。
+- **D2**:空闲轮询退避——pollSkip 纯函数,空闲态每 6 拍执行 1 次(等效 30s),活跃每拍照旧;**交叉验证否决了 v1 的 fingerprint 桶方案**(只门渲染不省 RPC)与 setTimeout 自重排(撞 harness R7「无 setTimeout/setInterval 唯一」锚),最终形态=节拍内跳过 RPC 调用。
+
+## 批次 E · 观察项(不立项,挂账)
+- 单写者写队列:BUSY 样本第 2 例(test_008 lane 登记撞锁×2),第 3 例再立项(save 侧按 dbFile 键控 promise 串行链);
+- events 裁剪:跨库实测 ≤12 行,无膨胀证据;
+- scanStates 免 normalize:A3 落地后如轮询成本仍显著再议。
+
+## 明确不做
+FLOWS/GATES 语义、TUI 渲染结构、append 模式——同 r53 口径。
+
+---
+
 # PLAN — r53 优化批次方案(v2,test_007 检查后修订)
 
 > 状态:**已执行完毕**(2026-11-14)——批次 0.5/1/2/3/4 分别落 a004a0b/f9d3c4d/bf82ddc/3cf1b56/c2e6917,每批门禁 EXIT=0(414→417 pass+TUI 189+oxlint 0);批次 0 剩真机探针目检(WF_DEBUG=1,留用户);契约记录见 HOST-CONTRACT M16-r53 条。
