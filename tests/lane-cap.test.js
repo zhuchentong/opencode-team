@@ -129,3 +129,50 @@ test("F2 wf:lane set 带 worktree → status lanes 行显示路径尾段；缺�
   const out2 = await h.run("wf:status");
   assert.match(out2, /T02=active@无树/);
 });
+
+// ── r53 批次 2：gate 拒绝路径磁盘对账自动补注册 ──────────────────────────────
+// 「原生 edit 落盘后忘 register」→ verdicts 缺记账卡 wf:build；拒绝分支内对账补记+重放一次。
+import fs2 from "node:fs";
+
+const mkReconcileDir = (slug, files = {}) => {
+  const dir = fs2.mkdtempSync("/tmp/opencode/wf-r53gr-");
+  fs2.mkdirSync(`${dir}/.workflow/${slug}`, { recursive: true });
+  for (const [f, c] of Object.entries(files)) fs2.writeFileSync(`${dir}/.workflow/${slug}/${f}`, c);
+  return dir;
+};
+const toBuildGate = async (h, slug) => {
+  await h.run("wf:intake", slug);
+  await h.run("wf:plan");
+  await h.run("wf:review");
+  h.patch({ planConfirmedAt: new Date().toISOString() }); // 确认记账经 question 观测（测试直 patch）；文件面对账交给 reconcile
+  return h.run("wf:build");
+};
+
+test("批次2 gate 拒绝路径：盘上 plan-review/plan 已落盘未记账 → 自动补注册后放行", async () => {
+  const dir = mkReconcileDir("gr-ok", {
+    "plan.md": "# 计划\n\n## lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n",
+    "plan-review-r1.md": "**结论**: PASS\n\n五维过。\n",
+  });
+  const h = await mkWiringHarness({ sessionID: "ses_gr1", dir });
+  const out = await toBuildGate(h, "gr-ok");
+  assert.ok(!out.startsWith("❌"), `应对账放行：${out.slice(0, 120)}`);
+  const st = h.st();
+  assert.equal(st.phase, "building");
+  assert.equal(st.verdicts?.planReview, "PASS", "plan-review verdict 从盘解析");
+  assert.equal(st.verdicts?.laneTableWritten, true, "plan lane 表解析记账");
+  assert.ok(st.artifacts["plan.md"]?.hash, "artifacts 补记账含 hash");
+  const notes = st.log.map((e) => e.note).join("|");
+  assert.ok(notes.includes("gate-reconcile"), "审计留 gate-reconcile 痕");
+  assert.ok(notes.includes("register-gate-reconcile"), "逐产物审计 mode=register-gate-reconcile");
+});
+
+test("批次2 gate 拒绝路径：盘上无文件 → 原拒绝文案逐字不变，不造记账", async () => {
+  const dir = mkReconcileDir("gr-miss");
+  const h = await mkWiringHarness({ sessionID: "ses_gr2", dir });
+  const out = await toBuildGate(h, "gr-miss");
+  assert.ok(out.startsWith("❌"), "无盘上产物仍拒绝");
+  const st = h.st();
+  assert.equal(st.phase, "review");
+  assert.equal(st.artifacts?.["plan.md"], undefined, "缺失不造记账");
+  assert.ok(!st.log.map((e) => e.note).join("|").includes("register-gate-reconcile"), "无对账审计");
+});

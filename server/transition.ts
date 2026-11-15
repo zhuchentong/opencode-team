@@ -9,6 +9,7 @@ import { evaluateTransition, flowFor, isSelfModDir, selfModWarnLine, makeInitial
 import { guidance, entryValue } from "./guidance.ts";
 import { FOLD } from "../shared/phases.ts"; // tui-sidebar-elapsed T01：闭账 key 折叠（reconcile→building、retrospect→done）
 import { ENTRY_KEY, logAdd, withStateRetry, scanActiveTasks, type Store } from "./state.ts";
+import { reconcileGateArtifacts } from "./gate-reconcile.ts"; // r53 批次 2：gate 拒绝路径磁盘对账
 import { swallow } from "./observe.ts";
 import { type Host } from "./host.ts";
 
@@ -106,7 +107,19 @@ export function createTransition(deps: TransitionDeps) {
         preArtifacts = cmd === "wf:intake" ? Object.keys(st.artifacts ?? {}) : [];
 
         // P0-b：来源合法性 / gate / 计数上限 / intake 守卫与重置 → lib.evaluateTransition（拒绝不消耗循环额度）
-        const r = evaluateTransition(cmd, st, text, at, LIMS);
+        // r53 批次 2：gate 拒绝路径磁盘对账——关卡依赖产物「已落盘未记账」→ 补 register 记账（内存改，
+        // 随本次 apply 一次 save 落盘）并重放评估一次；仍失败走原拒绝路径（文案逐字不变）。
+        // 评估前置对账不可行：本 apply 位于 withStateRetry CAS 周期内，前置 save=rev 冲突+重放重复执行。
+        let r = evaluateTransition(cmd, st, text, at, LIMS);
+        if (!r.ok && r.gate) {
+          try {
+            const dir = st.directory ?? (await resolveProjectDir(st, sessionID));
+            if (dir && reconcileGateArtifacts(st, cmd, String(dir), at)) {
+              logAdd(st, { at, cmd, from, to: from, ok: true, note: `gate-reconcile:${r.gate}` });
+              r = evaluateTransition(cmd, st, text, at, LIMS); // 仅一次重放（gate 拒绝路径不消耗计数额度）
+            }
+          } catch (e) { swallow(e, "transition:gate-reconcile-fail"); }
+        }
         if (!r.ok) {
           // R2 T2.3：gate 拒绝时 log note 细化 `gate-rejected:<id>`（审计/诊断面；r.note 本体逐字不变）
           logAdd(st, { at, cmd, from, to: from, ok: false, note: r.gate ? `${r.note}:${r.gate}` : r.note });
