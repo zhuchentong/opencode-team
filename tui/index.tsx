@@ -22,7 +22,7 @@ import { createDeduper } from "./dedup.ts"; // R3 T3.3：去重单实现（serve
 import { setupNotify } from "./notify.ts"; // R3 T3.4：toast+OS 通知层
 import { boxEl, textEl, buildRows, zhOf, insert, setProp, setupArtifactPreview } from "./panel.tsx"; // R3 T3.4：渲染层
 import { installExecIntercept } from "./exec-intercept.ts"; // R3 T3.4：return 键拦截
-import { str, errMsg, setupProbe } from "./util.ts";
+import { str, errMsg, setupProbe, selfMtimeIso } from "./util.ts";
 import { setupRefresh } from "./data.ts"; // R3 T3.4：对账拉取
 
 /** 当前构建版本号（与 server 同源 shared/version.ts，随探针落盘对账）。 */
@@ -49,7 +49,7 @@ export default Plugin.define({
     const { REPO, probe } = setupProbe(context, { build: TUI_BUILD }); // R3 T3.4：探针工厂拆 util.ts
     // loaded 探针带 options 形状（真机已证：{package,options} 的 options 未传达 TUI → context.options={}；
     //  因此 debug 探针无条件写，compact 选项当前实际不可用——P6 文档注明）
-    probe({ evt: "loaded", repo: REPO, options: JSON.stringify(context?.options ?? null), loc: str(context?.location?.directory), hasSlot: typeof context?.ui?.slot === "function", hasKeymap: typeof context?.keymap?.layer === "function", hasDataListen: typeof context?.data?.listen === "function", hasDataOn: typeof context?.data?.on === "function", hasAttention: typeof context?.attention?.notify === "function", hasRendererEditor: !!context?.renderer });
+    probe({ evt: "loaded", repo: REPO, options: JSON.stringify(context?.options ?? null), loc: str(context?.location?.directory), distMtime: selfMtimeIso(), hasSlot: typeof context?.ui?.slot === "function", hasKeymap: typeof context?.keymap?.layer === "function", hasDataListen: typeof context?.data?.listen === "function", hasDataOn: typeof context?.data?.on === "function", hasAttention: typeof context?.attention?.notify === "function", hasRendererEditor: !!context?.renderer });
 
     // ── 数据层（全部拉取只发生在 timer/microtask/事件回调——追踪上下文之外）──
     const [snap, setSnap] = createSignal<any>(null); // { st, oth, othScope, err }

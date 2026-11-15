@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createSignal } from "solid-js";
 import { Rpc } from "@opencode/plugin/rpc";
+import { statSync } from "node:fs";
 import * as ot from "@opentui/solid";
 /** wf RPC 契约单点：state/list/read/exec 四方法 + updated/report 两事件（server 注册、TUI 调用同源）。 */
 var Wf = Rpc.define({
@@ -209,6 +210,16 @@ var str = (v) => v === null || v === void 0 ? "" : String(v);
 * @param e 任意抛出值（catch 入参）。
 * @returns 错误消息串。 */
 var errMsg = (e) => String(e?.message ?? e);
+/** r54 D1：本产物文件（dist/tui.js）mtime ISO 串——版本标签陈旧归因锚（test_008 实证：10:35 运行
+* build=M16-r47 而 11:18 重建后才是 r53，归因只能靠猜）；失败返回空串（探针 fail-soft）。
+* @returns 产物文件修改时间 ISO 串；stat 失败为 ""。 */
+function selfMtimeIso() {
+	try {
+		return statSync(decodeURIComponent(new URL(import.meta.url).pathname)).mtime.toISOString();
+	} catch {
+		return "";
+	}
+}
 /**
 * 创建 TUI 调试探针：WF_DEBUG=1 时把诊断事件追加写入 .workflow/_debug/tui-refresh.log，默认关闭。
 * @param context 宿主注入的插件上下文（取 location.directory 定位仓库根）。
@@ -1200,6 +1211,7 @@ var tui_default = Plugin.define({
 			repo: REPO,
 			options: JSON.stringify(context?.options ?? null),
 			loc: str(context?.location?.directory),
+			distMtime: selfMtimeIso(),
 			hasSlot: typeof context?.ui?.slot === "function",
 			hasKeymap: typeof context?.keymap?.layer === "function",
 			hasDataListen: typeof context?.data?.listen === "function",

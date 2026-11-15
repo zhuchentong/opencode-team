@@ -1,4 +1,5 @@
 // tui/util.ts — R3 T3.4 拆分共用小工具（str/errMsg；panel/notify/index 三处同源）
+import { statSync } from "node:fs"; // r54 D1：产物文件指纹（静态内建导入，bundle 外部化）
 /** 空值安全转字符串：null/undefined 归一为空串，其余 String()。
  * @param v 任意输入值。
  * @returns 字符串形式（null/undefined 归一为空串）。 */
@@ -7,6 +8,14 @@ export const str = (v: unknown) => (v === null || v === undefined ? "" : String(
  * @param e 任意抛出值（catch 入参）。
  * @returns 错误消息串。 */
 export const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
+/** r54 D1：本产物文件（dist/tui.js）mtime ISO 串——版本标签陈旧归因锚（test_008 实证：10:35 运行
+ * build=M16-r47 而 11:18 重建后才是 r53，归因只能靠猜）；失败返回空串（探针 fail-soft）。
+ * @returns 产物文件修改时间 ISO 串；stat 失败为 ""。 */
+export function selfMtimeIso(): string {
+  try {
+    return statSync(decodeURIComponent(new URL(import.meta.url).pathname)).mtime.toISOString();
+  } catch { return ""; }
+}
 
 // R3 T3.4：探针工厂（自 index.tsx setup 拆出；REPO 兜底/loaded 时间戳/序列号在此闭环）。
 // P6 收敛：默认关闭（WF_DEBUG=1 ./scripts/tui-restart.sh 开启）；写 .workflow/_debug/tui-refresh.log。
