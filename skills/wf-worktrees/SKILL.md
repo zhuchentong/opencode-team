@@ -23,7 +23,7 @@ description: >
 0. 合并前校验树内 `git status` 干净（builder 已 commit；未 commit 残留 → 退回 builder 固化，勿代写）。
 1. builder 回执齐备（含红→绿证据）后才合并；**回执必须已双写主树**（`<主树>/.workflow/<slug>/build-receipt-<Tnn>.md` ls 验证存在且非空——树内 `.workflow/` 是 gitignored 副本，清理序会 rm 它；`cp 2>/dev/null &&` 静默短路曾致回执丢失、靠 sessionID 续接补档）。
 2. md5 逐文件核验树内产物与主树一致（防部分拷贝）。
-3. 主树跑全量门禁（树内绿≠主树绿，环境可能不同）。
+3. 主树跑全量门禁：**bun test + typecheck 双绿**才算过闸（仅 test 绿不算——跨 lane 类型缝隙拖到收尾才暴露=多耗返工往返，test_011 实证；树内绿≠主树绿，环境可能不同）。
 4. 数字不符/冲突 → 停下问用户，不自动解决。
 
 ## 清理（顺序固定，ERR-001）
