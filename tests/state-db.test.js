@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
-import { createStore, logAdd, writeTaskRow } from "../server/state.ts";
+import { createStore, logAdd, writeTaskRow, shouldRunGc } from "../server/state.ts";
 // T04：装配收敛 helpers/host-stub（extra=ctx 形命名空间覆盖：storage/session→sessions）
 import { mkHostStub } from "./helpers/host-stub.js";
 
@@ -319,5 +319,79 @@ test("T04 边界：行不存在 UPDATE→stale-rev；db 已关闭→write-error 
   const r = writeTaskRow(d2, mkCasRow("intake"), null);
   assert.equal(r.ok, false);
   assert.equal(r.reason, "write-error");
+  s.close();
+});
+
+// ── r54 批次 A：WAL 收口（done/reset 显式 checkpoint + autocheckpoint 阈值）与 GC 节流 ──
+// test_008 实证：任务态唯一副本悬在未 checkpoint 的 -wal 上（默认 autocheckpoint=1000 页≈4MB
+// 永不触发），-wal/-shm 被清即审计整体蒸发；空闲项目 TUI 5s 轮询 list→scanStates 白跑 2 条 DELETE。
+
+const walSize = (dir) => { try { return fs.statSync(`${dbFile(dir)}-wal`).size; } catch { return 0; } };
+
+test("r54 A1b：done save 成功后 WAL 收拢（TRUNCATE → -wal 文件为 0）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_w1", slug: "demo", phase: "testing", rounds: {}, log: [] });
+  assert.ok(walSize(dir) > 0, "building 前置写应产生 WAL 帧（非 done 不触发显式收口）");
+  const st = await s.load("ses_w1");
+  st.phase = "done";
+  const r = await s.save(st);
+  assert.equal(r.ok, true);
+  assert.equal(walSize(dir), 0, "done 落库后 WAL 必须 TRUNCATE 收拢（审计副本收进主文件）");
+  s.close();
+});
+
+test("r54 A1b：非 done save 不触发显式收口；checkpoint 异常不影响 save 返回（fail-open）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  const r = await s.save({ sessionID: "ses_w2", slug: "demo", phase: "building", rounds: {}, log: [] });
+  assert.equal(r.ok, true);
+  assert.equal(r.rev, 1);
+  // 非 done：save 正常返回 ok（WAL 可非空——autocheckpoint 兜底，不做强断言）
+  // fail-open 锚：swallow 通道在 mock preload 下记账不抛——done 路径已由上一用例覆盖 ok 返回，
+  // 此处仅锁「checkpoint 不改变 save 返回形状」：重复 done save 仍 ok:true
+  const st = await s.load("ses_w2");
+  st.phase = "done";
+  assert.equal((await s.save(st)).ok, true);
+  assert.equal((await s.save(await s.load("ses_w2"))).ok, true, "done 态重复 save（checkpoint 已收拢后）仍成功");
+  s.close();
+});
+
+test("r54 A1b：removeState（reset）后 WAL 收拢", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_w3", slug: "demo", phase: "intake", rounds: {}, log: [] });
+  await s.putReport({ sessionID: "ses_w3", text: "t", at: "at" });
+  await s.removeState("ses_w3");
+  assert.equal(walSize(dir), 0, "reset 后 WAL 收拢（events 为唯一剩余数据，须收进主文件）");
+  s.close();
+});
+
+test("r54 A3：shouldRunGc 纯函数锚 + scanStates 节流（60s 内二次调用不重复执行 DELETE）", async () => {
+  // 纯函数判定锚
+  assert.equal(shouldRunGc(0, 0), false, "同刻不得重跑（now-last=0 < 60s）");
+  assert.equal(shouldRunGc(60_000, 0), true, "满窗口放行");
+  assert.equal(shouldRunGc(59_999, 0), false, "差 1ms 仍节流");
+  // 集成：DELETE 计数触发器——首次 scanStates 执行 GC，60s 内二次调用跳过
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  const d = new Database(dbFile(dir));
+  d.exec(`CREATE TABLE gc_probe (id INTEGER PRIMARY KEY CHECK (id=1), n INTEGER NOT NULL);
+    INSERT INTO gc_probe VALUES (1, 0);
+    CREATE TRIGGER gc_count AFTER DELETE ON tasks BEGIN
+      UPDATE gc_probe SET n = n + 1 WHERE id = 1;
+    END;`);
+  const oldIso = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(); // 超出 14 天 GC 窗口
+  await s.save({ sessionID: "ses_g1", slug: "done-old", phase: "done", rounds: {}, log: [] });
+  d.prepare("UPDATE tasks SET updated_at=? WHERE session_id=?").run(oldIso, "ses_g1"); // save 覆写 updatedAt → 原生 SQL 回拨
+  await s.scanStates(); // 首次：GC 执行，删除过期 done 行 → 触发器记 1 次
+  assert.equal(d.query("SELECT n FROM gc_probe WHERE id=1").get().n, 1, "首次 scanStates 应执行 GC（恰一次）");
+  assert.equal(d.query("SELECT COUNT(*) AS n FROM tasks").get().n, 0, "过期 done 行被 GC");
+  await s.save({ sessionID: "ses_g2", slug: "done-old2", phase: "done", rounds: {}, log: [] });
+  d.prepare("UPDATE tasks SET updated_at=? WHERE session_id=?").run(oldIso, "ses_g2");
+  await s.scanStates(); // 60s 窗口内：GC 跳过
+  assert.equal(d.query("SELECT COUNT(*) AS n FROM tasks").get().n, 1, "节流窗口内二次 scanStates 不得执行 GC");
+  assert.equal(d.query("SELECT n FROM gc_probe WHERE id=1").get().n, 1, "GC 全程恰执行一次");
+  d.close();
   s.close();
 });

@@ -130,6 +130,15 @@ export async function withStateRetry(opts: {
 
 const STALE_MS = 14 * DAY_MS; // A7：done 状态 14 天 GC（原 storage 版语义保留；DAY_MS 单点见 domain/types）
 const DB_BUSY_TIMEOUT_MS = 10000; // SQLite busy_timeout（多会话并发写 wf.db 的写锁等待窗口；test_007 实证 5s 窗口内多 lane 并发登记仍写错误→加倍）
+// r54 批次 A：WAL 收口与 GC 节流常量（test_008 实证：默认 autocheckpoint=1000 页≈4MB 使 45KB WAL
+// 永不自动收拢，任务态唯一副本悬在 -wal 文件上，-wal/-shm 被清即审计整体蒸发）。
+const WAL_AUTOCHECKPOINT_PAGES = 64; // ≈256KB 触发自动 checkpoint（远小于默认 1000 页）
+const GC_THROTTLE_MS = 60000; // scanStates GC 节流窗口（TUI 5s 轮询空闲项目也会触发 list→scanStates，60s 内不重复跑 DELETE）
+/** GC 节流判定（模块级纯函数，bun test 直测）：now 距上次执行 ≥ GC_THROTTLE_MS 才允许再跑。
+ * @param now 当前时钟（ms）
+ * @param lastAt 上次 GC 执行时钟（ms；0=从未执行）
+ * @returns 是否应执行本轮 GC */
+export const shouldRunGc = (now: number, lastAt: number): boolean => now - lastAt >= GC_THROTTLE_MS;
 
 // ── P1-A（arch-maintenance-p1）：selfmod 护栏域拆分至 ./state-scan.ts（与 CAS 红线域文件级隔离；
 // 平铺顶层——swallow-coverage 守卫 readdirSync 非递归，子目录会逃逸静默 catch 扫描）。
@@ -194,7 +203,13 @@ export function createStore(host: Host): Store {
   const db: any = new Database(dbFile, { create: true });
   db.run("PRAGMA journal_mode=WAL");
   db.run(`PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`); // SQLite 写锁等待上限（多会话并发写 wf.db 容忍窗口）
+  db.run(`PRAGMA wal_autocheckpoint=${WAL_AUTOCHECKPOINT_PAGES}`); // r54 A1a：WAL 自动收拢阈值（默认 1000 页过大，任务态长期悬于 -wal）
   db.run(SCHEMA);
+  // r54 A1b：显式 WAL 收口（done 终态/reset 后调用；并发读 busy 时 PRAGMA 自身返回 busy=1 不抛错，
+  // 失败仅 swallow 记账，绝不影响 save/removeState 返回值——数据安全增益，fail-open 语义）。
+  const checkpointWal = (): void => {
+    try { db.run("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) { swallow(e, "state:checkpoint-fail"); }
+  };
   // selfmod-guard F2 v2：登记本项目库到内存表+持久清单（供引擎自改 intake 跨库扫描；fail-open 见函数内）
   registerProject(dir, dbFile);
   // notification-brief-display T01：旧库 reports 表加列迁移（CREATE IF NOT EXISTS 对存量表
@@ -277,13 +292,16 @@ export function createStore(host: Host): Store {
       try { console.warn(`[wf] save failed: ${String((e as Error)?.message ?? e)}`); } catch (err) { swallow(err, "state:console-warn-fail"); }
       return { ok: false, reason: "write-error" };
     }
+    // r54 A1b：done 终态落库成功即收拢 WAL（该任务后续大概率无高频写，及时把审计副本收进主文件）
+    if (st.phase === "done") checkpointWal();
     return { ok: true, rev };
   };
 
-  // reset：清除任务行与报告槽（events 流水为审计保留，不删）
+  // reset：清除任务行与报告槽（events 流水为审计保留，不删）；r54 A1b：收拢 WAL（events 是 reset 后唯一剩余数据）
   const removeState = async (sessionID: string): Promise<void> => {
     try { qTaskDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:task-del-fail"); }
     try { qRepDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:report-del-fail"); }
+    checkpointWal();
   };
 
   // M10-b：wf/* 子会话经项目反查管辖状态（原项目索引键 IDX 的 SQL 等价：同 project 最近落盘）
@@ -312,11 +330,18 @@ export function createStore(host: Host): Store {
   };
 
   // M8-b 状态枚举 + A7 done GC + A6/M14 项目过滤（输出形状与 storage 版逐字段一致，rpc-bridge 直接消费）
+  // r54 A3：GC 节流——TUI 对空闲项目每 5s 调 list→scanStates，旧实现每次白跑 2 条 DELETE 写事务
+  //（写放大 + WAL 空帧 + 锁竞争窗口）；60s 窗口内跳过，判定纯函数 shouldRunGc 可直测。
+  let lastGcAt = 0;
   const scanStates = async (projectID?: string | null, directory?: string | null): Promise<StateListItem[]> => {
     const out: StateListItem[] = [];
     try {
-      try { qGc.run(new Date(Date.now() - STALE_MS).toISOString()); } catch (e) { swallow(e, "state:gc-fail"); }
-      try { qGhost.run(); } catch (e) { swallow(e, "state:ghost-clean-fail"); }
+      const now = Date.now();
+      if (shouldRunGc(now, lastGcAt)) {
+        lastGcAt = now;
+        try { qGc.run(new Date(now - STALE_MS).toISOString()); } catch (e) { swallow(e, "state:gc-fail"); }
+        try { qGhost.run(); } catch (e) { swallow(e, "state:ghost-clean-fail"); }
+      }
       for (const row of qAll.all()) {
         const v = parse(row);
         if (!v || typeof v !== "object") continue;
