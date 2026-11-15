@@ -14,7 +14,7 @@
 // bus（index 装配期创建，bridge/tool/commands 三方共享）。
 import * as fs from "node:fs";
 import {
-  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport, orphanArtifactLines,
+  VERSION, BLOCKING_PHASES, nextFor, promptText, diagnoseReport, pingReport, orphanArtifactLines, laneCapNote,
   SID_ALIAS_AUTO, resolveSidAlias, completeSidPrefix,
   FLOW_CMD_NAMES, levelFor, renderReport, type ReportLevel,
   type WfState,
@@ -404,11 +404,11 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
         }
         await emitUpdated(res.st);
         // P1-E 软准入：并发超 LIMS.lane_cap → 返回值告警（不阻断）；跨库活跃任务数一并提示（复用 scanActiveTasks，勿新建计数器）
+        // r55 修复2（test_010 实证）：cap 计数经 laneCapNote 排除波次残留行（lastUsedAt 超 60min 的
+        // active 行降为 ℹ️ 信息行——收尾只在 wf:done，多波构建中前波残留不可避免，旧口径每波误报超线）
         let capNote = "";
         try {
-          const active = Object.values(res.st.lanes ?? {}).filter((v) => v.status !== "done").length;
-          const others = scanActiveTasks(String(a.sessionID ?? "")).length;
-          if (active > LIMS.lane_cap) capNote = `\n⚠️ 活跃 builder lane ${active} > cap ${LIMS.lane_cap}——本地网关可能互相挤占；其余活跃任务 ${others} 个。超线并行=例外，须说明理由。`;
+          capNote = laneCapNote(res.st.lanes, LIMS.lane_cap, Date.now(), scanActiveTasks(String(a.sessionID ?? "")).length);
         } catch (e) { swallow(e, "commands:lane-cap-note-fail"); }
         return `✅ lanes(${VERSION}) = ${JSON.stringify(res.st.lanes)}${setNote}${capNote}`;
       },

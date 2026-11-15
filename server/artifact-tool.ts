@@ -9,7 +9,7 @@
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源
+import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, laneTableWritten, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // r55 修复1：lane 表判定纯函数
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -160,7 +160,9 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // R3 T3.1 子步 B：plan 修订清双通道+确认记账
             // v2：lane 分组表解析记账（write/patch/register 三模式 finalContent 均为全文；每次注册重算，
             // bytes-no-op 早退不进 mark=保留上次记账；daily M/L wf:build 关卡消费，并行优先硬卡）
-            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); v.laneTableWritten = /lane 分组表/.test(finalContent); }
+            // r55 修复1（test_010 实证）：判定提升至 domain/artifact.laneTableWritten 纯函数（大小写归一
+            // +容空格——planner 自用「Lane 分组表」大写 L，旧区分大小写匹配误拒 → build 连锁 ~9min）
+            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); v.laneTableWritten = laneTableWritten(finalContent); }
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}`, detail: `hash=${hash}` }); // r53 批次 1：hash 入审计 detail（wf.db 不进模型上下文）
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；

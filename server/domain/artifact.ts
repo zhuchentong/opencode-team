@@ -202,3 +202,12 @@ export function artifactSizeWarning(kind: string, bytes: number, size?: string |
   const tier = tierOf(size);
   return `⚠️ 产物超瘦身预算：${kind} ${(bytes / 1024).toFixed(1)}KB > ${budget}KB（${tier} 级，字节计）——请精简（表格化/只留要点/删冗长散文）；修订用 wf_write_artifact 的 patch 模式删减冗余章节，勿全量重写。`;
 }
+// r55 修复1（test_010 实证）：lane 分组表判定纯函数——planner 写节标题自用「Lane 分组表」大写 L，
+// 旧区分大小写子串匹配（/lane 分组表/）误拒 → build 拒绝连锁（清 review+确认重走全流程 ~9min）。
+// 大小写归一 + 容忍表内空格变体；字符归一非语义放宽（仍要求该节标题存在）。
+/** 判定 plan.md 是否含 lane 分组表节（kind=plan 注册记账，daily M/L wf:build 关卡消费）。
+ * @param content plan 全文
+ * @returns 含 lane 分组表节=true（大小写不敏感、容空白） */
+export function laneTableWritten(content: unknown): boolean {
+  return /lane\s*分组表/i.test(String(content ?? ""));
+}

@@ -105,6 +105,36 @@ export function pingReport(agents: AgentLike[] | { agents?: AgentLike[]; data?: 
 //   updatedAt 分级活跃/休眠（休眠=可能已废弃，同样先裁决再开工——唤醒后即干扰源）。
 /** 其它项目活动任务的投影（跨库扫描结果，selfMod 告警分级输入）。 */
 export interface ActiveOther { slug: string; phase: string | null; directory: string | null; updatedAt: string | null }
+
+// ── r55 修复2（test_010 实证）：lane cap 计数排除波次残留 ─────────────────────
+// 旧实现 active 数=全部 status!=="done" 行——多波构建中前波 lane 保持 active（收尾只在 wf:done，
+// r53 F1）→ 每波 wf:lane set 误报「活跃 5 > cap 4」，leader 花往返解释。新口径：
+// lastUsedAt 超 LANE_STALE_MS 的 active 行=疑似已完成波次残留，不进 cap 计数、降为 ℹ️ 信息行
+// 给处置出口（wf:lane done <Tnn>）；不自动收尾（休眠 lane 误杀风险，宁提示不代裁）。
+// 真活跃超线仍 ⚠️ 告警——软 cap 语义不放松。
+/** 波次残留判定窗：单波 builder 实测 5-10 分钟，1 小时窗足够宽不误伤真实并行。 */
+export const LANE_STALE_MS = 60 * 60 * 1000;
+/** lane 行最小事实（commands 透传，避免 domain 依赖命令层形状）。 */
+export interface LaneCapEntry { status?: string; lastUsedAt?: string; at?: string }
+/** lane cap 告警行（纯函数，bun test 直测；now 注入）。
+ * @param lanes lanes 记账（st.lanes）
+ * @param cap 生效软上限（LIMS.lane_cap 覆盖后值）
+ * @param nowMs 当前时钟（ms）
+ * @param others 跨库活跃任务数（提示用）
+ * @returns capNote 文本（无告警无残留=空串） */
+export function laneCapNote(lanes: Record<string, LaneCapEntry> | undefined, cap: number, nowMs: number, others: number): string {
+  const live: string[] = [], stale: string[] = [];
+  for (const [k, v] of Object.entries(lanes ?? {})) {
+    if (v?.status === "done") continue;
+    const t = Date.parse(v?.lastUsedAt ?? v?.at ?? "");
+    const age = nowMs - (Number.isFinite(t) ? t : 0);
+    (Number.isFinite(t) && age >= 0 && age < LANE_STALE_MS ? live : stale).push(k);
+  }
+  let note = "";
+  if (live.length > cap) note += `\n⚠️ 活跃 builder lane ${live.length} > cap ${cap}——本地网关可能互相挤占；其余活跃任务 ${others} 个。超线并行=例外，须说明理由。`;
+  if (stale.length) note += `\nℹ️ 另有 ${stale.length} 行疑似已完成波次残留（lastUsedAt 超 60 分钟）：${stale.join(",")}——用 wf:lane done <Tnn> 收尾。`;
+  return note;
+}
 // 目录比较（尾斜杠归一；任一侧空=false=判不出不算自改，fail-open 宁缺勿滥告警）
 const normDir = (d: unknown) => String(d ?? "").replace(/[\\/]+$/, "");
 /**

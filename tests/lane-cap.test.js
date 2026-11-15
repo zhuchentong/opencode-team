@@ -176,3 +176,35 @@ test("批次2 gate 拒绝路径：盘上无文件 → 原拒绝文案逐字不�
   assert.equal(st.artifacts?.["plan.md"], undefined, "缺失不造记账");
   assert.ok(!st.log.map((e) => e.note).join("|").includes("register-gate-reconcile"), "无对账审计");
 });
+
+// ── r55：cap 计数排除波次残留 + lane 表判定大小写归一（test_010 真机实证）──────────
+import { laneCapNote, laneTableWritten } from "../server/lib.ts";
+
+test("r55 laneCapNote：真活跃超线仍 ⚠️；残留行降 ℹ️ 不进计数；done 行忽略", () => {
+  const now = 1_800_000_000_000;
+  const mk = (m) => new Date(now - m * 60_000).toISOString();
+  const lanes = {
+    T01: { status: "active", lastUsedAt: mk(5) },   // 真活跃
+    T02: { status: "active", lastUsedAt: mk(59) },  // 真活跃（60min 边界内）
+    T03: { status: "active", lastUsedAt: mk(61) },  // 残留（超 60min）
+    T04: { status: "active" },                       // 无时间戳 → 归残留（保守不计数）
+    T05: { status: "done" },                         // done 忽略
+  };
+  const note = laneCapNote(lanes, 4, now, 0);
+  assert.ok(note.includes("ℹ️ 另有 2 行疑似已完成波次残留"), "T03+无戳行降信息行");
+  assert.ok(note.includes("wf:lane done"), "给处置出口");
+  assert.ok(!note.includes("⚠️"), "live=2 ≤ cap 4 不告警");
+  const warn = laneCapNote({ A: { status: "active", lastUsedAt: mk(1) }, B: { status: "active", lastUsedAt: mk(2) }, C: { status: "active", lastUsedAt: mk(3) }, D: { status: "active", lastUsedAt: mk(4) }, E: { status: "active", lastUsedAt: mk(5) } }, 4, now, 2);
+  assert.match(warn, /⚠️ 活跃 builder lane 5 > cap 4/, "真活跃超线仍告警（语义不放松）");
+  assert.equal(laneCapNote(undefined, 4, now, 0), "", "无 lanes=零输出");
+});
+
+test("r55 laneTableWritten：大小写归一 + 容空白；无关标题不误判", () => {
+  assert.equal(laneTableWritten("## Lane 分组表"), true, "test_010 实证形态（大写 L）");
+  assert.equal(laneTableWritten("## lane 分组表"), true, "模板口径小写");
+  assert.equal(laneTableWritten("## LANE 分组表"), true, "全大写归一");
+  assert.equal(laneTableWritten("## lane  分组表"), true, "双空格容错");
+  assert.equal(laneTableWritten("## 任务分组表"), false, "无关标题不误判");
+  assert.equal(laneTableWritten(""), false);
+  assert.equal(laneTableWritten(undefined), false);
+});

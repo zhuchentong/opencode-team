@@ -3,7 +3,8 @@
 // PHASES_FULL/PHASES_DAILY/PROFILES/profileOf/registerProfile（flow.ts）+ renderReport（report.ts）→ 70；
 // arch-r3-state-shape-migration T3.1 子步 A 有意 +1：normalizeState（types.ts，旧形状归一）；
 // T3.2 有意 +1：sidRefText（types.ts，SidRef 唯一渲染出口）；latency-v3.1 P1-E 有意 +1：LANE_CAP → 73；
-// r54 批次 B 有意 +1：orphanArtifactLines（diagnose.ts，孤儿产物对账纯函数）→ 77）
+// r54 批次 B 有意 +1：orphanArtifactLines（diagnose.ts，孤儿产物对账纯函数）→ 77；
+// r55 有意 +2：laneCapNote（policy.ts，cap 波次残留口径）+ laneTableWritten（artifact.ts，lane 表判定归一）→ 79；LANE_STALE_MS 常量单点同批 +1 → 80）
 // + barrel 形态判据（lib.ts ≤60 行）。m4-smoke 的 9 名抽查保留不动。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,14 +21,14 @@ const EXPECTED = [
   "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "clipBrief",
   "completeSidPrefix", "diagnoseReport", "evaluateTransition", "extractPaths", "flowFor",
   "fuzzyFind", "gateFor", "hasStrictVerdictLine", "isDaily", "isHintWorthy", "isLeader",
-  "isNearTruncation", "isRejectReport", "isSelfModDir", "leaderOnlyReject", "levelFor",
+  "LANE_STALE_MS", "isNearTruncation", "isRejectReport", "isSelfModDir", "laneCapNote", "laneTableWritten", "leaderOnlyReject", "levelFor",
   "makeAllowChecker", "makeInitialWfState", "nextFor", "normalizeFuzzy", "normalizeState", "orphanArtifactLines", "parseVerdict", "pingReport",
   "profileOf", "promptText", "registerProfile", "renderReport", "resolveSidAlias", "selfModWarnLine", "sidRefText",
   "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 77 名全集锁", () => {
-  assert.equal(EXPECTED.length, 77);
+test("T02 导出集零漂移：Object.keys(lib) === 80 名全集锁", () => {
+  assert.equal(EXPECTED.length, 80);
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 
