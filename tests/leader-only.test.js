@@ -23,7 +23,7 @@ const mkCtx = (opts = {}, agents = {}) => {
   const entries = [];
   // T04：装配收敛 helpers/host-stub（agents[sessionID] 形=sessions.get 覆盖；setChat 经 rawCtx 活写，setup 前生效）
   const host = mkHostStub({
-    options: { probe: false, ...opts },
+    options: { probe: false, requireIntakeConfirm: false, ...opts }, // intake-discuss-gate T05 opt-out（生产缺省 true 不动）
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
     sessions: { get: async ({ sessionID } = {}) => ({ projectID: "pi1", agent: agents[sessionID] ?? "wf/leader", location: { directory: DIR } }) },

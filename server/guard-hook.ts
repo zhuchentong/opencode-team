@@ -209,8 +209,20 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         const stC = await resolveState(input?.sessionID, input?.agent);
         if (!stC || !stC.slug) return; // 无活动任务不记账
         const phC = String(stC.phase ?? "");
-        if (phC !== "review" && phC !== "test_design") return; // 确认窗口（planning 澄清问不计）
         const qsC = Array.isArray(input?.input?.questions) ? input.input.questions : [];
+        // intake-discuss-gate T03：intake 讨论确认窗口——锚「需求无误」（勿锚「批准」/「终止任务」，防串方案确认）。
+        // 诚实边界（沿上方 M16-r44 口径）：用户在卡片中的实际选择只回给模型，插件观测不到——
+        // 本记账保证「出过卡」，不保证「答的是确认」；出卡记账≠用户已批准，审计留痕供 diagnose/status 取证。
+        if (phC === "intake") {
+          const confirmedI = qsC.some((q: any) => Array.isArray(q?.options) && q.options.some((o: any) => String(o?.label ?? o ?? "").trim().startsWith("需求无误")));
+          if (!confirmedI) return; // 无锚定标签的澄清问不记账
+          if (stC.verdicts?.intakeConfirmedAt) return; // 已记账不重复 save（防抖动，幂等）
+          stC.verdicts = { ...stC.verdicts, intakeConfirmedAt: new Date().toISOString() };
+          logAdd(stC, { at: stC.verdicts.intakeConfirmedAt, cmd: "intake:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
+          try { await save(stC); } catch (e) { swallow(e, "guard-hook:intake-confirm-save-fail"); }
+          return; // 评审 N4：记账后 return（与 review 分支结构对称）
+        }
+        if (phC !== "review" && phC !== "test_design") return; // 确认窗口（planning 澄清问不计）
         const approvedC = qsC.some((q: any) => Array.isArray(q?.options) && q.options.some((o: any) => {
           const label = String(o?.label ?? o ?? "").trim();
           return label.startsWith("批准") || /^approve$/i.test(label); // 锚定：排除「不批准」

@@ -9,7 +9,7 @@
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
 import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type Slug, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
-import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
+import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, INTAKE_CONFIRM_GATE_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
 
 // M16-r28（性能审计批次 1/2）：B1-1 shell 误伤翻案（=>/比较符/tee<）+ guard 项目 containment
 //   （项目外写放行，对齐 shell 分支语义）；B1-2~B1-5 guidance 提速（reconcile 去全量、并发委派、
@@ -73,8 +73,16 @@ export const NEXT_DAILY: Record<string, string> = fromPhases(PHASES_DAILY);
 //   语义不变：计划审核（流转合法性）之外，还须 tester 已产出 test-plan.md（M3 记账 testPlanWritten）
 // wf:done 验收：test-report.md 的「**结论**」必须为 PASS（wf_write_artifact 解析记账 testReportVerdict）
 // R2 T2.3：判定（isSatisfiedBy 纯谓词）与解释（explain 文案模板）分离；id=审计/诊断细分维度。
-/** full 模式命令级关卡表：双通道（test-design 入口）/方案确认（wf:build）/验收（wf:done）。 */
+/** full 模式命令级关卡表：需求确认（wf:plan）/双通道（test-design 入口）/方案确认（wf:build）/验收（wf:done）。 */
 export const GATES: Record<string, Gate> = {
+  // intake-discuss-gate T04：intake 讨论确认关卡（wf:plan 入口；daily 用 GATES_DAILY["wf:plan"] 同对象复用）。
+  // 谓词冻结：仅 intake 相位受闸；S 豁免；intakeConfirmOff===true（T02 固化开关）放行；
+  // 出卡记账 intakeConfirmedAt（T03 guard-hook 观测）放行。诚实边界：只保「出过卡」，不断言用户批准与否。
+  "wf:plan": {
+    id: "intake-confirm",
+    isSatisfiedBy: (st) => st.phase !== "intake" || tierOf(st.size) === "S" || st.intakeConfirmOff === true || !!st.verdicts?.intakeConfirmedAt,
+    explain: () => INTAKE_CONFIRM_GATE_MSG,
+  },
   "wf:test-design": {
     id: "dual-channel",
     isSatisfiedBy: (st) => !!st.verdicts?.testPlanWritten, // R3 T3.1 子步 B：verdicts 子对象读点
@@ -112,8 +120,10 @@ export const FLOWS_DAILY: Record<string, FlowDef> = {
 };
 // R2 T2.3：daily wf:build 关卡=确认（全 tier 必经）+ M/L 独立验证结论双要素；
 // S 只跳结论不跳确认；size 判定走 tierOf（T2.1 TierCtx 纪律：`st.size ===` 字面清零）。
-/** daily 模式关卡表：wf:build 三要素判定（确认→lane 表→review 结论，S 级只跳后两者）。 */
+/** daily 模式关卡表：wf:plan 需求确认（同对象复用）+ wf:build 三要素判定（确认→lane 表→review 结论，S 级只跳后两者）。 */
 export const GATES_DAILY: Record<string, Gate> = {
+  // intake-discuss-gate T04：同 wf:done 模式——同对象复用（判定/文案单源，双表行为恒一致）
+  "wf:plan": GATES["wf:plan"],
   "wf:build": {
     id: "daily-build",
     // v2：判定顺序=用户确认 → lane 分组表（M/L，并行优先硬卡——串行须以 lane 表书面举证）→ review 结论（M/L）

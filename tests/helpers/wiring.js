@@ -6,6 +6,7 @@ import { registerCommands } from "../../server/commands.ts";
 import { mkHostStub } from "./host-stub.js";
 import { mkStoreStub } from "./store-stub.js";
 import { mkCommandDeps } from "./command-deps.js";
+import { VD } from "./state-fixture.js"; // test-vd-single-source：改名映射单源（原手写副本已删，防双份漂移）
 
 export async function mkWiringHarness(over = {}) {
   const sid = over.sessionID ?? "ses_w";
@@ -13,7 +14,9 @@ export async function mkWiringHarness(over = {}) {
   const states = over.store ?? new Map();
   const store = mkStoreStub(states, { resolveProjectDir: async () => dir, ...over.storeOver });
   const host = mkHostStub({
-    options: { leaderOnly: false, ...over.options },
+    // intake-discuss-gate T05：harness 缺省 opt-out intake 确认关卡（本 harness 服务与关卡无关的存量流转测试；
+    // 关卡专项测试经 over.options 显式覆写。host-stub/生产缺省 true 不动——stub 缺省漂移=本地绿真机哑火）
+    options: { leaderOnly: false, requireIntakeConfirm: false, ...over.options },
     location: { directory: dir },
     sessions: {
       get: async () => ({ projectID: "p1", agent: "workflow", location: { directory: dir } }),
@@ -44,7 +47,6 @@ export async function mkWiringHarness(over = {}) {
     // R3 T3.1 子步 B：verdicts 家族平铺键翻译进子对象（与真实写点形状同源——mock 漂移=真机哑火）
     patch: (obj, s = sid) => {
       const st = states.get(s);
-      const VD = { planReviewVerdict: "planReview", testReportVerdict: "testReport", testPlanWritten: "testPlanWritten", planConfirmedAt: "confirmedAt", laneTableWritten: "laneTableWritten", gateStatus: "gateStatus" };
       const rest = {};
       for (const [k, v] of Object.entries(obj)) {
         if (k in VD) { st.verdicts = st.verdicts ?? {}; st.verdicts[VD[k]] = v; } else rest[k] = v;

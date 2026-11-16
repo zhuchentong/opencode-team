@@ -30,3 +30,11 @@ export const LANE_TABLE_GATE_MSG =
   "❌ lane 分组表关卡未过：M/L 级 plan.md 须含「lane 分组表」节（并行优先裁决：≥2 条互斥 lane 即并行；" +
   "判单 lane 串行须附交叠证据）。请 wf_command(name=\"wf:plan\") 修订补表后再推进 /wf:build（若 plan.md 已原生补写落盘，" +
   "wf_write_artifact(kind=plan)（不带 content=注册）补记账即可）。";
+
+// intake-discuss-gate T04：intake 讨论确认关卡拒绝文案（full/daily 共用；wf:plan 入口）。
+// 诚实边界（沿 M16-r44 口径）：出卡记账≠用户已批准——宿主观测不到卡片中的实际选择（只回模型），
+// 文案只保「出过卡」，不得断言「用户已批准/未批准」。
+export const INTAKE_CONFIRM_GATE_MSG =
+  "❌ 需求确认关卡未过：尚未观测到需求确认交互。请先落盘 baseline.md（需求基线），再用宿主 question 工具向用户呈现需求摘要" +
+  "（选项标签固定：需求无误，开始规划/补充修正/终止任务），之后再推进 /wf:plan（wf_command 或用户手敲；" +
+  "确认以 question 出卡为准——插件只保证「出过卡」，观测不到卡片中的实际选择，不得据此断言批准结果）。";

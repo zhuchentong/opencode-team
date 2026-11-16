@@ -20,7 +20,7 @@ const mkCtx = () => {
   let hookFn = null;
   // T04：装配收敛 helpers/host-stub（store=旧 storage 迁移源形状保持；put/list 走 stub 缺省 inert）
   const host = mkHostStub({
-    options: { probe: false },
+    options: { probe: false, requireIntakeConfirm: false }, // intake-discuss-gate T05 opt-out（本套件与 intake 关卡无关；生产缺省 true 不动）
     location: { directory: DIR },
     storage: {
       get: async (k) => store.get(k) ?? null,

@@ -46,6 +46,8 @@ test("T3.1 WfState 顶层字段名集快照锁（新字段须显式登记）", (
     // 元数据/查询投影列（扁平保留：热路径/高频读）
     "sessionID", "rev", "projectID", "directory", "createdAt", "slug", "phase",
     "size", "mode", "rounds", "updatedAt", "prev", "lanes", "artifacts", "log", "logSeq", "entryErr",
+    // intake-discuss-gate T01：intake 确认开关固化（顶层扁平，无 legacy 别名、不经 normalize 搬迁）
+    "intakeConfirmOff",
     // R3 T3.1 分组子对象（A timing / B verdicts / C reuse / D delivery / 索引签名收尾 _ext）
     "timing", "verdicts", "reuse", "delivery", "_ext",
   ];
@@ -55,7 +57,7 @@ test("T3.1 WfState 顶层字段名集快照锁（新字段须显式登记）", (
 test("T3.1 WfState 各子对象字段名集快照锁", () => {
   const body = ifaceBody("WfState");
   assert.deepEqual(subProps(body, "timing").toSorted(), ["finishedAt", "phaseDurations", "phaseEnteredAt", "startedAt"].toSorted());
-  assert.deepEqual(subProps(body, "verdicts").toSorted(), ["confirmedAt", "gateStatus", "laneTableWritten", "planReview", "testPlanWritten", "testReport"].toSorted());
+  assert.deepEqual(subProps(body, "verdicts").toSorted(), ["confirmedAt", "gateStatus", "intakeConfirmedAt", "laneTableWritten", "planReview", "testPlanWritten", "testReport"].toSorted());
   assert.deepEqual(subProps(body, "reuse").toSorted(), ["roleSessions", "tierBase"].toSorted());
   assert.deepEqual(subProps(body, "delivery").toSorted(), ["doneGit", "selfMod"].toSorted());
 });

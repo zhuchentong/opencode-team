@@ -26,6 +26,7 @@ test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并
   const steps = ["wf:intake", "wf:plan", "wf:review", "wf:test-design",
     "wf:build", "wf:reconcile", "wf:review-build", "wf:test", "wf:done"];
   for (const cmd of steps) {
+    if (cmd === "wf:plan") (st.verdicts ??= {}).intakeConfirmedAt = "2026-01-01T00:00:00Z"; // intake-discuss-gate T04：需求确认关卡前置条件
     if (cmd === "wf:test-design") (st.verdicts ??= {}).testPlanWritten = true; // gate 前置条件（R3 T3.1 子步 B）
     if (cmd === "wf:build") (st.verdicts ??= {}).confirmedAt = "2026-01-01T00:00:00Z"; // M16-r44：方案确认关卡前置条件
     if (cmd === "wf:done") (st.verdicts ??= {}).testReport = "PASS"; // gate 前置条件
@@ -303,6 +304,7 @@ test("A6 计时：存量形状（无 4 字段）流转一次不崩——phaseEnt
   const h = await mkTimingHarness();
   h.seed({
     sessionID: TIMING_SID, slug: "legacy", phase: "intake", mode: "daily",
+    intakeConfirmOff: true, // intake-discuss-gate T05 opt-out：计时用例与 intake 关卡无关（seed 绕过 intake 固化，须显式置开关）
     rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, lanes: {}, artifacts: {}, log: [],
   });
   await h.run("wf:plan");

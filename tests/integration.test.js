@@ -27,7 +27,7 @@ const mkCtx = (opts = {}) => {
   // T04：装配收敛 helpers/host-stub（options.probe=false 关探针避免写盘噪音；捕获数组语义不变；
   // setChat=对 rawCtx 活写——adaptHost 闭包持同一 ctx 引用，setup 前写入生效）
   const host = mkHostStub({
-    options: { probe: false, ...opts }, // 关探针避免写盘噪音
+    options: { probe: false, requireIntakeConfirm: false, ...opts }, // 关探针避免写盘噪音；intake-discuss-gate T05 opt-out（生产缺省 true 不动）
     location: { directory: DIR }, // P1：状态库路径按 location 解析
     storage: {
       get: async (k) => store.get(k) ?? null,

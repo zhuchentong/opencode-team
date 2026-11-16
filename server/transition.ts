@@ -184,6 +184,10 @@ export function createTransition(deps: TransitionDeps) {
               selfModNote = selfModWarnLine(scanActiveTasks(sessionID));
             } else delete st.delivery?.selfMod;
           } catch (e) { swallow(e, "transition:selfmod-detect-fail"); }
+          // intake-discuss-gate T02：intake 确认开关固化——恒写布尔、re-intake 重算、host.options 活读。
+          // 评审 N1：置 selfmod try/catch 之外（try 内异常被 swallow 会漏固化）；r.ok 后唯一写点，
+          // 其它命令不触碰该字段（缺省 undefined=关卡生效，见 types.ts intakeConfirmOff 注释）。
+          st.intakeConfirmOff = host.options.requireIntakeConfirm === false;
         }
         await inject(st);
         return null;

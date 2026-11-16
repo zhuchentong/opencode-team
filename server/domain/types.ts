@@ -88,6 +88,10 @@ export interface WfState {
   // M16-r34：流程模式（daily=日常 5 步习惯流，新 intake 默认；full=完整 9 阶段，[FULL] 显式）。
   //   存量无 mode 字段 → full（兼容在途任务）。daily 内 size 决定委派与否（S=leader 串行零 sub-agent）。
   mode?: string;
+  // intake-discuss-gate T01：intake 确认开关固化——wf:intake 流转时 transition 活读
+  //   host.options.requireIntakeConfirm 固化为布尔（re-intake 重算）。intake 固化、无 legacy
+  //   平铺别名、不经 normalizeState 搬迁（新字段无存量平铺形态；缺省 undefined=关卡生效）。
+  intakeConfirmOff?: boolean;
   // M16-r34：日常模式 M/L 独立验证结论（plan-review 首行 **结论** 解析记账），wf:build 关卡校验
   //   R3 T3.1 子步 B：verdicts 家族 5 字段分组进子对象（读兼容：normalizeState 在 load 出口搬平铺字段）
   //   命名注意：子对象内字段去掉 Verdict/plan 前缀（planReview/testReport/confirmedAt）
@@ -98,6 +102,9 @@ export interface WfState {
     testReport?: string;        // ← testReportVerdict
     testPlanWritten?: boolean;  // 同名迁入
     confirmedAt?: string;       // ← planConfirmedAt
+    // intake-discuss-gate T03：intake 讨论确认出卡记账≠用户已批准——宿主观测不到卡片选择
+    //（诚实边界同 confirmedAt：保证「问过了」，不保证「答的是确认」）。
+    intakeConfirmedAt?: string;
     laneTableWritten?: boolean; // v2：plan.md 含「lane 分组表」（kind=plan 注册时解析记账；daily M/L 级 wf:build 关卡校验——并行优先，串行须以 lane 表书面举证）
     // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
     // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）；

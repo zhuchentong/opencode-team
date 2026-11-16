@@ -20,7 +20,7 @@ const mkCtx = () => {
   let hookFn = null;
   // T04：装配收敛 helpers/host-stub（tools/cmds=stub 注册捕获数组；question 取证=tools.hook 覆盖）
   const host = mkHostStub({
-    options: { probe: false },
+    options: { probe: false, requireIntakeConfirm: false }, // intake-discuss-gate T05 opt-out（本套件与 intake 关卡无关；生产缺省 true 不动）
     location: { directory: DIR },
     storage: { get: async () => null, set: async () => {}, remove: async () => {}, scan: async () => ({ entries: [] }) },
     sessions: { get: async () => ({ projectID: "pi1", agent: "wf/leader", location: { directory: DIR } }) },

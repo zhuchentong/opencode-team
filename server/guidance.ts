@@ -14,7 +14,7 @@ import { DAILY_STAGE_ORDER } from "../shared/phases.ts"; // r53 批次 3：默�
 // post-compaction 重注入目标由此免费获得）。done 为终态，只留一行提示，不长期占用系统提示。
 /** done 终态 entry 值：一行完成提示（不长期占用系统提示；git 交付确认指令仅在记账存在时渲染）。 */
 export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:intake <slug>；清除状态：/wf:reset。";
-// done-git-delivery-confirm T01：done 交付确认指令——仅 st.doneGit.isGit 时渲染（无记账=输出字节级不变，
+// done-git-delivery-confirm T01：done 交付确认指令——仅 st.delivery.doneGit.isGit 时渲染（无记账=输出字节级不变，
 // 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
 // F4（用户报告竞态实证：并行 learner 在提交后继续写 .learnings/ → 提交后工作区复脏）：git 项目流程
 // 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前；
@@ -113,6 +113,27 @@ function leanLine(st: WfState): string | null {
   return tierOf(st.size) === "S" ? "S 级从简：产物按 S 预算，审核聚焦关键风险，勿过度设计（比例化投入，不跳阶段）。" : null;
 }
 
+// ── intake-discuss-gate T06：需求澄清两段式讨论 + 需求确认卡 ─────────────────
+// 方法论改编自 obra/superpowers brainstorming（MIT, Copyright 2025 Jesse Vincent）：
+// 先侦察再问/开放题先行（纯文本直问，选项菜单会引导用户丢真实意图）/playback/假设归属。
+// 方法论行仅 M/L（leanLine 同款 tierOf 门控，S 零注入）；确认卡仅 M/L 且 !st.intakeConfirmOff
+// （options.requireIntakeConfirm=false 经 intake 固化，见 transition.ts；re-intake 重算）。
+// 诚实边界：服务端只保「出过卡」（guard-hook 观测锚「需求无误」记 intakeConfirmedAt），
+// 不保「答的是批准」——文案不得过度承诺，leader 须读用户实际选择。
+function clarifyMethodLine(st: WfState): string | null {
+  if (tierOf(st.size) === "S") return null;
+  return `需求澄清方法论（两段式讨论）：意图未明→先侦察（读用户点名的代码/文档，不问项目已能回答的），再对话直问开放题（纯文本，不用 question 工具——选项菜单会引导用户、丢真实意图），让用户描述 why/成功画面/怎样算失败；有界歧义→question 批量收敛（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返）；每轮 playback 复述理解，区分用户原话 vs leader 假设（假设写入 baseline「已声明假设」段）；需求已清晰→直接落 baseline 出卡，勿强行多轮。`;
+}
+function intakeConfirmLine(st: WfState): string | null {
+  if (tierOf(st.size) === "S" || st.intakeConfirmOff) return null;
+  return `需求确认卡（wf:plan 前必经）：先落 baseline.md 再用 question 出卡，选项标签固定=「需求无误，开始规划」「补充修正」「终止任务」；补充修正→先更新 baseline.md 再重新出卡；wf:plan 关卡校验出卡记账。诚实边界：服务端只保「出过卡」不保「答的是批准」——须读用户实际选择，勿把出卡当批准。`;
+}
+// intake-discuss-gate T06：baseline 四段结构（原话要点/why·成功标准/non-goals·anti-goals/已声明假设），
+// 预算 ≤1KB→≤2KB；gitignore 步骤逐字保留（selfmod-guard D 锚）。daily/full 两 case 共用本行。
+function baselineStep(s: string, tail: string): string {
+  return `4) 需求基线：落 .workflow/${s}/baseline.md（≤2KB，leader 自写；四段结构：用户原话要点/why·成功标准/non-goals·anti-goals/已声明假设；后续"是否满足需求"争议回此基准核对）${tail}`;
+}
+
 // ── M16-r40：会话复用可靠化——重委派点渲染续用指引（T02：零回显）──────────
 // 根因：旧渲染把登记 ID 新鲜递进上下文诱导转录——「转录→截断→守卫回显→再转录」死循环燃料。
 //   现仅以登记做存在性判断：有登记即指路别名/省略新建（sid 不进渲染文本）；无登记→不渲染（首次委派自然新建）。
@@ -162,20 +183,27 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
   const tier = tierOf(st.size); // R2 T2.1 TierCtx：S/M/L 判定归一
   const S = tier === "S";
   switch (phase) {
-    case "intake": return [
-      `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
-      `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
-      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
-      S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
-      `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
-      `完成 → wf_command(name="wf:plan")`,
-    ].join("\n");
+    case "intake": {
+      // intake-discuss-gate T06：两段式讨论（方法论行仅 M/L）+ 需求确认卡（M/L 且 !intakeConfirmOff）
+      const method = clarifyMethodLine(st);
+      const confirmCard = intakeConfirmLine(st);
+      return [
+        `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
+        `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
+        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
+        ...(method ? [method] : []),
+        S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
+        ...(confirmCard ? [confirmCard] : []),
+        `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色、勿产 plan/review 产物。`,
+        `完成 → wf_command(name="wf:plan")`,
+      ].join("\n");
+    }
     case "planning": return [
       `【wf 工作流｜planning·日常模式】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
         : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。${artifactPathLine(st, "plan")}`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带需求摘录+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`,
+      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 baseline.md 全文+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`,
         `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
@@ -229,6 +257,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         : `委派 wf/tester(mode=verify) 独立核对 → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
       ...(S ? [] : [WRITE_CONTRACT]),
       budgetLine(st, ["test-report"]),
+      // intake-discuss-gate T06：意图核对——baseline 是"是否满足需求"的基准，技术绿≠意图达成
+      `对照 baseline.md 的 why/成功标准与 anti-goals 核对意图达成——技术能跑但违背意图=FAIL。`,
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")（回 building 返工，test_fix≤${L.test_fix}）`,
     ].join("\n");
     case "done": {
@@ -257,19 +287,26 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
   const s = st.slug || "(未定)";
   const r: Record<string, number> = st.rounds ?? {};
   switch (phase) {
-    case "intake": return [
-      `【wf 工作流｜intake】slug=${s}`,
-      `1) 与用户澄清需求（批量优先：可合并的歧义用一次 question 多问项问完，防多轮往返；完全没听懂→一句话重述确认）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；4) 需求基线：用户原话要点落 .workflow/${s}/baseline.md（≤1KB，leader 自写，后续"是否满足需求"争议回此基准核对）。`,
-      `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
-      `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
-      `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
-    ].join("\n");
+    case "intake": {
+      // intake-discuss-gate T06：两段式讨论（方法论行仅 M/L）+ 需求确认卡（M/L 且 !intakeConfirmOff）
+      const method = clarifyMethodLine(st);
+      const confirmCard = intakeConfirmLine(st);
+      return [
+        `【wf 工作流｜intake】slug=${s}`,
+        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
+        ...(method ? [method] : []),
+        `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
+        ...(confirmCard ? [confirmCard] : []),
+        `⚠️ 阶段纪律：本阶段只做需求澄清，勿委派任何 wf 角色（planner/reviewer/tester 均属后续阶段）；更勿在此产出 plan/review 产物后再 !intake 重置（会清空记账、账实不符）。`,
+        `完成 → 调用 wf_command 工具推进（name="wf:plan"；以下同此格式，用户手敲 /wf:plan 亦可）`,
+      ].join("\n");
+    }
     case "planning": return [
       `【wf 工作流｜planning】slug=${s}`,
       `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
       `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。${artifactPathLine(st, "plan")}`,
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
-      `委派契约：prompt 只带需求摘录+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
+      `委派契约：prompt 只带 baseline.md 全文+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"——那是完整模式口径），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`,
       WRITE_CONTRACT,
       budgetLine(st, ["plan"]),
@@ -337,6 +374,8 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `委派 wf/tester(mode=verify) → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
       WRITE_CONTRACT,
       budgetLine(st, ["test-report"]),
+      // intake-discuss-gate T06：意图核对——baseline 是"是否满足需求"的基准，技术绿≠意图达成
+      `对照 baseline.md 的 why/成功标准与 anti-goals 核对意图达成——技术能跑但违背意图=FAIL。`,
       `PASS → wf_command(name="wf:done")；FAIL → wf_command(name="wf:fix")`,
     ].join("\n");
     case "fixing": return [
