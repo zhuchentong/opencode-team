@@ -193,6 +193,12 @@ test("A3 daily building 派发策略绑 size：M/L 并行优先（lane 表驱动
   assert.match(m2, /一次委派串行到底/, "M 收益线未达/单 lane 时仍串行到底");
   assert.match(m2, /串行判定=plan 须举证/, "M 串行须举证非默认");
   assert.ok(!m2.match(/每批 ≤4/), "M 不分批（分批仍 L 专属）");
+  // opt-agentic（serial-dispatch-fix）：串行=单 builder 一次委派做完全部 T 点，逐 T 新建=错误形态
+  assert.match(l, /单树串行：单 wf\/builder 一次委派完成全部 T<nn>/, "L 串行形态唯一化（一次委派到底）");
+  assert.match(l, /逐 T 新建委派=错误形态/, "L 明文禁止逐 T 新建委派（冷启动纯损耗）");
+  assert.match(l, /单 lane 串行无波次闸、一次委派到底=标准形态/, "L 单 lane 单委派=标准形态非例外");
+  assert.match(l, /lane≥2 却单 builder 一派到底=例外/, "「一派到底=例外」收窄到多 lane 并行场景");
+  assert.match(m2, /勿逐 T 新建委派/, "M 同步明文禁止逐 T 新建委派");
 });
 
 test("D daily intake 指引：question 批量优先 + 需求基线 baseline.md + gitignore 口径（.learnings 默认 ignore，M16-r52 F4 翻转）", () => {
