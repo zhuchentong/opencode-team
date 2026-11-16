@@ -150,7 +150,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 ## 观测与诊断
 
-- 探针默认关闭；`WF_DEBUG=1`（或 server `options.probe:true`）时写 `.workflow/_debug/`（probeOnce 形状探针 / cmd-report.jsonl 广播记录 / tui-refresh.log TUI 生命周期）
+- 探针默认关闭；`WF_DEBUG=1`（或 server `options.probe:true`）时写 `.workflow/_debug/`（probeOnce 形状探针 / cmd-report.jsonl 广播记录 / tier-timing.jsonl tierCheck 分步耗时采样——「先观测再优化」，立项 IO 缓存的证据源 / tui-refresh.log TUI 生命周期）
 - `/wf:diagnose`：审计轨迹拒绝分类计数、越权阻断取证、轮次余量告警、产物「state 记账 vs 磁盘」对账、注入/RPC 异常、下一步建议
 - `/wf:debug`：全量状态快照落盘 `_debug/state.json` + 活跃任务枚举
 - 状态 GC：done 且 14 天未更新的状态在任务枚举（RPC list）时自动清理；`wf.db` 的 `events` 表 append-only 保留审计

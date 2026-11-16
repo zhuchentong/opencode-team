@@ -114,3 +114,40 @@ test("T01 inherit 端到端：managed planner.md 被删 + note 含 tier-inherit-
   const notes = saved.flatMap((st) => st.log.map((l) => l.note)).join("|");
   assert.match(notes, /tier-inherit-clean:wf\/planner/, "清理审计行进 note");
 });
+
+// ── opt-agentic 观测：tierCheck 耗时探针（WF_DEBUG=1 活读；「先观测再优化」项③数据源）──
+test("opt-agentic：WF_DEBUG=1 → tier-timing.jsonl 落 JSONL（分步耗时+零回显）；缺省=零落盘", async () => {
+  const probeDir = "/tmp/opencode/wf-mw-probe";
+  fs.rmSync(probeDir, { recursive: true, force: true });
+  const { deps } = mkDeps({
+    agent: "workflow",
+    options: { tierAgents: true },
+    st: { slug: "t", phase: "planning", rounds: {} },
+    model: { providerID: "prov", id: "m1" },
+  });
+  deps.resolveProjectDir = async () => probeDir; // 独立目录防跨用例污染
+  const guard = createCommandGuard(deps);
+  const fn = guard.guard("wf:plan")(async () => "ok");
+  const p = `${probeDir}/.workflow/_debug/tier-timing.jsonl`;
+  // 缺省关：探针零落盘（活读判定，模块加载后仍可开闭）
+  await fn({ sessionID: "ses_probe" });
+  assert.ok(!fs.existsSync(p), "WF_DEBUG 未设 → 探针零落盘");
+  // 开：JSONL 逐行 {at,cmd,slug,msGet,msList,msSync,msTotal,wrote}，零回显（无 sid）
+  const prev = process.env.WF_DEBUG;
+  process.env.WF_DEBUG = "1";
+  try {
+    await fn({ sessionID: "ses_probe" });
+  } finally {
+    if (prev === undefined) delete process.env.WF_DEBUG; else process.env.WF_DEBUG = prev;
+  }
+  const line = fs.readFileSync(p, "utf8").trim().split("\n").pop();
+  const row = JSON.parse(line);
+  assert.equal(row.cmd, "wf:plan");
+  assert.equal(row.slug, "t");
+  for (const k of ["msGet", "msList", "msSync", "msTotal"]) {
+    assert.equal(typeof row[k], "number", `${k} 为数值`);
+    assert.ok(Number.isFinite(row[k]) && row[k] >= 0, `${k} 非负有限`);
+  }
+  assert.equal(row.wrote, 0, "variants 空 → 零派生写入");
+  assert.ok(!line.includes("ses_"), "探针零回显（不记 sid）");
+});

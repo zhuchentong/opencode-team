@@ -6,6 +6,7 @@
 // dispatch-tier-inject T01：白名单过滤/variants 提取改消费 model-tier.ts 同源函数
 // （effectiveTiers/extractVariantIds）；fsIo 补 unlink（inherit 清理 managed 文件）。
 import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile, unlink as fsUnlink } from "node:fs/promises";
+import * as fsSync from "node:fs"; // opt-agentic 观测：tierCheck 耗时探针（tier-timing.jsonl）落盘
 import { leaderOnlyReject, type WfState } from "./lib.ts";
 import { logAdd, type Store } from "./state.ts";
 import { type Observer, swallow } from "./observe.ts";
@@ -58,6 +59,20 @@ export interface GuardDeps {
 export function createCommandGuard(deps: GuardDeps) {
   const { host, load, save, probeOnce, resolveProjectDir } = deps;
 
+  // ── opt-agentic 观测：tierCheck 耗时探针（「先加观测再优化」纪律）────────
+  // 背景项③评审结论：tierCheck 每次流转命令的 IO（sessions.get + models.list + 7×readFile）
+  // 疑似关键路径开销但无实测证据——本探针只采样不优化，数据落 <项目>/.workflow/_debug/tier-timing.jsonl
+  // （WF_DEBUG=1 活读，默认关；与 commands.reportProbe 同通道）。触发条件=实测 tierCheck 占命令
+  // 延迟 >10% 才立项 IO 缓存。零回显：不记 sid（cmd/slug 均为审计既有可见面）。
+  const tierProbeOn = (): boolean => process.env.WF_DEBUG === "1"; // 活读（selfModRoot 同模式；模块级常量在测试中无法开闭）
+  const tierProbe = (dir: string, row: Record<string, unknown>): void => {
+    if (!tierProbeOn()) return;
+    try {
+      fsSync.mkdirSync(`${dir}/.workflow/_debug`, { recursive: true });
+      fsSync.appendFileSync(`${dir}/.workflow/_debug/tier-timing.jsonl`, JSON.stringify({ at: new Date().toISOString(), ...row }) + "\n");
+    } catch (e) { swallow(e, "middleware:tier-timing-fail"); } // 探针失败绝不影响 tierCheck 返回（fail-open）
+  };
+
   // ── M16-r43：动态档位跟随 ──────────────────────────────────────────────
   // 流转/intake 成功后：读会话所选模型（Session.Info.model = Model.Ref）+ 该模型可用 variants
   // （host.models.list，形状未实证 → fail-soft 空集），按 TIER_MAP（options.tiers 覆盖）派生各角色
@@ -67,21 +82,29 @@ export function createCommandGuard(deps: GuardDeps) {
   const tierCheck = async (cmd: string, a: any): Promise<string> => {
     if (host.options.tierAgents === false) return "";
     if (!TIER_TRIGGERS.has(cmd)) return "";
+    const t0 = Date.now(); // opt-agentic：分步耗时（msGet/msList/msSync），仅真实路径采样
     const sid = String(a?.sessionID ?? "");
     const st = await load(sid);
     if (!st || !st.slug) return ""; // 无活动任务（含 reset 后）→ 整段跳过
     const sess = await host.sessions.get({ sessionID: sid }).catch(() => null);
+    const msGet = Date.now() - t0;
     const ref = sess?.model as ModelRef | undefined;
     if (!ref?.id || !ref?.providerID) return "";
     // dispatch-tier-inject T01：variants 提取/白名单过滤改消费同源函数（计算体迁 model-tier.ts，
     // list IO 留本调用方；空集审计 model-tier:variants-empty 由同源函数记账）。
+    const t1 = Date.now();
     let variantIds: string[] = [];
     try { variantIds = extractVariantIds(await host.models.list(), ref); } catch (e) { swallow(e, "middleware:model-list-variants-fail"); }
+    const msList = Date.now() - t1;
     // P1-B（arch-maintenance-p1）：options.tiers 白名单过滤——未知角色若放行会被 syncTierAgents
     // 真实落盘成派生 agent 文件（幽灵 subagent 注册，V5 实证）；非法档名本就 skip:no-variant（安全）。
     const { tiers, unknown } = effectiveTiers(host.options);
     const dir = await resolveProjectDir(st, sid);
+    const t2 = Date.now();
     const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
+    const msSync = Date.now() - t2;
+    tierProbe(dir, { cmd, slug: st.slug ?? "", msGet, msList, msSync, msTotal: Date.now() - t0,
+      wrote: rows.filter((r) => r.startsWith("tier-write")).length });
     const at = new Date().toISOString();
     const notes: string[] = [];
     // 切模型检测：基座变化 → 审计 + 清空 roleSessions（仅首次登记 tier-init，不清会话）
