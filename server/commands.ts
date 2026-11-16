@@ -30,7 +30,7 @@ import { createTransition } from "./transition.ts";
 import { createCommandGuard } from "./middleware.ts";
 import type { CommandBus } from "./command-bus.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
-import { TIER_ROLES, readTierAgents } from "./model-tier.ts"; // M16-r43：档位视图（ping 只读面）；tierCheck 写面随迁 middleware.ts
+import { TIER_ROLES, readTierAgents, extractVariantIds, resolveTierRef, effectiveTiers } from "./model-tier.ts"; // M16-r43：档位视图（ping 只读面）；tierCheck 写面随迁 middleware.ts // dispatch-tier-inject T04：活算消费同源函数
 import { readFile as fsReadFile } from "node:fs/promises"; // R2：fsIo（mkdir/writeFile）随 tierCheck 迁出
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
@@ -273,21 +273,58 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           await probeOnce(a?.sessionID, "agent-probe", { shape: Array.isArray(res) ? "array" : Object.keys(res ?? {}) });
           let tierLine = "";
           // M16-r43：档位跟随生效视图——读项目级派生文件（/api/agent 序列化不含 model，读文件为准）
+          // dispatch-tier-inject T04：有 tierBase → 活算视图（基座=st.reuse.tierBase，非 caller 会话模型——
+          // ping 只读任意会话可调）；文件实况降附注；常态化核对 roleSessions 子会话 model（verified 记账）。
           try {
             const sid = String(a?.sessionID ?? "");
             const st = await load(sid);
             const dir = await resolveProjectDir(st, sid);
             const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
             if (host.options.tierAgents !== false) {
-              // P0-B：每角色生效 variant 回显（含 inherit/未派生角色=`(基座默认)`——防「没列出=没生效」误读；
-              // 判定读派生文件实况（readTierAgents）=reconstructing reality，与 options.tiers 配置解耦）。
               // P1-B：未知角色标注 (配置无效)——middleware 白名单已拒落盘，此处只读视图可见化（同口径过滤）。
-              const userTiers = host.options.tiers ?? {};
-              const unknown = Object.keys(userTiers).filter((r) => !TIER_ROLES.includes(r));
-              const got = new Map(rows.map((r) => [r.split("=")[0], r.split("=")[1]] as const));
-              const cells = TIER_ROLES.map((role) => `${role}=${got.get(role) ?? "(基座默认)"}`)
-                .concat(unknown.map((role) => `${role}=(配置无效)`));
-              tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${cells.join(" ")}`;
+              const { tiers, unknown } = effectiveTiers(host.options);
+              const base = st?.reuse?.tierBase;
+              if (base?.id && base?.providerID) {
+                // 活算：extractVariantIds 空集审计由 T01 同源函数记账（不重复）；list IO 失败 fail-soft 空集。
+                let variantIds: string[] = [];
+                try { variantIds = extractVariantIds(await host.models.list(), base); } catch (e) { swallow(e, "commands:ping-model-list-fail"); }
+                const cells = TIER_ROLES.map((role) => {
+                  const r = resolveTierRef(base, variantIds, tiers[role]);
+                  return `${role}=${r ? `${r.providerID}/${r.id}#${r.variant}` : "(基座默认)"}·派发时注入`;
+                }).concat(unknown.map((role) => `${role}=(配置无效)`));
+                tierLine = `\n档位跟随（tierAgents，活算）：${cells.join(" ")}`;
+                if (!variantIds.length) tierLine += `\n⚠️ variants 不可得，注入退化文件通路`;
+                if (rows.length) tierLine += `\n派生文件实况（附注）：${rows.join(" ")}`;
+                // 常态化核对：各登记角色经 sessions.get 回读子会话 model，与 expected 三元组比对 →
+                // entry 增 verified:boolean+model 快照；inherit/expected null/不可读 → 不置 verified。
+                // 诚实边界：verified=false 无法区分「宿主忽略 input.model」与「注入前旧会话续接」。
+                let vN = 0; let vM = 0;
+                const rs: any = { ...(st?.reuse?.roleSessions ?? {}) };
+                for (const [role, entry] of Object.entries(rs)) {
+                  const e: any = entry;
+                  if (!e?.sessionID) continue;
+                  const expected = resolveTierRef(base, variantIds, tiers[role]);
+                  if (!expected) continue; // inherit/无更低档 → 不核对
+                  let childModel: any = null;
+                  try { childModel = (await host.sessions.get({ sessionID: String(e.sessionID) }))?.model ?? null; } catch { childModel = null; }
+                  if (!childModel?.id || !childModel?.providerID) continue; // 不可读 → 不置 verified
+                  const ok = childModel.providerID === expected.providerID && childModel.id === expected.id
+                    && (childModel.variant ?? null) === (expected.variant ?? null);
+                  rs[role] = { ...e, verified: ok, model: { providerID: childModel.providerID, id: childModel.id, variant: childModel.variant ?? null } };
+                  vM++; if (ok) vN++;
+                }
+                if (st && vM > 0) {
+                  st.reuse = { ...st.reuse, roleSessions: rs };
+                  try { await save(st); } catch (e) { swallow(e, "commands:ping-verify-save-fail"); } // 一次 save fail-open
+                }
+                tierLine += `｜verified=${vN}/${vM}`; // 零回显：只记角色/模型/计数，无 sid
+              } else {
+                // 无 tierBase → 回退现行文件视图（reconstructing reality，与 options.tiers 配置解耦）
+                const got = new Map(rows.map((r) => [r.split("=")[0], r.split("=")[1]] as const));
+                const cells = TIER_ROLES.map((role) => `${role}=${got.get(role) ?? "(基座默认)"}`)
+                  .concat(unknown.map((role) => `${role}=(配置无效)`));
+                tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${cells.join(" ")}\ntierBase 待登记（首次流转后生效），当前为文件实况`;
+              }
             } else if (rows.length) {
               tierLine = `\n档位跟随（tierAgents，Session 基座派生）：${rows.join(" ")}`;
             }

@@ -8,6 +8,8 @@
 // **不转发**，variants 必须用 body 直注（{"reasoning_effort":...}）——写法陷阱记录于 README。
 // 纯逻辑（resolveTierRef/tierFileContent/hasTierMarker）bun test 直测；IO（syncTierAgents）注入 io。
 // fail-open 约定由调用方保证：任何异常不阻断流转（commands.ts tierCheck try/catch）。
+// dispatch-tier-inject T01：effectiveTiers/extractVariantIds 自 middleware.ts 同源迁入（白名单过滤 +
+// variants 提取单一来源，T02 注入判定/T04 ping 活算共用）；inherit 分支增 managed 清理（unlink）。
 
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
 
@@ -41,6 +43,65 @@ export const TIER_TRIGGERS = new Set([
   "wf:intake", "wf:plan", "wf:review", "wf:test-design", "wf:build",
   "wf:reconcile", "wf:review-build", "wf:test", "wf:fix", "wf:done",
 ]);
+
+// dispatch-tier-inject T01：options.tiers 白名单过滤同源（语义逐字迁自 middleware.ts P1-B 段）。
+// 未知角色若放行会被 syncTierAgents 真实落盘成派生 agent 文件（幽灵 subagent 注册，V5 实证）。
+/** 合并默认映射与 options.tiers 覆盖（白名单过滤：未知角色拒入 tiers，收集进 unknown 供审计）。
+ * @param options 插件 options（null/undefined 安全，缺省=TIER_MAP）
+ * @returns tiers=生效映射；unknown=配置中的未知角色清单 */
+export function effectiveTiers(options: { tiers?: Record<string, string> } | null | undefined): { tiers: Record<string, string>; unknown: string[] } {
+  const userTiers: Record<string, string> = options?.tiers ?? {};
+  const unknown = Object.keys(userTiers).filter((r) => !TIER_ROLES.includes(r));
+  const tiers = { ...TIER_MAP, ...Object.fromEntries(Object.entries(userTiers).filter(([r]) => TIER_ROLES.includes(r))) };
+  return { tiers, unknown };
+}
+
+// dispatch-tier-inject T01：variants 提取同源（计算体迁自 middleware.ts，list IO 留调用方）。
+// R3：null/无效 ref 直接返回 []（不 swallow——无效 ref≠variants 空，防审计噪音）；
+// 有效 ref 但结果空集 → 同源审计 model-tier:variants-empty（T04 ping 空集告警复用此审计不重复记账）。
+/** 从 models.list 返回形状提取基座模型的 variant id 集合（array/data/models 三形状兼容）。
+ * @param ml host.models.list() 原样返回（形状未实证 → 三形状兜底）
+ * @param ref 基座模型引用；null/缺 id/providerID → 直接 []（不产生审计噪音）
+ * @returns variant id 数组；空集时记 model-tier:variants-empty 审计 */
+export function extractVariantIds(ml: unknown, ref: ModelRef | null | undefined): string[] {
+  if (!ref?.id || !ref?.providerID) return []; // R3：无效 ref≠variants 空，静默返回不记账
+  const m = ml as any;
+  const arr: any[] = Array.isArray(m) ? m : (m?.data ?? m?.models ?? []);
+  const hit = arr.find((x: any) => x?.id === ref.id && x?.providerID === ref.providerID)
+    ?? arr.find((x: any) => x?.id === ref.id);
+  const ids = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
+  if (!ids.length) swallow(new Error("variants empty"), "model-tier:variants-empty");
+  return ids;
+}
+
+// dispatch-tier-inject T02：派发时注入判定（纯函数零 IO；fileContent 由 hook 侧读文件作入参，
+// 缺失/读失败=null）。判定链短路序=审计 reason 优先级：①门（enabled/slug/target）→none 静默；
+// ②explicit-model ③unmanaged ④inherit ⑤no-variant ⑥inject。消费 T01 同源 effectiveTiers 产物 tiers。
+/** 派发时档位注入判定结果：inject=就地改写 args.model；skip=让位（reason 供审计）；none=静默不记账。 */
+export type TierInjectDecision =
+  | { action: "inject"; model: string; ref: ModelRef }
+  | { action: "skip"; reason: "unmanaged" | "no-variant" | "inherit" | "explicit-model" }
+  | { action: "none" };
+
+/** 派发时档位注入判定（纯函数零 IO，短路序=审计 reason 优先级）。
+ * @param a 判定入参：enabled 开关/slug 活动任务/target 目标角色（须 ∈ TIER_ROLES）/explicitModel args.model 原值
+ * （非空显式不覆盖）/fileContent 派生文件全文（缺失/读失败=null，无标记=unmanaged 让位）/ref leader 基座引用
+ * （null→no-variant）/variantIds 基座可用 variant 集合/tiers 生效映射（effectiveTiers 产物）
+ * @returns TierInjectDecision */
+export function resolveTierInjection(a: {
+  enabled: boolean; slug?: string; target: string; explicitModel?: unknown;
+  fileContent: string | null; ref: ModelRef | null; variantIds: string[];
+  tiers: Record<string, string>;
+}): TierInjectDecision {
+  if (!a.enabled || !a.slug || !TIER_ROLES.includes(a.target)) return { action: "none" }; // ① 静默门
+  if (a.explicitModel != null && String(a.explicitModel) !== "") return { action: "skip", reason: "explicit-model" }; // ②
+  if (a.fileContent != null && !hasTierMarker(a.fileContent)) return { action: "skip", reason: "unmanaged" }; // ③
+  const tier = a.tiers?.[a.target];
+  if (tier === "inherit") return { action: "skip", reason: "inherit" }; // ④
+  const ref = a.ref ? resolveTierRef(a.ref, a.variantIds, tier) : null; // ⑤ ref null/variants 空/无更低档
+  if (!ref) return { action: "skip", reason: "no-variant" };
+  return { action: "inject", model: `${ref.providerID}/${ref.id}#${ref.variant}`, ref }; // ⑥
+}
 
 // 解析某角色的档位引用。定稿分支（M16-r43 验证报告）：
 // - variants 为空 → null（跳写文件：继承父会话模型 = 形态 B 效果，少 7 个派生文件少一次热载）
@@ -89,6 +150,7 @@ export interface TierIO {
   mkdir: (p: string, opts?: unknown) => Promise<unknown>;
   readFile: (p: string, enc?: string) => Promise<string>;
   writeFile: (p: string, c: string) => Promise<unknown>;
+  unlink: (p: string) => Promise<unknown>; // dispatch-tier-inject T01：inherit 清理 managed 文件
 }
 
 // 写各角色项目级文件（<projectDir>/.opencode/agents/wf/<role>.md）。返回审计行：
@@ -98,8 +160,8 @@ export interface TierIO {
  * @param ref 会话基座模型引用
  * @param variantIds 基座可用 variant 集合
  * @param tiers 角色→档名映射（缺省 TIER_MAP）
- * @param io 注入的文件 IO（mkdir/readFile/writeFile，bun test 直测用）
- * @returns 审计行数组：tier-write:<role>=<variant> / tier-keep / tier-inherit / tier-skip:<role>:no-variant|unmanaged */
+ * @param io 注入的文件 IO（mkdir/readFile/writeFile/unlink，bun test 直测用）
+ * @returns 审计行数组：tier-write:<role>=<variant> / tier-keep / tier-inherit / tier-inherit-clean / tier-skip:<role>:no-variant|unmanaged */
 export async function syncTierAgents(
   projectDir: string,
   ref: ModelRef,
@@ -111,7 +173,20 @@ export async function syncTierAgents(
   const dir = `${projectDir}/.opencode/agents/wf`;
   await io.mkdir(dir, { recursive: true });
   for (const [role, tier] of Object.entries(tiers ?? {})) {
-    if (tier === "inherit") { out.push(`tier-inherit:${role}`); continue; } // P0-B：不派生文件=跟随基座默认
+    if (tier === "inherit") {
+      // P0-B：不派生文件=跟随基座默认。dispatch-tier-inject T01：既有 managed 文件须清理
+      // （否则旧档位文件残留继续生效，inherit 语义失真）；unmanaged/缺失绝不触碰文件。
+      const path = `${dir}/${role.replace(/^wf\//, "")}.md`;
+      let existing = "";
+      try { existing = await io.readFile(path, "utf8"); } catch (e) { swallow(e, "model-tier:agent-file-read-fail"); }
+      if (existing && hasTierMarker(existing)) {
+        await io.unlink(path); // unlink 异常上抛由调用方 tierCheck fail-open 吞（与 writeFile 同风险面）
+        out.push(`tier-inherit-clean:${role}`);
+      } else {
+        out.push(`tier-inherit:${role}`);
+      }
+      continue;
+    }
     const target = resolveTierRef(ref, variantIds, tier);
     if (!target) { out.push(`tier-skip:${role}:no-variant`); continue; }
     const path = `${dir}/${role.replace(/^wf\//, "")}.md`;

@@ -14,6 +14,12 @@ import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets,
 import { logAdd } from "./state.ts";
 import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
+import { TIER_ROLES, effectiveTiers, extractVariantIds, resolveTierInjection, type ModelRef } from "./model-tier.ts"; // dispatch-tier-inject T03
+
+// dispatch-tier-inject T03（R1）：一次性探针按 target 分键——tester 亦属 TIER_ROLES，全局单文件
+// 会被五步窗口第 5 步 tester 派发提前消费，致 S1 builder 派发时无探针证据；分键后各角色各取证一次。
+// 模块级 Set + existsSync 双自禁用（仿 subagent-probe 模式）。
+const tierInjectProbed = new Set<string>();
 
 // probe 4：session.get 返回形状摘要（模块级纯函数，避免每次调用重建；供一次性取证）
 const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentID ?? null, hasParentID: "parentID" in s, time: s.time ?? null } : null;
@@ -105,19 +111,67 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         if (!st) return;
         const args = input?.input ?? {};
         const target = String(args.agent ?? "");
+        // ── dispatch-tier-inject T03：派发时档位注入（方案 A v2）──────────────────
+        // 接线点=target 之后、观察灯块之前：覆盖新建/别名/前缀自愈/合法续接全形态（下游各分支
+        // 均在注入后才 return）。整块独立 try/catch fail-open：绝不 throw、不新增拒绝文案
+        // （REJECT_PREFIX/brief-level 守卫不受影响）。args.model 就地改写=既有别名/前缀自愈同款
+        // （r45 exec-rewrite-probe 实证宿主尊重 execute.before 就地改写；model 键生效性待真机首验）。
+        // 审计置灯块前搭一次 save；灯 save 失败 → 灯块后独立兜底 save（保注入审计不丢）。
+        let tierLogPending = false;
+        try {
+          if (host.options.tierAgents !== false && st.slug && TIER_ROLES.includes(target)
+            && (args.model == null || String(args.model) === "")) {
+            const dir = st.directory ?? await resolveProjectDir(st, input?.sessionID);
+            let fileContent: string | null = null;
+            try { fileContent = await fs.promises.readFile(`${dir}/.opencode/agents/wf/${target.replace(/^wf\//, "")}.md`, "utf8"); } catch { fileContent = null; } // 缺失/读失败=null（纯函数入参）
+            let ref: ModelRef | null = null;
+            try { ref = (await host.sessions.get({ sessionID: String(input?.sessionID ?? "") }))?.model ?? null; } catch (e) { swallow(e, "guard-hook:tier-ref-read-fail"); }
+            let variantIds: string[] = [];
+            if (ref?.id && ref?.providerID) { // R3：无效 ref 短路不调 models.list（防白调+审计噪音）
+              try { variantIds = extractVariantIds(await host.models.list(), ref); } catch (e) { swallow(e, "guard-hook:model-list-variants-fail"); }
+            }
+            const decision = resolveTierInjection({ enabled: true, slug: st.slug, target, explicitModel: args.model, fileContent, ref, variantIds, tiers: effectiveTiers(host.options).tiers });
+            if (decision.action === "inject") {
+              args.model = decision.model; // 就地改写（宿主将执行的对象）
+              logAdd(st, { at: new Date().toISOString(), cmd: "tier:inject", from: st.phase, to: st.phase, ok: true, note: `injected ${target}=${decision.model}` });
+              tierLogPending = true;
+              // 一次性探针按 target 分键（R1）：只保「记录了注入尝试」，宿主生效性以子会话 model 回读为准
+              const probePath = `${dir}/.workflow/_debug/model-inject-probe-${target.replace(/^wf\//, "")}.json`;
+              if (!tierInjectProbed.has(target) && !fs.existsSync(probePath)) {
+                tierInjectProbed.add(target);
+                try {
+                  fs.mkdirSync(`${dir}/.workflow/_debug`, { recursive: true });
+                  fs.writeFileSync(probePath, JSON.stringify({
+                    at: new Date().toISOString(), target, injected: decision.model,
+                    callerBase: ref ? { providerID: ref.providerID, id: ref.id, variant: ref.variant ?? null } : null,
+                    argKeys: Object.keys(args),
+                  }, null, 2)); // 无 sid（零回显）
+                } catch (e) { swallow(e, "guard-hook:tier-inject-probe-fail"); }
+              }
+            } else if (decision.action === "skip") {
+              logAdd(st, { at: new Date().toISOString(), cmd: "tier-inject-skip", from: st.phase, to: st.phase, ok: true, note: `tier-inject-skip:${target}:${decision.reason}` });
+              tierLogPending = true;
+            } // none → 不记账（静默门）
+          }
+        } catch (e) { swallow(e, "guard-hook:tier-inject-fail"); }
         const passedRaw = args.sessionID;
         // ── P2-G（latency-v3.1）：background 观察灯——leader 委派的显式性记入 events ──
         // 口径：input.background===true→explicit / ===false→explicit-false / 其余→unset（宿主默认
         // 行为形状未实证，三态保守；数据只用于「前台干等占比」量化供硬准入决策，绝不用于拦截）。
         // 每委派恰一条（logAdd→save，与 question 记账同款 fail-open）；零回显（只记 lane 键，无 sid）。
+        let lampSaveFailed = false; // dispatch-tier-inject T03：灯 save 失败标志 → 注入审计独立兜底
         try {
           const bgRaw = args.background;
           const bg = bgRaw === true ? "explicit" : bgRaw === false ? "explicit-false" : "unset";
           const passedS = String(passedRaw ?? "");
           const laneKey = Object.entries(st.lanes ?? {}).find(([k, v]) => (v as any).sessionID === passedS || k === passedS.replace(/^@/, ""))?.[0];
           logAdd(st, { at: new Date().toISOString(), cmd: "deleg:observe", tool: toolName, from: st.phase, to: st.phase, ok: true, note: `background-lamp bg=${bg}${laneKey ? ` lane=${laneKey}` : ""}` });
-          try { await save(st); } catch (e) { swallow(e, "guard-hook:lamp-save-fail"); }
+          try { await save(st); } catch (e) { lampSaveFailed = true; swallow(e, "guard-hook:lamp-save-fail"); }
         } catch (e) { swallow(e, "guard-hook:lamp-fail"); }
+        // dispatch-tier-inject T03：注入/跳过审计已 logAdd 但灯 save 失败 → 独立兜底 save（保审计不丢）
+        if (tierLogPending && lampSaveFailed) {
+          try { await save(st); } catch (e) { swallow(e, "guard-hook:tier-log-save-fail"); }
+        }
         if (passedRaw == null || String(passedRaw) === "") return; // 省略 sessionID=新建，不干预
         const passed = String(passedRaw);
 

@@ -94,3 +94,23 @@ test("P1-B options.tiers 未知角色：白名单拒落盘 + tiers-invalid 审�
   assert.match(notes, /tiers-invalid:wf\/ghost/, "未知角色应有 tiers-invalid 审计行");
   assert.ok(!notes.includes("wf/ghost.md"), "审计只记角色名，不得出现文件路径误引");
 });
+
+// ── dispatch-tier-inject T01：inherit 清理端到端（tierCheck → syncTierAgents → fsIo.unlink）──
+test("T01 inherit 端到端：managed planner.md 被删 + note 含 tier-inherit-clean:wf/planner", async () => {
+  fs.rmSync("/tmp/opencode/wf-mw/.opencode", { recursive: true, force: true });
+  const p = "/tmp/opencode/wf-mw/.opencode/agents/wf/planner.md";
+  fs.mkdirSync("/tmp/opencode/wf-mw/.opencode/agents/wf", { recursive: true });
+  fs.writeFileSync(p, "---\n# wf-workflow:model-tier managed (M16-r43)\nmode: subagent\nmodel: prov/m1#high\n---\n");
+  const { deps, saved } = mkDeps({
+    agent: "workflow",
+    options: { tierAgents: true, tiers: { "wf/planner": "inherit" } },
+    st: { slug: "t", phase: "planning", rounds: {} },
+    model: { providerID: "prov", id: "m1" },
+  });
+  const guard = createCommandGuard(deps);
+  const fn = guard.guard("wf:plan")(async () => "ok");
+  await fn({ sessionID: "ses_m" });
+  assert.ok(!fs.existsSync(p), "managed 派生文件应被 inherit 清理删除");
+  const notes = saved.flatMap((st) => st.log.map((l) => l.note)).join("|");
+  assert.match(notes, /tier-inherit-clean:wf\/planner/, "清理审计行进 note");
+});

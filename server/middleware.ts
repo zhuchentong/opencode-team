@@ -3,20 +3,21 @@
 // 顺序唯一来源 CMD_MW_ORDER（数组声明 + tests/middleware.test.js 断言锁死，翻转=红）。
 // 各段函数体逐字节迁移（F1 load 上提/agent-rejected 审计/T02 有前行才落盘/tier fail-open——
 // 全部原语义）；swallow code 按守卫口径改文件基名前缀（middleware:*；swallow-coverage 锁）。
-import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
+// dispatch-tier-inject T01：白名单过滤/variants 提取改消费 model-tier.ts 同源函数
+// （effectiveTiers/extractVariantIds）；fsIo 补 unlink（inherit 清理 managed 文件）。
+import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile, unlink as fsUnlink } from "node:fs/promises";
 import { leaderOnlyReject, type WfState } from "./lib.ts";
 import { logAdd, type Store } from "./state.ts";
 import { type Observer, swallow } from "./observe.ts";
 import { type Host } from "./host.ts";
-import {
-  TIER_MAP, TIER_ROLES, TIER_TRIGGERS, syncTierAgents, type ModelRef,
-} from "./model-tier.ts";
+import { TIER_TRIGGERS, syncTierAgents, effectiveTiers, extractVariantIds, type ModelRef } from "./model-tier.ts";
 
-// tierCheck 派生文件 IO（自 commands.ts fsIo 逐字节迁移）
+// tierCheck 派生文件 IO（自 commands.ts fsIo 逐字节迁移；T01 补 unlink 与 TierIO 同步）
 const fsIo = {
   mkdir: (p: string) => mkdir(p, { recursive: true }),
   readFile: (p: string) => fsReadFile(p, "utf8"),
   writeFile: (p: string, c: string) => fsWriteFile(p, c, "utf8"),
+  unlink: (p: string) => fsUnlink(p),
 };
 
 // M16-r36：agent 解析——快路径 a.agent（聊天命令若携带）→ session.get 兜底（Session.Info.agent 实证）。
@@ -72,19 +73,13 @@ export function createCommandGuard(deps: GuardDeps) {
     const sess = await host.sessions.get({ sessionID: sid }).catch(() => null);
     const ref = sess?.model as ModelRef | undefined;
     if (!ref?.id || !ref?.providerID) return "";
+    // dispatch-tier-inject T01：variants 提取/白名单过滤改消费同源函数（计算体迁 model-tier.ts，
+    // list IO 留本调用方；空集审计 model-tier:variants-empty 由同源函数记账）。
     let variantIds: string[] = [];
-    try {
-      const ml = await host.models.list();
-      const arr: any[] = Array.isArray(ml) ? ml : (ml?.data ?? ml?.models ?? []);
-      const hit = arr.find((m: any) => m?.id === ref.id && m?.providerID === ref.providerID)
-        ?? arr.find((m: any) => m?.id === ref.id);
-      variantIds = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
-    } catch (e) { swallow(e, "middleware:model-list-variants-fail"); }
+    try { variantIds = extractVariantIds(await host.models.list(), ref); } catch (e) { swallow(e, "middleware:model-list-variants-fail"); }
     // P1-B（arch-maintenance-p1）：options.tiers 白名单过滤——未知角色若放行会被 syncTierAgents
     // 真实落盘成派生 agent 文件（幽灵 subagent 注册，V5 实证）；非法档名本就 skip:no-variant（安全）。
-    const userTiers: Record<string, string> = host.options.tiers ?? {};
-    const unknown = Object.keys(userTiers).filter((r) => !TIER_ROLES.includes(r));
-    const tiers = { ...TIER_MAP, ...Object.fromEntries(Object.entries(userTiers).filter(([r]) => TIER_ROLES.includes(r))) };
+    const { tiers, unknown } = effectiveTiers(host.options);
     const dir = await resolveProjectDir(st, sid);
     const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
     const at = new Date().toISOString();
