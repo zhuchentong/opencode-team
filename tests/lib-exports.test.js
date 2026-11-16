@@ -5,6 +5,8 @@
 // T3.2 有意 +1：sidRefText（types.ts，SidRef 唯一渲染出口）；latency-v3.1 P1-E 有意 +1：LANE_CAP → 73；
 // r54 批次 B 有意 +1：orphanArtifactLines（diagnose.ts，孤儿产物对账纯函数）→ 77；
 // r55 有意 +2：laneCapNote（policy.ts，cap 波次残留口径）+ laneTableWritten（artifact.ts，lane 表判定归一）→ 79；LANE_STALE_MS 常量单点同批 +1 → 80）
+// opt-agentic 项① 有意 +1：markVerdicts（artifact.ts，产物记账单点——artifact-tool mark 与
+// gate-reconcile 补记共用，消除 laneTableWritten 旧正则口径分叉）→ 81）
 // + barrel 形态判据（lib.ts ≤60 行）。m4-smoke 的 9 名抽查保留不动。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -22,13 +24,13 @@ const EXPECTED = [
   "completeSidPrefix", "diagnoseReport", "evaluateTransition", "extractPaths", "flowFor",
   "fuzzyFind", "gateFor", "hasStrictVerdictLine", "isDaily", "isHintWorthy", "isLeader",
   "LANE_STALE_MS", "isNearTruncation", "isRejectReport", "isSelfModDir", "laneCapNote", "laneTableWritten", "leaderOnlyReject", "levelFor",
-  "makeAllowChecker", "makeInitialWfState", "nextFor", "normalizeFuzzy", "normalizeState", "orphanArtifactLines", "parseVerdict", "pingReport",
+  "makeAllowChecker", "makeInitialWfState", "markVerdicts", "nextFor", "normalizeFuzzy", "normalizeState", "orphanArtifactLines", "parseVerdict", "pingReport",
   "profileOf", "promptText", "registerProfile", "renderReport", "resolveSidAlias", "selfModWarnLine", "sidRefText",
   "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 80 名全集锁", () => {
-  assert.equal(EXPECTED.length, 80);
+test("T02 导出集零漂移：Object.keys(lib) === 81 名全集锁", () => {
+  assert.equal(EXPECTED.length, 81);
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 

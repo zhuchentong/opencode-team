@@ -211,3 +211,39 @@ export function artifactSizeWarning(kind: string, bytes: number, size?: string |
 export function laneTableWritten(content: unknown): boolean {
   return /lane\s*分组表/i.test(String(content ?? ""));
 }
+
+// markVerdicts 记账单点（artifact-tool mark 与 gate-reconcile 补记共用单一来源）：
+// 消除 gate-reconcile 旧 /lane 分组表/ 区分大小写正则与 laneTableWritten 纯函数的口径分叉
+//（该分叉使「原生落盘忘 register → gate 对账补记」路径对大写「Lane 分组表」误记 false，
+// daily-build 关卡在补记后仍拒绝——对账功能在该输入下失效）。
+// 判定一律经本文件 laneTableWritten/parseVerdict，两调用方不得再自带解析。
+/**
+ * 产物记账单点：写 artifacts[file]（at/bytes/hash）并按 kind 写 verdicts 记账。
+ * 判定全部经本模块 laneTableWritten/parseVerdict 同源口径。
+ * @param st 状态快照（就地改写 st.artifacts/st.verdicts）
+ * @param file 产物文件名（KIND_FILES 工厂产物）
+ * @param kind 产物类型
+ * @param content 产物结果全文（verdict/lane 表判定依据——patch/register 模式入参无内容时调用方须先读盘）
+ * @param bytes 产物字节数
+ * @param hash 产物内容 hash（sha256 前 12 位口径，调用方统一）
+ * @param at 记账时刻（ISO）
+ * @param opts.clearOnPlan true=plan 写入时清 planReview/testPlanWritten/confirmedAt（修订即清，
+ *   仅 artifact-tool 写入路径启用；gate 对账是首次补记，无修订语义，保持缺省 false）
+ */
+export function markVerdicts(
+  st: WfState, file: string, kind: string, content: string,
+  bytes: number, hash: string, at: string,
+  opts: { clearOnPlan?: boolean } = {},
+): void {
+  st.artifacts = st.artifacts ?? {};
+  st.artifacts[file] = { at, bytes, hash };
+  st.verdicts = st.verdicts ?? {};
+  if (kind === "test-plan") st.verdicts.testPlanWritten = true;
+  if (kind === "test-report") st.verdicts.testReport = parseVerdict(content);
+  if (kind === "plan-review") st.verdicts.planReview = parseVerdict(content);
+  if (kind === "plan") {
+    const v = st.verdicts;
+    if (opts.clearOnPlan) { delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // M16-r39 T02 + M16-r44：plan 修订清双通道+确认记账
+    v.laneTableWritten = laneTableWritten(content); // r55 修复 1 同源口径（大小写归一+容空白）
+  }
+}

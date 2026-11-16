@@ -9,7 +9,7 @@
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
-import { VERSION, KIND_FILES, parseVerdict, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, laneTableWritten, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // r55 修复1：lane 表判定纯函数
+import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源）
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -139,30 +139,18 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           }
           const bytes = fs.statSync(target).size;
           const hash = hashOf(fs.readFileSync(target)); // r53 批次 1：落盘结果 hash（write 补 \n 后以盘上为准）
-          // M16-r33：verdict 从**结果全文**解析（patch 模式入参无 content，必须读结果，否则 done 关卡误拦）
-          // M16-r34：plan-review 也解析 verdict（日常模式 M/L 独立验证结论，wf:build 关卡校验）
-          const verdict = (kind === "test-report" || kind === "plan-review") ? parseVerdict(finalContent) : undefined; // P0-b：解析提取至 lib
+          // M16-r33/M16-r34（语义随 markVerdicts 迁移）：verdict 从**结果全文**解析（patch/register
+          // 模式入参无 content——markVerdicts 内部经 domain parseVerdict 对全文判定，否则 done 关卡误拦）
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
           const mark = (row: WfState) => {
             // M16-r40：角色→子会话自动登记（搭本次记账 save 便车，零额外写盘）——
             // 产物写入者（planner/reviewer/tester/builder-reviewer/learner）在此暴露子会话身份
             trackRoleSession(row, context?.agent, context?.sessionID);
-            row.artifacts = row.artifacts ?? {};
-            row.artifacts[file] = { at: new Date().toISOString(), bytes, hash };
-            // R3 T3.1 子步 B：verdicts 记账改子对象写点（row 经 load 已 normalize，内存恒新形）
-            row.verdicts = row.verdicts ?? {};
-            if (kind === "test-plan") row.verdicts.testPlanWritten = true;
-            if (kind === "test-report") row.verdicts.testReport = verdict;
-            if (kind === "plan-review") row.verdicts.planReview = verdict; // M16-r34：日常 M/L 验证关卡记账
-            // M16-r39 T02：plan 修订（content/patch、任何 mode）清双通道记账——
-            // plan 已改，旧 review 结论与旧 test-plan 不得继续蒙混关卡；
-            // M16-r44：方案确认记账同点作废（plan 内容变更=旧确认失效的最强锚点）
-            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // R3 T3.1 子步 B：plan 修订清双通道+确认记账
-            // v2：lane 分组表解析记账（write/patch/register 三模式 finalContent 均为全文；每次注册重算，
-            // bytes-no-op 早退不进 mark=保留上次记账；daily M/L wf:build 关卡消费，并行优先硬卡）
-            // r55 修复1（test_010 实证）：判定提升至 domain/artifact.laneTableWritten 纯函数（大小写归一
-            // +容空格——planner 自用「Lane 分组表」大写 L，旧区分大小写匹配误拒 → build 连锁 ~9min）
-            if (kind === "plan") { const v = row.verdicts ?? (row.verdicts = {}); v.laneTableWritten = laneTableWritten(finalContent); }
+            // opt-agentic 项①：verdicts 记账收敛 domain/artifact.markVerdicts 单点（与 gate-reconcile
+            // 补记同源口径，verdict 从结果全文解析的 M16-r33 语义、r55 修复 1 lane 表判定均随迁）；
+            // clearOnPlan=true 保留 M16-r39 T02 plan 修订清双通道 + M16-r44 清确认记账语义；
+            // bytes-no-op 早退不进 mark=保留上次记账的幂等语义不变。
+            markVerdicts(row, file, kind, finalContent, bytes, hash, new Date().toISOString(), { clearOnPlan: true });
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}`, detail: `hash=${hash}` }); // r53 批次 1：hash 入审计 detail（wf.db 不进模型上下文）
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；

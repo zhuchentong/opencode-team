@@ -6,7 +6,7 @@
 // rev 冲突与重放重复执行——本函数只改内存 st（随外层 apply 一次 save 落盘，天然幂等）。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto";
-import { KIND_FILES, parseVerdict, type WfState } from "./lib.ts";
+import { KIND_FILES, markVerdicts, type WfState } from "./lib.ts";
 import { logAdd } from "./state.ts";
 import { swallow } from "./observe.ts";
 
@@ -44,14 +44,13 @@ export function reconcileGateArtifacts(st: WfState, cmd: string, dir: string, at
       if (!fs.existsSync(target)) continue; // 未落盘不造
       const content = fs.readFileSync(target, "utf8");
       if (!content.length) continue; // 空文件=疑似截断残留，不补（与 register 拒绝语义一致）
-      st.artifacts = st.artifacts ?? {};
-      st.artifacts[file] = { at, bytes: fs.statSync(target).size, hash: hashOf(fs.readFileSync(target)) };
-      st.verdicts = st.verdicts ?? {};
-      if (kind === "test-report") st.verdicts.testReport = parseVerdict(content);
-      if (kind === "plan-review") st.verdicts.planReview = parseVerdict(content);
-      if (kind === "test-plan") st.verdicts.testPlanWritten = true;
-      if (kind === "plan") st.verdicts.laneTableWritten = /lane 分组表/.test(content); // 与 artifact-tool 同款解析
-      logAdd(st, { at, cmd, from: st.phase ?? null, to: st.phase ?? null, ok: true, note: `${file} mode=register-gate-reconcile`, detail: `hash=${hashOf(fs.readFileSync(target))}` });
+      const bytes = fs.statSync(target).size;
+      const hash = hashOf(fs.readFileSync(target));
+      // markVerdicts 单点记账（opt-agentic 项①：与 artifact-tool mark 同源——
+      // laneTableWritten 经 domain 纯函数大小写归一，旧本地 /lane 分组表/ 正则已废弃）；
+      // clearOnPlan 缺省 false：对账是首次补记，无「修订清账」语义。
+      markVerdicts(st, file, kind, content, bytes, hash, at);
+      logAdd(st, { at, cmd, from: st.phase ?? null, to: st.phase ?? null, ok: true, note: `${file} mode=register-gate-reconcile`, detail: `hash=${hash}` });
       fixed = true;
     } catch (e) { swallow(e, "gate-reconcile:kind-skip"); } // fail-soft：单 kind 异常跳过，不阻断拒绝主路径
   }
