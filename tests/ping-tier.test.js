@@ -1,4 +1,6 @@
-// dispatch-tier-inject T04：wf:ping 档位活算视图 + 常态化核对（verified 记账）。
+// dispatch-tier-inject T04：wf:ping 档位活算视图 + 常态化核对（verified 即时视图）。
+// opt-agentic 项②：verified 不落库（旧实现 save 使只读 ping 沾写路径，已移除）——
+// 本文件断言改为输出文本形态 + state 不被写（只读回归锚）。
 // 基座=st.reuse.tierBase（非 caller 会话模型——ping 只读任意会话可调）；活算消费 T01 同源
 // extractVariantIds/resolveTierRef/effectiveTiers；无 tierBase 回退文件实况；tierAgents=false 回退分支逐字不动。
 // stub 模式仿 session-guard（mkHostStub+plugin.setup；raw ctx 键名以 helpers/host-stub.js 现行约定为准）。
@@ -88,7 +90,7 @@ test("T04 tierAgents=false：回退分支逐字不动（文件实况行，无活
   assert.ok(!out.includes("派发时注入") && !out.includes("tierBase 待登记"), "关闭态零活算面");
 });
 
-test("T04 verified 记账：三元组一致=true / 不一致=false（stOf 回读）+ verified=N/M + 零回显", async () => {
+test("T04 verified 即时视图：verified=N/M 输出 + state 零写入（ping 只读回归锚）", async () => {
   const leader = "ses_pt5"; const m = mkCtx();
   await setupTask(m, leader);
   // 双通道登记两角色子会话（artifact-tool.mark；相位错位仅告警不阻断登记）
@@ -102,11 +104,12 @@ test("T04 verified 记账：三元组一致=true / 不一致=false（stOf 回读
   const out = await ping(m, leader);
   assert.ok(out.includes("verified=1/2"), `verified 汇总：${out}`);
   assert.ok(!out.includes("ses_"), "输出零回显");
+  // opt-agentic 项②：ping 只读——登记形状（sessionID/at，artifact-tool.mark 写入）不被 verified 核对改写
   const rs = stOf(leader).reuse.roleSessions;
-  assert.equal(rs["wf/planner"].verified, true, "三元组一致 → verified=true");
-  assert.deepEqual(rs["wf/planner"].model, { providerID: "tu-coding", id: "base-m", variant: "high" }, "model 快照");
-  assert.equal(rs["wf/builder"].verified, false, "三元组不一致 → verified=false");
-  assert.ok(rs["wf/builder"].model, "false 亦记快照（诚实呈现）");
+  assert.ok(rs["wf/planner"]?.sessionID, "登记本体保留");
+  assert.ok(!("verified" in rs["wf/planner"]), "verified 不落库（即时视图）");
+  assert.ok(!("model" in rs["wf/planner"]), "model 快照不落库");
+  assert.ok(!("verified" in rs["wf/builder"]), "false 亦不落库");
 });
 
 test("T04 models.list 抛错：fail-soft 不 throw（variantIds=[] → 告警行 + 基座默认 cell）", async () => {

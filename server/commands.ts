@@ -265,7 +265,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
     });
     add({
       name: "wf:ping",
-      description: "健康检查：列出 wf/* 角色 agent 注册状态与模型（只读，fail-soft）",
+      description: "健康检查：列出 wf/* 角色 agent 注册状态与模型（只读，fail-soft；verified 核对为即时视图不落库）",
       execute: async (a: any) => {
         try {
           const res = await host.agents.list(); // T03：缺失判定=wrapper 返回 undefined（旧 !ctx.agent?.list 分支；降级文案逐字不动，M1 裁决）
@@ -313,10 +313,9 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
                   rs[role] = { ...e, verified: ok, model: { providerID: childModel.providerID, id: childModel.id, variant: childModel.variant ?? null } };
                   vM++; if (ok) vN++;
                 }
-                if (st && vM > 0) {
-                  st.reuse = { ...st.reuse, roleSessions: rs };
-                  try { await save(st); } catch (e) { swallow(e, "commands:ping-verify-save-fail"); } // 一次 save fail-open
-                }
+                // opt-agentic 项②：verified 为即时视图，不落库（旧实现此处 save 曾使「只读」ping 沾写路径——
+                // 与 description 名实不符，且无 CAS 保护属并发白写面）。诚实边界不变：verified=false 无法
+                // 区分「宿主忽略 input.model」与「注入前旧会话续接」，持久化价值低于维护成本。
                 tierLine += `｜verified=${vN}/${vM}`; // 零回显：只记角色/模型/计数，无 sid
               } else {
                 // 无 tierBase → 回退现行文件视图（reconstructing reality，与 options.tiers 配置解耦）
