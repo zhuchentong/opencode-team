@@ -22,6 +22,9 @@ const DIR = "/tmp/opencode/wf-selfmod";
 const DB = `${DIR}/.workflow/wf.db`;
 const PROJ2 = "/tmp/opencode/wf-selfmod-proj2";
 process.env.WF_PROJECTS_FILE = `${DIR}/projects.jsonl`;
+// opt-agentic 修复（预存缺陷）：A1 scan 用例第 3 个执行即 listProj append 清单文件，但 DIR 只有
+// 更后的 intake 接线用例才经 createStore 间接创建——干净机器首跑 ENOENT。前置创建消除执行序依赖。
+fs.mkdirSync(DIR, { recursive: true });
 const mkCtx = () => {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`, projectsListFile()]) { try { fs.rmSync(f, { force: true }); } catch { } }
   const entries = [];
