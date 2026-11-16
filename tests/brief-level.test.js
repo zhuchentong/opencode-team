@@ -176,6 +176,17 @@ test("T02 briefFallback：超长首行 ≤100 码点截断加 …；跳空行取
   assert.equal(briefFallback("wf:x", ""), "【wf｜x】\n");
 });
 
+// nonleader-decontam：两行拒绝文本 brief 只含首行核心拒绝（回退句不进通知面、不被 100 码点截断失真）
+test("nonleader-decontam：两行拒绝 brief 只取首行（回退句不入 brief）", () => {
+  const rej2 = "❌ 工作流仅限 workflow（当前 agent=build）。请切换到 workflow 会话执行；查看状态可用 /wf:status。\n" +
+    "若用户未明确要求走工作流：忽略本拒绝，直接在当前 agent 按默认方式完成任务，勿要求用户切换 agent；wf/* 子代理请把结论回报 leader。";
+  const b = briefFor("wf:intake", rej2, null, LIMITS);
+  assert.ok(b.startsWith("【wf｜intake】\n❌ 工作流仅限 workflow"), b);
+  assert.ok(!b.includes("按默认方式"), "回退句（第二行）不入 brief");
+  assert.ok(!b.includes("ses_"), "零回显不变量");
+  assert.equal(levelFor("wf:intake", rej2, null), "warn", "❌ 前缀→warn 不变量保持");
+});
+
 // ── briefFor 分派 ──────────────────────────────────────────────────────
 test("T02 briefFor：流转命令+成功文本+st.phase → transition；否则 fallback", () => {
   const st = mkSt({ phase: "planning" });

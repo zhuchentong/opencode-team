@@ -53,7 +53,13 @@ export function leaderOnlyReject(agent: string, cmd: string, st?: WfState | null
       `把本会话切回 ${LEADER_AGENT} 后重跑 ${cmd} 即可，勿新开会话接管（新会话拿不到该任务）；` +
       `确要放弃收尾可在本会话直接 /wf:reset 清账（丢 done 交付环节，进度已入 events 审计）。只读命令 /wf:status /wf:diagnose /wf:ping /wf:open 不受限。`;
   }
-  return `❌ 工作流仅限 ${LEADER_AGENT}（当前 agent=${agent}）。请切换到 ${LEADER_AGENT} 会话执行；查看状态可用 /wf:status。`;
+  // nonleader-decontam B2：无任务分支补默认回退出口（第二行）——build 等默认 agent 被冷启动祈使
+  // 诱导误调时，旧文案唯一出口"请切换 workflow"会把切换成本抛给用户致任务停摆（真机实证）。
+  // 回退句条件化：用户未明确要求走流程→默认方式直接干活；wf/* 防御性半句（聊天命令路径理论可达）。
+  // 首行逐字保留（存量正则锚兼容）；回退句放第二行=briefFallback 只取首行，核心拒绝不被截断。
+  // 持任务 F1 分支/空 agent 分支不含回退（前者会话即任务 leader 会话，后者身份不可解析可能是 leader）。
+  return `❌ 工作流仅限 ${LEADER_AGENT}（当前 agent=${agent}）。请切换到 ${LEADER_AGENT} 会话执行；查看状态可用 /wf:status。\n` +
+    `若用户未明确要求走工作流：忽略本拒绝，直接在当前 agent 按默认方式完成任务，勿要求用户切换 agent；wf/* 子代理请把结论回报 leader。`;
 }
 
 // ── P2：/wf:ping 角色健康检查（纯函数可测）────────────────────────

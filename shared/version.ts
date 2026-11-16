@@ -2,4 +2,4 @@
 // 历史：lib.ts VERSION 与 tui/index.tsx TUI_BUILD 各自硬编码曾漂移（r38 vs r37-table）；
 // 教训（r53 批次复盘）：r48-r52 未随版本升 VERSION，debug 日志 build 标签失真误导归因——升版本必 bump 此处；
 // 现两侧同源 import 本文件。升版本只改这里（T13：M16-r39）。
-export const VERSION = "M16-r55";
+export const VERSION = "M16-r56";

@@ -89,6 +89,27 @@ test("F1 leaderOnlyReject st 分支：持任务=两出口并列（切回 workflo
   assert.match(leaderOnlyReject("", "wf:done", st), /无法确认/, "空 agent 身份文案优先于任务分支");
 });
 
+// ── nonleader-decontam B2：无任务拒绝补默认回退出口（第二行）；持任务/空 agent 分支不含 ──
+// 事故实证：build 会话被 wf_command 冷启动祈使诱导 intake→拒→旧文案唯一出口"请切换 workflow"
+// →模型把切换成本抛给用户、任务停摆。回退句条件化出口：用户未明确要求走流程→默认方式直接干活。
+test("nonleader-decontam B2：无任务拒绝含默认回退出口（第二行）；持任务/空 agent 分支不含", () => {
+  const r = leaderOnlyReject("build", "wf:intake");
+  assert.match(r, /^❌/, "拒绝前缀不变量（levelFor=warn）");
+  assert.match(r, /按默认方式/, "回退出口：默认方式完成任务");
+  assert.match(r, /勿要求用户切换 agent/, "不把切换成本抛给用户");
+  assert.match(r, /wf\/\* 子代理/, "wf/* 防御性措辞（回报 leader）");
+  const lines = r.split("\n").filter((l) => l.trim() !== "");
+  assert.ok(lines.length >= 2, "回退句在第二行（briefFallback 只取首行，核心拒绝不被截断）");
+  assert.equal(lines[0], "❌ 工作流仅限 workflow（当前 agent=build）。请切换到 workflow 会话执行；查看状态可用 /wf:status。", "首行旧文案逐字（存量锚兼容）");
+  // 持任务分支（F1）不含回退——该会话即任务 leader 会话，默认回退会孤儿化任务状态
+  const st = { slug: "implant", phase: "testing", rounds: {} };
+  assert.ok(!/按默认方式/.test(leaderOnlyReject("build", "wf:done", st)), "F1 持任务分支不含回退");
+  // 空 agent fail-closed 分支不含回退（身份不可解析可能是 leader 会话，引导默认干活会误导）
+  assert.ok(!/按默认方式/.test(leaderOnlyReject("", "wf:done")), "空 agent 分支不含回退");
+  // 只读豁免不受影响
+  assert.equal(leaderOnlyReject("build", "wf:status"), null);
+});
+
 // ── 全链路：聊天命令入口 ────────────────────────────────────────────
 test("r36 聊天命令：build intake 拒（无幽灵行）；leader 放行；有行后 build 推进拒 + 审计 agent-rejected", async () => {
   const m = mkCtx({}, { ses_b: "build", ses_l: "wf/leader" });

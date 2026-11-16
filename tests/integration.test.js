@@ -336,6 +336,11 @@ test("T05 wf_command：leader 推进生效；无行非 intake 拒绝；子会话
   assert.match(tc.description, /冷启动铁律/, "description 应含冷启动铁律");
   assert.match(tc.description, /第一步立即调用 wf_command\(name="wf:intake", prompt="<slug>"\)/, "冷启动动作=立即 intake");
   assert.match(tc.description, /普通问答/, "防误触：普通问答/咨询不开任务");
+  // nonleader-decontam B1：适用域前置段——非 leader 不沾染（判据可自判+双 ID 同权+只读不压制）
+  assert.match(tc.description, /未声明你是 wf leader/, "适用域条件=角色提示词自判（不依赖模型知道 agent ID 字符串）");
+  assert.match(tc.description, /wf\/leader/, "兼容别名在适用域内（r38 双 ID 同权，在途别名会话不自排除）");
+  assert.match(tc.description, /只读查询/, "只读豁免不压制（READONLY_CMDS 任何 agent 可用）");
+  assert.match(tc.description, /按默认方式直接执行用户任务/, "非 leader 默认回退（与 B2 拒绝文案同语义）");
   // 无行 + 非 intake → 拒绝
   assert.match((await tc.execute({ name: "wf:plan" }, { sessionID: "ses_w5", agent: "build" })).content,
     /本会话无活动任务/);

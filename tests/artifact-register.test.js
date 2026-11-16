@@ -56,6 +56,21 @@ const nativeWrite = (slug, file, content) => {
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
 
+// nonleader-decontam B2b：无任务拒绝补默认回退（第二行）——build 误调不被诱导去开任务；
+// 条件排除 wf/* 子会话（它们是 wf 会话，原"回报 leader"语义保留）。
+test("nonleader-decontam B2b：无任务拒绝含默认回退（第二行）；回报 leader 语义保留", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const w = await tool(m).execute({ kind: "plan", content: "x" }, { sessionID: "ses_none", agent: "build" });
+  assert.match(w.content, /本会话无活动 wf 任务/);
+  assert.match(w.content, /回报 leader/, "wf/* 子代理原语义保留");
+  assert.match(w.content, /按默认方式完成任务/, "默认回退出口");
+  assert.match(w.content, /非 wf 工作流会话/, "条件排除 wf/* 子会话");
+  const lines = w.content.split("\n").filter((l) => l.trim() !== "");
+  assert.ok(lines.length >= 2, "回退句在第二行（brief 只取首行）");
+  dispose?.();
+});
+
 test("M16-r47 register：原生落盘 plan-review → 注册记账 verdict/artifacts/审计/roleSessions 全链路与 content 模式等价", async () => {
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);

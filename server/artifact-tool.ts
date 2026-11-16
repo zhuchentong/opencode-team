@@ -83,7 +83,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           const patch = Array.isArray(args?.patch) ? args.patch : null;
           if (hasContent && patch) return { content: "❌ content 与 patch 互斥：首写用 content，修订已有产物用 patch，两者皆缺=注册已落盘产物。" };
           const initial = await resolveState(context?.sessionID, context?.agent); // M10-b：子会话经项目索引反查管辖状态
-          if (!initial?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。" };
+          if (!initial?.slug) return { content: "❌ 本会话无活动 wf 任务：请回报 leader，由 leader 调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（或用户手敲 /wf:intake <slug>）。子会话不得自行推进。\n若本会话非 wf 工作流会话且用户未明确要求走工作流：忽略本提示，直接按默认方式完成任务。" }; // nonleader-decontam B2b：默认回退（第二行；条件排除 wf/* 子会话，其"回报 leader"语义保留）
           // 落盘目录：三级回退（resolveProjectDir，与 wf:diagnose 同源）
           const dir = await resolveProjectDir(initial, context?.sessionID);
           const file = mk(initial); // 文件名按首快照轮次定型；并发重放不改名（文件已落盘，记账与磁盘必须同名）
