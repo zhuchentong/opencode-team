@@ -346,3 +346,27 @@ test("T03 审计：inject 与 skip 均置灯块前搭一次 save（st.log 可回
   assert.ok(tierRows.every((l) => !String(l.note).includes("ses_") && !String(l.detail ?? "").includes("ses_")), "审计零回显");
   assert.ok(st.log.some((l) => l.cmd === "deleg:observe"), "观察灯语义不受注入影响");
 });
+
+// ── opt-agentic（serial-dispatch-fix）：观察灯 builder-recreate 观测面 ──
+// target=wf/builder 且省略 sessionID 新建、但该角色已有登记子会话 → note 记 builder-recreate
+// （info 级证据非拦截；多波并行次波新建属合法形态也会命中——诚实边界见 guard-hook 注释）。
+const artifactTool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
+
+test("serial-dispatch：已登记 builder 后省略 sessionID 新建 → 观察灯记 builder-recreate", async () => {
+  const leader = "ses_leadR1"; const m = await setupLeader(leader);
+  // 登记 wf/builder 子会话（artifact-tool mark 搭便车，与生产路径同源）
+  await artifactTool(m).execute({ kind: "plan", content: "# p" }, { sessionID: "ses_childR1", agent: "wf/builder" });
+  await callSub(m, leader, { agent: "wf/builder" }); // 新建（省略 sessionID）
+  const lamp = stOf(leader).log.filter((l) => l.cmd === "deleg:observe").at(-1);
+  assert.match(lamp.note, /builder-recreate/, "已登记却新建 → 记 builder-recreate");
+  assert.ok(!lamp.note.includes("ses_"), "灯 note 零回显");
+});
+
+test("serial-dispatch 反向两例：无登记新建不记；显式续用正确 sessionID 不记", async () => {
+  const leader = "ses_leadR2"; const m = await setupLeader(leader);
+  await callSub(m, leader, { agent: "wf/builder" }); // 无登记新建
+  assert.ok(!stOf(leader).log.filter((l) => l.cmd === "deleg:observe").at(-1).note.includes("builder-recreate"), "无登记 → 不记");
+  await artifactTool(m).execute({ kind: "plan", content: "# p" }, { sessionID: "ses_childR2", agent: "wf/builder" });
+  await callSub(m, leader, { agent: "wf/builder", sessionID: "ses_childR2" }); // 显式续用（正确 ID 放行）
+  assert.ok(!stOf(leader).log.filter((l) => l.cmd === "deleg:observe").at(-1).note.includes("builder-recreate"), "显式续用 → 不记");
+});

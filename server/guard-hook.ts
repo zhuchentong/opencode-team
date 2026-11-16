@@ -165,7 +165,13 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           const bg = bgRaw === true ? "explicit" : bgRaw === false ? "explicit-false" : "unset";
           const passedS = String(passedRaw ?? "");
           const laneKey = Object.entries(st.lanes ?? {}).find(([k, v]) => (v as any).sessionID === passedS || k === passedS.replace(/^@/, ""))?.[0];
-          logAdd(st, { at: new Date().toISOString(), cmd: "deleg:observe", tool: toolName, from: st.phase, to: st.phase, ok: true, note: `background-lamp bg=${bg}${laneKey ? ` lane=${laneKey}` : ""}` });
+          // opt-agentic（serial-dispatch-fix 观测面）：target=wf/builder 且省略 sessionID 新建，
+          // 但该角色已有登记子会话 → 记 builder-recreate（info 级证据非告警，绝不用于拦截）。
+          // 诚实边界：多波并行次波新建亦命中（合法形态）；lane 表不记 role，故以 roleSessions
+          // 已登记为信号——证据消费=/wf:diagnose 审计 grep builder-recreate（串行一派到底任务
+          // 频发且无多波场景=逐 T 新建委派存量行为取证）。
+          const builderRecreate = target === "wf/builder" && passedS === "" && !!st.reuse?.roleSessions?.["wf/builder"]?.sessionID;
+          logAdd(st, { at: new Date().toISOString(), cmd: "deleg:observe", tool: toolName, from: st.phase, to: st.phase, ok: true, note: `background-lamp bg=${bg}${laneKey ? ` lane=${laneKey}` : ""}${builderRecreate ? " builder-recreate" : ""}` });
           try { await save(st); } catch (e) { lampSaveFailed = true; swallow(e, "guard-hook:lamp-save-fail"); }
         } catch (e) { swallow(e, "guard-hook:lamp-fail"); }
         // dispatch-tier-inject T03：注入/跳过审计已 logAdd 但灯 save 失败 → 独立兜底 save（保审计不丢）
