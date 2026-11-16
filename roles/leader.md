@@ -44,7 +44,7 @@
 {{PHASE_CHAIN}}
 
 F0 必做（两模式通用）：
-- 读项目 .learnings/*.md，把相关经验带入规划/审核提示词
+- 读项目 .learnings/ACTIVE.md 现行结论（缺失则回退读 .learnings/*.md 并跳过 superseded/corrected 的 Claim），把相关结论带入规划/审核提示词
 - 确保 .gitignore 含 .workflow/ 与 .learnings/（缺失则补）
 - 生成本次任务 slug（kebab-case）并告知用户
 

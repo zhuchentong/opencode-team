@@ -190,7 +190,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       return [
         `【wf 工作流｜intake·日常模式】slug=${s}（体量 ${st.size ?? "M"}）`,
         `日常流：plan（讨论方案）→ review（/verify 独立验证）→ 按问题修订 → build（执行）→ test（核对）→ done。`,
-        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ 相关经验；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
+        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ACTIVE.md 现行结论（缺失则回退读 .learnings/*.md 并跳过 superseded/corrected 的 Claim）；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
         ...(method ? [method] : []),
         S ? `S 级：全程 leader 主流程串行，零 sub-agent，产物从简。` : `M/L 级：planner 拆功能点、reviewer 独立验证、builder 执行、tester 独立核对。`,
         ...(confirmCard ? [confirmCard] : []),
@@ -203,7 +203,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
         : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。${artifactPathLine(st, "plan")}`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 baseline.md 全文+相关 .learnings/+产物路径+预算，声明子代理禁止全仓扫描。`,
+      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 baseline.md 全文+ACTIVE.md 相关结论+产物路径+预算，声明子代理禁止全仓扫描。`,
         `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
@@ -293,7 +293,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       const confirmCard = intakeConfirmLine(st);
       return [
         `【wf 工作流｜intake】slug=${s}`,
-        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ 相关经验带入后续阶段；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
+        `1) 与用户澄清需求（需求已清晰→直接落 baseline，勿强行多轮）；2) 读项目 .learnings/ACTIVE.md 现行结论带入后续阶段（缺失则回退读 .learnings/*.md 并跳过 superseded/corrected 的 Claim）；3) 确保 .gitignore 含 .workflow/ 与 .learnings/（agent 生成目录默认不入库，M16-r52；项目希望经验随交付提交时显式删 .learnings/ 的 ignore 行）；${baselineStep(s, "。")}`,
         ...(method ? [method] : []),
         `体量分级：intake prompt 用前缀 [S]/[M]/[L] 声明任务体量（简易/演示=S，常规=M，跨模块/大型=L；缺省 M），如 wf_command(name="wf:intake", prompt="[S] my-task")。S 级产物预算收紧、全程从简。`,
         ...(confirmCard ? [confirmCard] : []),
@@ -306,7 +306,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `⚠️ 本阶段禁止修改业务代码（项目外路径不属业务代码；放行：.workflow/、.learnings/、测试目录）。`,
       `委派 subagent wf/planner → 产物用 wf_write_artifact(kind=plan) 写入（含 T01… 任务清单、接口签名、每条验收标准的验证方式）。${artifactPathLine(st, "plan")}`,
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
-      `委派契约：prompt 只带 baseline.md 全文+相关 .learnings/ 条目+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
+      `委派契约：prompt 只带 baseline.md 全文+ACTIVE.md 相关结论+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"——那是完整模式口径），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`,
       WRITE_CONTRACT,
       budgetLine(st, ["plan"]),
