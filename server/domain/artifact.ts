@@ -227,6 +227,7 @@ export function laneTableWritten(content: unknown): boolean {
  * @param bytes 产物字节数
  * @param hash 产物内容 hash（sha256 前 12 位口径，调用方统一）
  * @param at 记账时刻（ISO）
+ * @param opts 可选项
  * @param opts.clearOnPlan true=plan 写入时清 planReview/testPlanWritten/confirmedAt（修订即清，
  *   仅 artifact-tool 写入路径启用；gate 对账是首次补记，无修订语义，保持缺省 false）
  */

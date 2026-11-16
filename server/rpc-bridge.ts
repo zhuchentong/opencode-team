@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import type { ReportLevel } from "./lib.ts";
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账 // notification-brief-display T03：emitReport meta 类型（纯 type import，无环）
-import { readTierAgents, TIER_ROLES } from "./model-tier.ts"; // M16-r49：侧边栏档位视图（派生文件实况单一来源）
+import { readTierAgents, liveTierVariants, TIER_ROLES } from "./model-tier.ts"; // M16-r49：侧边栏档位视图（派生文件实况单一来源） // opt-agentic：inject 模式视图改 tierBase 活算
 import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 
 // rpc read 通用拒绝/错误载荷（纯函数，不捕获外层——顶层定义）
@@ -52,15 +52,27 @@ export async function createRpcBridge(host: import("./host.ts").Host, { load, sc
           // fail-soft：读失败/未派生 → null（TUI 静默不显示）；inactive 分支形状不扩张（rpc-drift 锁死）。
           let tiers: Record<string, string> | null = null;
           try {
-            const dir = await resolveProjectDir(st, String(input?.sessionID ?? ""));
-            const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fs.promises.readFile(p, "utf8") });
-            if (rows.length) {
-              tiers = {};
-              for (const row of rows) {
-                const eq = row.indexOf("=");
-                if (eq <= 0) continue;
-                const hash = row.indexOf("#", eq);
-                tiers[row.slice(0, eq)] = hash >= 0 ? row.slice(hash + 1) : row.slice(eq + 1);
+            // opt-agentic（tier-no-project-files）：inject 模式（新默认）无派生文件——视图优先
+            // st.reuse.tierBase 活算（liveTierVariants，与 ping「活算」分支同源口径；静默 variants
+            // 提取防 5s 轮询灌爆 swallow 环）；无 tierBase 回退文件实况（files 模式/存量项目）。
+            const base = st.reuse?.tierBase;
+            if (base?.id && base?.providerID) {
+              let ml: unknown = null;
+              try { ml = await host.models.list(); } catch (e) { swallow(e, "rpc-bridge:tier-model-list-fail"); }
+              const live = liveTierVariants(base, ml, host.options);
+              if (live && Object.keys(live).length) tiers = live;
+            }
+            if (!tiers) {
+              const dir = await resolveProjectDir(st, String(input?.sessionID ?? ""));
+              const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fs.promises.readFile(p, "utf8") });
+              if (rows.length) {
+                tiers = {};
+                for (const row of rows) {
+                  const eq = row.indexOf("=");
+                  if (eq <= 0) continue;
+                  const hash = row.indexOf("#", eq);
+                  tiers[row.slice(0, eq)] = hash >= 0 ? row.slice(hash + 1) : row.slice(eq + 1);
+                }
               }
             }
           } catch (e) { swallow(e, "rpc-bridge:tier-read-fail"); }

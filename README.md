@@ -103,7 +103,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | `syncRoles` | `true` | 角色托管同步（M16-r31）：setup 时把仓库 `roles/` 8 模板 body 同步到宿主 `agents/wf/*.md`（保 frontmatter，写前备份+托管标记+hash 跳过+无标记不覆盖）。显式 `false` 关闭（v2 起默认开启，与 tierAgents/syncSkills 同款语义） |
 | `limits` | — | 覆盖循环/并发上限，如 `{ "plan_review": 2, "lane_cap": 3 }`（仅正整数生效，guidance/状态/诊断同步显示；`lane_cap`=builder lane 并发软准入上限，默认 4，本地推理网关建议调低至 ≤3） |
 | `hint` | `true` | 自动激活：用户消息命中工作流意图关键词且会话无 wf 状态时，注入一次性 `/wf:intake` 提示 |
-| `tierAgents` | `true` | 动态档位跟随（M16-r43）：流转时读会话所选模型，按 `tiers` 为各流程角色写项目级 `.opencode/agents/wf/<role>.md`。显式 `false` 关闭。**前置：基座模型须在宿主 opencode.jsonc 声明 variants（body 直注 `reasoning_effort`——openai-compatible 包不转发 settings.reasoningEffort，真机抓包实证）；未声明 variants 的基座自动跳写=继承会话默认档，行为等同关闭** |
+| `tierAgents` | `"inject-only"` | 动态档位跟随（M16-r43）：流转时读会话所选模型，按 `tiers` 为各流程角色派发时注入 `args.model`（`基座#档位`）。三态：缺省/`"inject-only"`=仅注入，**零项目目录落地**（不生成 `.opencode/agents/wf/`，档位视图走 tierBase 活算）；`true`/`"files"`=旧双通路（额外写项目级派生文件）；`false` 关闭。**前置：基座模型须在宿主 opencode.jsonc 声明 variants（body 直注 `reasoning_effort`——openai-compatible 包不转发 settings.reasoningEffort，真机抓包实证）；未声明 variants 的基座自动跳过=继承会话默认档，行为等同关闭** |
 | `tiers` | TIER_MAP | 档位映射覆盖（默认 planner/planner-reviewer/tester/builder-reviewer/fixer=`high`，builder/learner=`off`） |
 
 ## 项目级角色定制（overrides）
@@ -127,7 +127,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 
 ## 角色档位跟随（M16-r43 动态路由）
 
-`tierAgents` **默认开启**（显式 `false` 关闭）：流转时读会话所选模型，按档位映射为各流程角色写**项目级** `.opencode/agents/wf/<role>.md`（`model: <基座>#<档位>`；frontmatter 仅 mode+model，空 body 保留全局角色提示词），宿主热载即效。**切模型即全角色跟随**（5h 用量上限场景：下一次 `wf_command` 后新委派自动用新基座对应档位）；基座变化审计 `tier-model-switch` 并清空 roleSessions，提示句附加到命令文本（旧子会话=旧模型，重委派一律新建）。
+`tierAgents` **默认 inject-only**（零项目目录落地；`true`/`"files"` 回退旧双通路，`false` 关闭）：流转时读会话所选模型，派发时（guard-hook 对 subagent 调用）按档位映射就地注入 `args.model`（`基座#档位`），**项目目录不再生成 `.opencode/agents/wf/` 派生文件**，档位视图（TUI 侧边栏/`wf:ping`）走 `st.reuse.tierBase` 活算。**切模型即全角色跟随**（5h 用量上限场景：下一次 `wf_command` 后新委派自动用新基座对应档位）；基座变化审计 `tier-model-switch` 并清空 roleSessions，提示句附加到命令文本（旧子会话=旧模型，重委派一律新建）。诚实边界：注入依赖 hook 链，静默失败时该次委派退化会话默认档（`wf:ping` verified 即时视图可见）；需文件兜底的项目显式配 `tierAgents: true`。
 
 - **默认档位映射**：见上表 `tiers` 行（`options.tiers` 可覆盖）；workflow（primary）天然跟随会话模型，不接线
 - **降级链**：请求档不在基座 variants 集合 → 强度序（off<low<medium<high<xhigh<max）向下取最近；无更低 → 继承会话默认档；**variants 为空 → 跳写**（纯继承，少 7 个派生文件）

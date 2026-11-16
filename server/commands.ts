@@ -30,7 +30,7 @@ import { createTransition } from "./transition.ts";
 import { createCommandGuard } from "./middleware.ts";
 import type { CommandBus } from "./command-bus.ts";
 import { resolveRolesDir, roleSyncStatus } from "./roles.ts"; // M16-r31：角色托管漂移守卫
-import { TIER_ROLES, readTierAgents, extractVariantIds, resolveTierRef, effectiveTiers } from "./model-tier.ts"; // M16-r43：档位视图（ping 只读面）；tierCheck 写面随迁 middleware.ts // dispatch-tier-inject T04：活算消费同源函数
+import { TIER_ROLES, readTierAgents, extractVariantIds, resolveTierRef, effectiveTiers, tierAgentsMode } from "./model-tier.ts"; // M16-r43：档位视图（ping 只读面）；tierCheck 写面随迁 middleware.ts // dispatch-tier-inject T04：活算消费同源函数
 import { readFile as fsReadFile } from "node:fs/promises"; // R2：fsIo（mkdir/writeFile）随 tierCheck 迁出
 
 // 降级轨报告的消息标记（注入 metadata 与剥离 hook 同源；tests 断言依赖此 key）
@@ -280,7 +280,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             const st = await load(sid);
             const dir = await resolveProjectDir(st, sid);
             const rows = await readTierAgents(dir, TIER_ROLES, { readFile: (p: string) => fsReadFile(p, "utf8") });
-            if (host.options.tierAgents !== false) {
+            if (tierAgentsMode(host.options) !== "off") {
               // P1-B：未知角色标注 (配置无效)——middleware 白名单已拒落盘，此处只读视图可见化（同口径过滤）。
               const { tiers, unknown } = effectiveTiers(host.options);
               const base = st?.reuse?.tierBase;

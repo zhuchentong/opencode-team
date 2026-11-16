@@ -151,3 +151,22 @@ test("opt-agentic：WF_DEBUG=1 → tier-timing.jsonl 落 JSONL（分步耗时+�
   assert.equal(row.wrote, 0, "variants 空 → 零派生写入");
   assert.ok(!line.includes("ses_"), "探针零回显（不记 sid）");
 });
+
+// ── opt-agentic（tier-no-project-files）：缺省 inject 模式零项目目录落地 ──
+// 用户需求：档位配置不落项目目录（不生成 .opencode/agents/wf/）——默认仅注入，
+// tierBase 登记/切模型审计保留；"files"（tierAgents:true）才写派生文件（既有用例锚不变）。
+test("tier-no-files：缺省（不设 tierAgents）→ 零派生文件 + tierBase 登记照常", async () => {
+  fs.rmSync("/tmp/opencode/wf-mw-inject", { recursive: true, force: true });
+  const { deps, saved } = mkDeps({
+    agent: "workflow",
+    options: { leaderOnly: false, tierAgents: undefined }, // 显式 undefined 覆盖 mkDeps 基础 false = 不设 tierAgents（新默认 inject）
+    st: { slug: "t", phase: "planning", rounds: {} },
+    model: { providerID: "prov", id: "m1" },
+  });
+  deps.resolveProjectDir = async () => "/tmp/opencode/wf-mw-inject";
+  const guard = createCommandGuard(deps);
+  const fn = guard.guard("wf:plan")(async () => "ok");
+  await fn({ sessionID: "ses_m" });
+  assert.ok(!fs.existsSync("/tmp/opencode/wf-mw-inject/.opencode"), "inject 模式零项目目录落地");
+  assert.ok(saved[0]?.reuse?.tierBase, "tierBase 登记不随文件通路关闭而丢失");
+});

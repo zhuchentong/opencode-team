@@ -14,7 +14,7 @@ import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets,
 import { logAdd } from "./state.ts";
 import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
-import { TIER_ROLES, effectiveTiers, extractVariantIds, resolveTierInjection, type ModelRef } from "./model-tier.ts"; // dispatch-tier-inject T03
+import { TIER_ROLES, effectiveTiers, extractVariantIds, resolveTierInjection, tierAgentsMode, type ModelRef } from "./model-tier.ts"; // dispatch-tier-inject T03
 
 // dispatch-tier-inject T03（R1）：一次性探针按 target 分键——tester 亦属 TIER_ROLES，全局单文件
 // 会被五步窗口第 5 步 tester 派发提前消费，致 S1 builder 派发时无探针证据；分键后各角色各取证一次。
@@ -119,7 +119,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         // 审计置灯块前搭一次 save；灯 save 失败 → 灯块后独立兜底 save（保注入审计不丢）。
         let tierLogPending = false;
         try {
-          if (host.options.tierAgents !== false && st.slug && TIER_ROLES.includes(target)
+          if (tierAgentsMode(host.options) !== "off" && st.slug && TIER_ROLES.includes(target)
             && (args.model == null || String(args.model) === "")) {
             const dir = st.directory ?? await resolveProjectDir(st, input?.sessionID);
             let fileContent: string | null = null;

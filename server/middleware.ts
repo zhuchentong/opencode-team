@@ -11,7 +11,7 @@ import { leaderOnlyReject, type WfState } from "./lib.ts";
 import { logAdd, type Store } from "./state.ts";
 import { type Observer, swallow } from "./observe.ts";
 import { type Host } from "./host.ts";
-import { TIER_TRIGGERS, syncTierAgents, effectiveTiers, extractVariantIds, type ModelRef } from "./model-tier.ts";
+import { TIER_TRIGGERS, syncTierAgents, tierAgentsMode, effectiveTiers, extractVariantIds, type ModelRef } from "./model-tier.ts";
 
 // tierCheck 派生文件 IO（自 commands.ts fsIo 逐字节迁移；T01 补 unlink 与 TierIO 同步）
 const fsIo = {
@@ -80,7 +80,8 @@ export function createCommandGuard(deps: GuardDeps) {
   // 清空 roleSessions（旧子会话=旧模型，防混模型续用）+ 返回提示句（guarded 附加到返回文本）。
   // fail-open：任何异常由调用方吞掉，不阻断流转；options.tierAgents 默认开（显式 false 关闭）。
   const tierCheck = async (cmd: string, a: any): Promise<string> => {
-    if (host.options.tierAgents === false) return "";
+    const tierMode = tierAgentsMode(host.options); // opt-agentic：三态（缺省=inject 零项目目录落地）
+    if (tierMode === "off") return "";
     if (!TIER_TRIGGERS.has(cmd)) return "";
     const t0 = Date.now(); // opt-agentic：分步耗时（msGet/msList/msSync），仅真实路径采样
     const sid = String(a?.sessionID ?? "");
@@ -92,6 +93,7 @@ export function createCommandGuard(deps: GuardDeps) {
     if (!ref?.id || !ref?.providerID) return "";
     // dispatch-tier-inject T01：variants 提取/白名单过滤改消费同源函数（计算体迁 model-tier.ts，
     // list IO 留本调用方；空集审计 model-tier:variants-empty 由同源函数记账）。
+    // inject 模式仍提取（guard-hook 派发时注入消费同一 variants 面），仅跳过文件写。
     const t1 = Date.now();
     let variantIds: string[] = [];
     try { variantIds = extractVariantIds(await host.models.list(), ref); } catch (e) { swallow(e, "middleware:model-list-variants-fail"); }
@@ -101,7 +103,11 @@ export function createCommandGuard(deps: GuardDeps) {
     const { tiers, unknown } = effectiveTiers(host.options);
     const dir = await resolveProjectDir(st, sid);
     const t2 = Date.now();
-    const rows = await syncTierAgents(dir, ref, variantIds, tiers, fsIo);
+    // opt-agentic（tier-no-project-files）：inject 模式零文件落地（用户需求：项目目录无档位配置）——
+    // 档位由 guard-hook 派发时 args.model 注入承载；"files"（tierAgents:true/"files"）保留旧双通路。
+    const rows = tierMode === "files"
+      ? await syncTierAgents(dir, ref, variantIds, tiers, fsIo)
+      : [];
     const msSync = Date.now() - t2;
     tierProbe(dir, { cmd, slug: st.slug ?? "", msGet, msList, msSync, msTotal: Date.now() - t0,
       wrote: rows.filter((r) => r.startsWith("tier-write")).length });

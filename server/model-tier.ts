@@ -38,6 +38,28 @@ export const TIER_MAP: Record<string, string> = {
 /** 档位管辖角色清单（TIER_MAP 键；middleware 白名单与 ping 展示共用）。 */
 export const TIER_ROLES = Object.keys(TIER_MAP);
 
+// ── opt-agentic（tier-no-project-files）：tierAgents 三态模式（用户需求：档位配置零项目目录落地）──
+// "inject"（新默认，含缺省/"inject-only"/"inject"）：仅派发时 args.model 注入，不写项目级派生文件；
+//   档位视图走 st.reuse.tierBase 活算（rpc-bridge/ping），项目 .opencode/agents/wf/ 不再生成。
+// "files"（或 true，旧默认显式保留）：双通路——syncTierAgents 写项目级派生文件（旧行为）。
+// "off"（false）：关闭档位跟随（旧语义不变）。
+// 默认翻转依据：wf/* 角色仅在 subagent 创建时实例化（leaderGate 硬拒子会话自委派），注入钩子
+// 恰覆盖该时刻——文件通路对程序化派发冗余；诚实边界=注入依赖 hook 链存活（fail-open 静默失败
+// 时该次委派退化会话默认档，ping verified 即时视图可见），且 args.model 生效性注释仍标「待真机
+// 首验」——显式 tierAgents:true 可随时回退文件通路。
+export type TierAgentsMode = "off" | "files" | "inject";
+/**
+ * 解析 tierAgents 三态模式（活读调用方传入的 options；缺省=inject，零项目目录落地）。
+ * @param options 插件 options
+ * @returns "off"（关闭）| "files"（双通路写派生文件）| "inject"（仅派发时注入）
+ */
+export function tierAgentsMode(options: { tierAgents?: boolean | string } | null | undefined): TierAgentsMode {
+  const v = options?.tierAgents;
+  if (v === false) return "off";
+  if (v === true || v === "files") return "files";
+  return "inject";
+}
+
 /** 触发档位校验的命令集（10 个流转命令；status/diagnose/ping/lane/reset/debug 豁免）。 */
 export const TIER_TRIGGERS = new Set([
   "wf:intake", "wf:plan", "wf:review", "wf:test-design", "wf:build",
@@ -62,15 +84,17 @@ export function effectiveTiers(options: { tiers?: Record<string, string> } | nul
 /** 从 models.list 返回形状提取基座模型的 variant id 集合（array/data/models 三形状兼容）。
  * @param ml host.models.list() 原样返回（形状未实证 → 三形状兜底）
  * @param ref 基座模型引用；null/缺 id/providerID → 直接 []（不产生审计噪音）
- * @returns variant id 数组；空集时记 model-tier:variants-empty 审计 */
-export function extractVariantIds(ml: unknown, ref: ModelRef | null | undefined): string[] {
+ * @param opts 可选项
+ * @param opts.auditEmpty false=空集静默（档位视图 5s 轮询消费面防灌环）；缺省 true=空集审计
+ * @returns variant id 数组；空集时按 opts 记/不记 model-tier:variants-empty 审计 */
+export function extractVariantIds(ml: unknown, ref: ModelRef | null | undefined, opts: { auditEmpty?: boolean } = {}): string[] {
   if (!ref?.id || !ref?.providerID) return []; // R3：无效 ref≠variants 空，静默返回不记账
   const m = ml as any;
   const arr: any[] = Array.isArray(m) ? m : (m?.data ?? m?.models ?? []);
   const hit = arr.find((x: any) => x?.id === ref.id && x?.providerID === ref.providerID)
     ?? arr.find((x: any) => x?.id === ref.id);
   const ids = (hit?.variants ?? []).map((v: any) => v?.id).filter(Boolean);
-  if (!ids.length) swallow(new Error("variants empty"), "model-tier:variants-empty");
+  if (!ids.length && opts.auditEmpty !== false) swallow(new Error("variants empty"), "model-tier:variants-empty");
   return ids;
 }
 
@@ -219,6 +243,27 @@ export async function readTierAgents(
       const mm = c.match(/^model: (.+)$/m);
       if (mm) out.push(`${role}=${mm[1].split("/").pop()}`);
     } catch (e) { swallow(e, "model-tier:derived-file-read-fail"); }
+  }
+  return out;
+}
+// opt-agentic（tier-no-project-files）：档位视图活算（inject 模式无派生文件，TUI/ping 展示改走
+// st.reuse.tierBase + models.list 同款口径——与 ping「活算」分支同源，替代 readTierAgents 文件实况）。
+// 静默 variants 提取（auditEmpty:false）：视图每 5s 被 TUI 轮询消费，空集审计会灌爆 swallow 环。
+/**
+ * 档位视图活算：由基座引用 + models.list + 生效映射算 role→variant 视图（无文件 IO）。
+ * @param base 已登记基座引用（st.reuse.tierBase）
+ * @param ml host.models.list() 原样返回
+ * @param options 插件 options（tiers 覆盖）
+ * @returns role→variant 映射（全部角色无可用档 → 空对象）；base 无效 → null
+ */
+export function liveTierVariants(base: ModelRef | null | undefined, ml: unknown, options: { tiers?: Record<string, string> } | null | undefined): Record<string, string> | null {
+  if (!base?.id || !base?.providerID) return null;
+  const variantIds = extractVariantIds(ml, base, { auditEmpty: false });
+  const { tiers } = effectiveTiers(options);
+  const out: Record<string, string> = {};
+  for (const role of TIER_ROLES) {
+    const ref = resolveTierRef(base, variantIds, tiers[role]);
+    if (ref?.variant) out[role] = ref.variant;
   }
   return out;
 }

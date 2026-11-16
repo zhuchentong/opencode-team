@@ -290,3 +290,34 @@ test("T02 variants 空 → skip:no-variant（注入退化，继承基座默认�
 test("T02 ref null → skip:no-variant（leader 会话无 model 不注入）", () => {
   assert.deepEqual(resolveTierInjection({ ...INJ, ref: null }), { action: "skip", reason: "no-variant" });
 });
+
+// ── opt-agentic（tier-no-project-files）：tierAgents 三态模式 + 档位视图活算 ──
+// 用户需求：档位配置零项目目录落地——缺省翻转 inject-only（仅派发时 args.model 注入），
+// "files"/true 保留旧双通路，false 关闭；TUI/ping 档位视图改 tierBase 活算（liveTierVariants）。
+import { tierAgentsMode, liveTierVariants } from "../server/model-tier.ts";
+// clearSwallows/listSwallows 已在文件头第 9 行 import（重复声明即红）
+
+test("tier-no-files：tierAgentsMode 三态解析（缺省=inject 零落地 / true|files / false）", () => {
+  assert.equal(tierAgentsMode(undefined), "inject", "缺省=新默认 inject-only（零项目目录落地）");
+  assert.equal(tierAgentsMode({}), "inject");
+  assert.equal(tierAgentsMode({ tierAgents: "inject-only" }), "inject");
+  assert.equal(tierAgentsMode({ tierAgents: "inject" }), "inject");
+  assert.equal(tierAgentsMode({ tierAgents: true }), "files", "true=旧双通路显式保留");
+  assert.equal(tierAgentsMode({ tierAgents: "files" }), "files");
+  assert.equal(tierAgentsMode({ tierAgents: false }), "off", "false=关闭（旧语义不变）");
+  assert.equal(tierAgentsMode(null), "inject");
+});
+
+test("tier-no-files：liveTierVariants 活算（tierBase+models.list→role→variant；无效 base=null；静默空集）", () => {
+  const base = { providerID: "prov", id: "m1" };
+  const ml = [{ id: "m1", providerID: "prov", variants: [{ id: "low" }, { id: "high" }] }];
+  const view = liveTierVariants(base, ml, { tiers: { "wf/planner": "high", "wf/builder": "low", "wf/learner": "low" } });
+  assert.equal(view["wf/planner"], "high");
+  assert.equal(view["wf/builder"], "low");
+  assert.equal(liveTierVariants(null, ml, {}), null, "无效 base → null");
+  // variants 空集：静默（不灌 swallow 环——TUI 5s 轮询消费面），返回空对象
+  clearSwallows();
+  const empty = liveTierVariants(base, [], {});
+  assert.deepEqual(empty, {}, "空集→空对象");
+  assert.equal(listSwallows().length, 0, "视图路径零审计（auditEmpty:false）");
+});
