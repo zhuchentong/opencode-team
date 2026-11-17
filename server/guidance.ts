@@ -147,6 +147,11 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
   return agents.map((a) => reuseLine(st, a)).filter((x): x is string => x !== null);
 }
 
+// sid-transcribe-fix W3（test_48 探针定论「别名可用而未用」）：委派前置正面清单行——进委派契约主区
+// （模型每次委派必读），非尾部可忽略行（reuseLines 已在场仍 6/6 违反=尾部行遵从失效）。
+// 三选一正面清单+自查动作，禁止负面禁令单独出现（负面禁令对行为冲动弱约束，sid 案例已证）。
+const DELEGATE_SID_LINE = `委派 sessionID 自查（提交 subagent 调用前必过）：sessionID 只允许三值——"auto"（续用该角色登记会话）、"@别名"（@Tnn/@角色）、省略（新建）；传任何 ses_ 开头字符串（含截断如 "ses"）=转录失真，一律改为 "auto"。`;
+
 // ── M16-r34：日常模式指引——忠实用户 5 步习惯，tier 只改委派与否 ──────────────────
 // S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
 // M/L=planner 拆 T<nn> 功能点 + reviewer 独立六维验证 + builder 逐点 TDD + tester 独立核对。
@@ -207,7 +212,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
       S ? `S 级：leader 亲自拟定轻量 plan（需求+方案+验收标准），用 wf_write_artifact(kind=plan) 自写。${SELF_CONTRACT}`
         : `委派 wf/planner：把任务拆成 T<nn> 功能点分节（每点：范围+接口签名+验收标准+验证方式），wf_write_artifact(kind=plan) 自写。${artifactPathLine(st, "plan")}`,
-      ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 baseline.md 全文+ACTIVE.md 相关结论+产物路径+预算，声明子代理禁止全仓扫描。`,
+      ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派契约：prompt 只带 baseline.md 全文+ACTIVE.md 相关结论+产物路径+预算，声明子代理禁止全仓扫描。`,
         `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`]),
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
@@ -220,7 +225,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
         S ? `S 级：leader 按六维（可行性/完整性/正确性/风险/交叉验证/可验证性）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
           : `委派 wf/planner-reviewer 独立六维验证 plan.md（可行性/完整性/正确性/风险/交叉验证/可验证性）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "plan-review")}`,
-        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`,
+        ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`,
           `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`]),
         budgetLine(st, S ? ["plan"] : ["plan-review"]),
       ];
@@ -239,7 +244,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
         `【wf 工作流｜building·日常模式】slug=${s}`,
         S ? `S 级：leader 主树亲自 TDD（先写失败测试再实现），不委派、不开 worktree。${SELF_CONTRACT}`
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
-        ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
+        ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
           // M16-r51：回执上限 2KB→4KB（test_005 实证 2003B 贴线损质），与 CHUNK_KB 分段阈值（2KB=防流中断窗口）解耦——证据细节在 git 历史，不进模型可见面
           `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB：测试命令+红→绿输出摘要+变更文件清单+未验证项+areas 越界声明+commit hash）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。**回执路径=主树绝对路径**（勿让 builder 写 worktree 相对路径——树内 .workflow/ 是 gitignored 副本，清理即丢）。`,
           `lane 登记纪律：放行波次前一次性串行登记该波全部 lane（多 builder 运行期并发 wf:lane set 曾触发 wf.db 写错误）；builder 运行期禁增量登记，补登等该 builder 回执后的空窗。`]),
@@ -259,7 +264,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       `【wf 工作流｜testing·日常模式】slug=${s}`,
       S ? `S 级：leader 跑全量测试自核对，wf_write_artifact(kind=test-report) 自写，首行 **结论**: PASS|FAIL，PASS 附真实证据（命令+输出）。`
         : `委派 wf/tester(mode=verify) 独立核对 → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
-      ...(S ? [] : [WRITE_CONTRACT]),
+      ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE]),
       budgetLine(st, ["test-report"]),
       // intake-discuss-gate T06：意图核对——baseline 是"是否满足需求"的基准，技术绿≠意图达成
       `对照 baseline.md 的 why/成功标准与 anti-goals 核对意图达成——技术能跑但违背意图=FAIL。`,
@@ -277,7 +282,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
           : (serial
             ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」+ lessons 含流程效率观察节：各阶段墙钟自 events 表取）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
             : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`),
-        ...(S ? [] : [WRITE_CONTRACT, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
+        ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
         budgetLine(st, ["lessons"]),
         ...(git ? [git] : []),
       ].join("\n");
@@ -312,7 +317,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `⚠️ 阶段纪律：本阶段只委派 wf/planner；reviewer/tester 属 review 阶段，禁止提前委派（产物错位会重复写、浪费工时，wf_write_artifact 将告警）。`,
       `委派契约：prompt 只带 baseline.md 全文+ACTIVE.md 相关结论+产物路径，声明子代理禁止全仓扫描（只读点名文件），压冷启动耗时。`,
       `并行优先：prompt 须要求 lane 分组表（M/L 必交付，wf:build 硬校验）——先判是否具备并行条件，具备则并行规划（≥2 条互斥 lane），不具备则给串行证据（交叠分析）；禁含串行执行导向（勿写"按串行顺序排列/一次处理一个任务"——那是完整模式口径），任务清单按依赖拓扑序编号即可，执行形态由 lane 表裁决。`,
-      WRITE_CONTRACT,
+      WRITE_CONTRACT, DELEGATE_SID_LINE,
       budgetLine(st, ["plan"]),
       ...(leanLine(st) ? [leanLine(st)] : []),
       `完成 → wf_command(name="wf:review")`,
@@ -327,7 +332,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
         `  b) wf/tester(mode=feasibility，仅产出 test-plan.md：验收用例设计+可测性评审，用 wf_write_artifact(kind=test-plan)，${artifactPathLine(st, "test-plan")}，不写任何代码文件)。`,
         `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`,
         `委派契约：prompt 只带 plan.md 路径与任务行摘录，声明子代理禁止全仓扫描（只读产物点名文件）。`,
-        WRITE_CONTRACT,
+        WRITE_CONTRACT, DELEGATE_SID_LINE,
         budgetLine(st, ["plan-review", "test-plan"]),
         ...(leanLine(st) ? [leanLine(st)] : []),
       ];
@@ -367,7 +372,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       `【wf 工作流｜build_review】slug=${s}`,
       `委派 wf/builder-reviewer（按 T<nn> 查完成度 + 代码质量 + 测试质量）→ wf_write_artifact(kind=build-review)。${artifactPathLine(st, "build-review")}`,
       `分级审查：初检聚焦完成度+关键风险，直接出完整报告；命中升级触发（改动跨 ≥3 模块/触及安全敏感路径/critical-major 无法就地确认/用户要求）才 Full 全量，报告注明触发；r≥2 把上轮 findings 当未验证线索逐条确认，勿重新推导。`,
-      WRITE_CONTRACT,
+      WRITE_CONTRACT, DELEGATE_SID_LINE,
       budgetLine(st, ["build-review"]),
       `有遗漏 → wf_command(name="wf:build") 返工（重派 wf/builder），修完 wf_command(name="wf:reconcile") → name="wf:review-build"；通过 → wf_command(name="wf:test")；超限 → 停下问用户`,
       `轮次：第 ${r.build_review}/${L.build_review} 轮`,
@@ -376,7 +381,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
     case "testing": return [
       `【wf 工作流｜testing】slug=${s}`,
       `委派 wf/tester(mode=verify) → wf_write_artifact(kind=test-report)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "test-report")}`,
-      WRITE_CONTRACT,
+      WRITE_CONTRACT, DELEGATE_SID_LINE,
       budgetLine(st, ["test-report"]),
       // intake-discuss-gate T06：意图核对——baseline 是"是否满足需求"的基准，技术绿≠意图达成
       `对照 baseline.md 的 why/成功标准与 anti-goals 核对意图达成——技术能跑但违背意图=FAIL。`,
@@ -396,7 +401,7 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
         git
           ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
           : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
-        WRITE_CONTRACT,
+        WRITE_CONTRACT, DELEGATE_SID_LINE,
         budgetLine(st, ["lessons"]),
         `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
         ...(git ? [git] : []),
