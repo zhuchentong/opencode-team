@@ -21,6 +21,11 @@ import { TIER_ROLES, effectiveTiers, extractVariantIds, resolveTierInjection, ti
 // 会被五步窗口第 5 步 tester 派发提前消费，致 S1 builder 派发时无探针证据；分键后各角色各取证一次。
 // 模块级 Set + existsSync 双自禁用（仿 subagent-probe 模式）。
 const tierInjectProbed = new Set<string>();
+// sid-transcribe-probe W3：一次性按 role 分键取证（existsSync 按文件自禁——与其它探针同款，
+// 天然按项目隔离；进程级 Set 会在守护宿主不重启时令首个采样项目之外的其它项目永久失明）。
+// correction 时点记录「别名当时是否可解析」：
+// autoWouldResolve/atRoleWouldResolve 均 ok → 别名可用而未用=行为问题 → guidance 委派前置行；
+// 均 fail → 注册时机/机制缺口 → 修登记链路。取证结论回写 docs（勿凭单样本下结论）。
 
 // probe 4：session.get 返回形状摘要（模块级纯函数，避免每次调用重建；供一次性取证）
 const sessionShape = (s: any) => s ? { keys: Object.keys(s), parentID: s.parentID ?? null, hasParentID: "parentID" in s, time: s.time ?? null } : null;
@@ -244,6 +249,23 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         // 形状非法 OR 真前缀截断 OR 近似截断 → 前缀自愈改写分支（GATE_ERR 标记确保穿透 fail-open，S1）。
         // T01：拒绝文案不回显登记 ID（拆「回显→再转录→死循环」燃料）；审计 detail 含 ID 合规（wf.db 不进上下文）。
         logAdd(st, { at: new Date().toISOString(), cmd: "session:correct", tool: toolName, detail: `${target}: ${passed} → ${tracked}`, from: st.phase, to: st.phase, ok: false, note: fuzzy ? "corrected-fuzzy" : "corrected" });
+        // sid-transcribe-probe W3：correction 时点别名可解析性一次性取证（按 role 分键，fail-open）
+        try {
+          const dirP = st.directory ?? await resolveProjectDir?.(st, input?.sessionID);
+          const dbgP = dirP ? `${dirP}/.workflow/_debug` : null;
+          const probeFile = dbgP ? `${dbgP}/sid-alias-probe-${target.replace(/^wf\//, "")}.json` : null;
+          if (dbgP && probeFile && !fs.existsSync(probeFile)) {
+            fs.mkdirSync(dbgP, { recursive: true });
+            const tables = { role: target, roleSessions: st.reuse?.roleSessions, lanes: st.lanes };
+            fs.writeFileSync(probeFile, JSON.stringify({
+              at: new Date().toISOString(),
+              target, passed, fuzzy,
+              passedLen: String(passed ?? "").length, trackedLen: String(tracked ?? "").length,
+              autoWouldResolve: resolveSidAlias(SID_ALIAS_AUTO, tables), // auto 通道：该角色登记反查
+              atRoleWouldResolve: resolveSidAlias(`@${target.replace(/^wf\//, "")}`, { roleSessions: st.reuse?.roleSessions, lanes: st.lanes }), // @role 容错通道
+            }, null, 2));
+          }
+        } catch (e) { swallow(e, "guard-hook:sid-alias-probe-fail"); }
         try { await save(st); } catch (e) { swallow(e, "guard-hook:correct-save-fail"); }
         if (isPrefix) {
           // 存活探针（session.get time.busy/idle）：明确运行中→throw 警示（防静默分叉，不静默改写）；
@@ -337,7 +359,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           if (base && abs.startsWith(`${base}/`) && !isAllowed(abs)) {
             await logBlock(st, toolName, tRaw); // P1：阻断记账，供 /wf:diagnose 取证
             throw new Error(
-              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。${nextHint(st, st.phase)}`
+              `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止经 shell 写入项目内业务文件「${tRaw}」（放行：${allowHint}）。计划/审核产物请写 .workflow/。临时验证脚本与输出请写项目外绝对路径（如 /tmp/xxx），不受本关卡管辖。${nextHint(st, st.phase)}`
             );
           }
         }
@@ -360,7 +382,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           await logBlock(st, String(input?.tool), p); // P1：阻断记账
           throw new Error(
             `${GATE_ERR} 硬关卡：阶段「${st.phase}」禁止修改业务代码 ${p}（放行：${allowHint} 与 *.test/*.spec 文件）。` +
-            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/（产物已原生落盘则不带 content=注册补记账）。${nextHint(st, st.phase)}`
+            `计划/审核产物请用 wf_write_artifact 工具写入 .workflow/（产物已原生落盘则不带 content=注册补记账）。临时验证脚本与输出请写项目外绝对路径（如 /tmp/xxx），不受本关卡管辖。${nextHint(st, st.phase)}`
           );
         }
       }
