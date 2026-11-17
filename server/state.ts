@@ -96,6 +96,8 @@ export interface Store {
   putReport(r: { sessionID: string; text: string; at: string; brief?: string; level?: ReportLevel }): Promise<void>;
   getReport(sessionID: string): Promise<ReportRow | null>;
   dumpStates(): Promise<{ key: string; value: unknown }[]>;
+  /** W6-3（可选）：events 表按 cmd 计数（diagnose 长任务直查；mock/缺省可不带，调用方须判空） */
+  countEvents?(cmd: string): Promise<number>;
   ready: Promise<void>;
   close(): void;
 }
@@ -260,6 +262,8 @@ export function createStore(host: Host): Store {
   // 无误杀论证：intake 落库 slug 恒非空（slugify ‖ st.slug ‖ "untitled"）；拒绝路径无前行不落盘（T02）；
   //   持 phase 的行（如空 slug+phase=intake 的开发态）与空 slug+done（新鲜 done 存量锚）均不满足双空条件，不受影响。
   const qGhost = db.prepare("DELETE FROM tasks WHERE slug = '' AND (phase IS NULL OR phase = '')");
+  // W6-3：events 按 cmd 计数（diagnose 直查，绕 st.log 50 条截断的低估；json_extract 与 wrapper W2 同款）
+  const qEvCount = db.prepare("SELECT COUNT(*) AS n FROM events WHERE json_extract(entry_json,'$.cmd') = ?");
   const qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
   // migrate-meta-fix T01：迁移幂等标记——过滤迁移后 tasks 可能仍为空，原「tasks 空=未迁移」判定会
   // 每次启动重触发；且 done GC 14 天清空 tasks 后重迁移会向无唯一约束的 events 整批重复追加。
@@ -323,17 +327,39 @@ export function createStore(host: Host): Store {
   };
 
   // M10-b：wf/* 子会话经项目反查管辖状态（原项目索引键 IDX 的 SQL 等价：同 project 最近落盘）
+  // W6-0（test_49 复盘）：三级回退 own → projectID → parentID——projectID 身份漂移实证（intake 期
+  //   git init 致 opencode 项目身份切换：任务行锁旧目录身份、子会话继承新 git 仓库身份 → qProj 全
+  //   miss → roleSessions 登记表全程空 + 子会话阶段闸门失明）。守卫次序（核查 P1）：parentID 回退
+  //   仅在 wf/* 非 leader 分支内、守卫之后——普通 agent 子会话（M16-r38 不受管辖）绝不误绑。
+  //   单跳即止：嵌套子代理 parentID 指向另一 wf/* 子会话 → load miss → null（孙代不可达，无死循环）。
+  //   备忘录（核查 P2）：childSid→parentSid 有界 Map，命中即短路，消除长任务 sessions.get 放大
+  //   （超限整表清空=退化重算，正确性不依赖缓存）。
+  const parentMemo = new Map<string, string>();
+  const PARENT_MEMO_CAP = 512;
   const resolveState = async (sessionID: string, agent?: string): Promise<WfState | null> => {
     const own = await load(sessionID);
     if (own) return own;
     const a = String(agent ?? "");
     // 仅 wf/* agent 与 leader（workflow，兼容 wf/leader）受项目管辖；普通会话不受影响（M16-r38）
     if (!a.startsWith("wf/") && !isLeader(a)) return null;
+    const sidS = String(sessionID ?? "");
+    const memoSid = parentMemo.get(sidS);
+    if (memoSid) return load(memoSid);
     try {
       const s = await host.sessions.get({ sessionID });
       const pid = s?.projectID;
-      if (!pid) return null;
-      return parse(qProj.get(String(pid), String(sessionID))) ?? null;
+      if (pid) {
+        const hit = parse(qProj.get(String(pid), sidS));
+        if (hit) return hit;
+      }
+      // W6-0：projectID 反查 miss（身份漂移/无 projectID）→ parentID 单跳反查 leader 任务行
+      const parentId = s?.parentID ?? null;
+      if (!parentId || String(parentId) === sidS) return null;
+      const parent = await load(String(parentId));
+      if (!parent) return null;
+      if (parentMemo.size >= PARENT_MEMO_CAP) parentMemo.clear();
+      parentMemo.set(sidS, String(parentId));
+      return parent;
     } catch { return null; }
   };
 
@@ -469,6 +495,7 @@ export function createStore(host: Host): Store {
   return {
     load, save, removeState, resolveState, resolveProjectDir, scanStates,
     putReport, getReport, dumpStates, ready,
+    countEvents: async (cmd: string) => { try { return Number(qEvCount.get(String(cmd))?.n ?? 0); } catch { return 0; } },
     close: () => { try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } },
   };
 }

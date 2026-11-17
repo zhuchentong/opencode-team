@@ -20,6 +20,7 @@ export interface DiagnoseFacts {
   swallows?: SwallowEntry[]; // T01：静默失败环形采样（缺省/空 → 摘要节零行，存量输出逐字不变）
   orphanLines?: string[]; // r54 批次 B：孤儿产物目录告警行（orphanArtifactLines 产出；缺省/空=零新增行）
   slugDupes?: string[]; // headless-orch M2：同 slug 多活跃会话告警行（commands 侧 dumpStates 采集；缺省/空=零新增行）
+  normalizeCount?: number | null; // W6-3（test_49 复盘）：残渣归一计数（events 表直查，绕 st.log 50 条截断；null=store 不支持）
 }
 
 // ── r54 批次 B（test_008 实证）：孤儿产物对账——.workflow 子目录近期有产物但 tasks 无对应
@@ -83,6 +84,10 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
       "gate-rejected": "关卡前置产物未产出（test-plan / test-report）",
       "limit-exceeded": "循环已达上限——按流程应停下上报用户",
       "intake-guard": "已有活动任务被守卫拦截（用 /wf:reset 或 /wf:intake ! <slug>）",
+      "no-registry-stripped": "残渣无登记可续 → 已剥离按新建（登记缺口可诊断，W6 值盲归一）",
+      "lane-context-reject": "残渣在 lane 语境无法续接 → 已拒绝（请 @Tnn 显式指定）",
+      "untracked-passthrough": "合法形状但非登记会话 → 放行宿主归属校验",
+      "alias-rejected": "别名解析失败 → 已拒绝（按可用候选改写或省略新建）",
     } as Record<string, string>)[note] || "见日志详情";
     out.push(`  ✗ ${note} ×${n}：${hint}`);
     if (bySub[note]) for (const [s, k] of Object.entries(bySub[note])) out.push(`      └ ${s} ×${k}`);
@@ -93,6 +98,13 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
   const fixes = log.filter((e) => e?.cmd === "session:correct");
   const fuzzyN = fixes.filter((e) => e.note === "corrected-fuzzy").length;
   if (fixes.length) out.push(`  🔁 续接自愈（session:correct）×${fixes.length}${fuzzyN ? `（其中近似匹配 ${fuzzyN}）` : ""}——续接请改用 ${SID_ALIAS_USAGE}，勿逐字复述 ID`);
+  // W6-3（test_49 复盘）：残渣值盲归一计数——st.log 50 条截断会低估长任务 → events 直查优先。
+  //   持续偏高=转录链路异常（宿主/模型序列化层），机制已兜底但应触发上游排查（HOST-CONTRACT W6）。
+  const normLog = log.filter((e) => e?.cmd === "session:normalize");
+  const normN = facts.normalizeCount ?? normLog.length;
+  if (normN) out.push(`  ♻️ 残渣归一（session:normalize）×${normN}${normLog.some((e) => e.note === "lane-context-reject") ? "（含 lane 语境拒绝）" : ""}——转录残渣已被机械归一；持续偏高请排查宿主转录链路`);
+  const untrackedEvs = log.filter((e) => e?.cmd === "session:untracked");
+  if (untrackedEvs.length) out.push(`  ⚠️ 未登记续接放行（session:untracked）×${untrackedEvs.length}——合法形状非登记会话，宿主归属校验兜底`);
 
   // 2) 轮次余量（facts.limits 支持实例覆盖）
   for (const [k, limit] of Object.entries({ ...LIMITS, ...facts.limits })) {

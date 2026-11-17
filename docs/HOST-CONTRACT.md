@@ -107,3 +107,40 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   联查 `.workflow/_debug/question-probe.json`（input 形状）与 `sqlite3 .workflow/wf.db "SELECT entry_json
   FROM events WHERE note LIKE 'question-observed%'"`（auto 标记）；驱动闭环
   `scripts/wf-headless.sh <项目目录> "<初始提示>"`（done=退出 0，halt=非 0 且输出末事件）。
+
+## W6 sid 残渣值盲归一 + 登记生产端固化（test_49 复盘，2026-11-17）
+
+> 依据：test_49 svlint M 级无头任务复盘——6 次 `Subagent session not found: ses`、roleSessions
+> 全程空、`session:correct`=0（审计假象）。三层根因与对策如下，全部 server 侧热载生效。
+
+- **三层根因（由表及里）**：① 模型→工具参数序列化链路转录失真（leader 逐字复述纪律后仍发 `"ses"`，
+  文本约束 6/6 无效——**确定性不变量不可依赖文本层，skill 只承担方法论缺陷，此为本插件判定规则的
+  第二次实证**）；② guard-hook 无登记路径静默放行（`if (!tracked) return` 零记账——审计盲区）；
+  ③ **projectID 身份漂移**：intake 期 leader `git init` → opencode 项目身份切换（任务行锁旧目录身份
+  `319eaa…`、子会话继承 git 仓库身份 `6b0da0…`）→ `resolveState` qProj 反查对全部子会话 miss →
+  登记双通道与子会话阶段闸门**双双失明**（对照 test_46/48：身份同形同值故正常）。
+- **W6-0 resolveState 三级回退**（state.ts）：own → projectID → **parentID 单跳反查**（sessions.get
+  的 parentID → load(leader)）。守卫次序锁死：回退仅在 wf/* 非 leader 分支内（普通会话不受管辖，
+  M16-r38 语义不变）；单跳即止——嵌套子代理 parentID 指向另一 wf/* 子会话 → load miss → null
+  （**孙代不可达=已知边界**，无死循环无误绑）；childSid→parentSid 有界备忘录（512，超限清空=退化
+  重算，正确性不依赖缓存）。漂移下登记、子会话闸门、一切子侧机制随之恢复可达。
+- **W6-1 通用登记段**（guard-hook execute.before 顶层，fail-open）：任意工具调用，`ses_` 形状 +
+  resolveState 命中 + wf/* 非 leader → trackRoleSession（变化才 save）。登记=「子会话出现」的机械
+  后果，**不再依赖其工具选择**（r40 双通道保留为冗余防线）；`input.agent` 缺失经 sessions.get 回读
+  兜底（session_v2 自带 agent 列）。一次性取证 `.workflow/_debug/agent-key-probe.json`（agent 来源）。
+- **W6-2 残渣值盲归一**（subagent 分支）：残渣（非 `ses_` 形状）无登记且 lanes 空 → **delete
+  args.sessionID 按新建处理** + 审计 `session:normalize`(no-registry-stripped)；lanes 非空 →
+  loud-fail 指路 `@Tnn`（lane-context-reject，防 lane 纪律外造会话）。残渣对模型失去信息意义，
+  正确性由服务端机械保证（模型可见面只剩 auto/@别名/省略三值意图）。一次性取证
+  `.workflow/_debug/exec-strip-probe.json`——**删键≈省略的宿主尊重性零真机证据，探针取证前不宣称
+  此路径已修复**（失败方向=仍报 not found，不劣于现状）。有登记残渣仍走前缀自愈（test_48 已证路径
+  不变）；auto 无登记仍 loud-fail（勿静默新建原则保留——W6-2 剥离的适用前提是「无表可续+已记账」）。
+- **W6-3 审计盲区消除**：无登记路径全部记账——`session:normalize`（剥离/拒绝）、
+  `session:untracked`（合法形状非登记非 lane 放行宿主归属校验——**多 lane 既有决策，非缺陷**，仅
+  补审计可见性；lane 登记会话续接免记账）。diagnose：hint map 补 4 条中文提示；normalize 计数经
+  `Store.countEvents`（可选新增，events 表直查绕 st.log 50 条截断）优先呈现，**持续偏高=宿主/模型
+  转录链路异常的可诊断指标**（复合风险：登记哑火×残渣剥离=续用意图系统性丢失，凭此计数暴露）。
+- **验收口径（test_50 起每轮复核）**：`not found: ses`=0；normalize/untracked 只许「有记账、有
+  归一/放行」成对出现；r2 续接时点登记表非空（含身份漂移场景）；双探针落盘且形状符合预期。
+- **处置指引（身份漂移预防）**：新项目 intake 前置 `git init`（需求基线提交后再开任务），或依赖
+  W6-0 parentID 链兜底；存量漂移任务无需人工修复（回退自动覆盖）。

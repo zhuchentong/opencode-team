@@ -62,6 +62,7 @@ export interface CommandDeps {
   removeState: Store["removeState"];
   putReport: Store["putReport"];
   dumpStates: Store["dumpStates"];
+  countEvents?: Store["countEvents"]; // W6-3：可选（mock/旧 store 缺省 → diagnose 回退 st.log 计数）
   debugDirFor: Observer["debugDirFor"];
   probeOnce: Observer["probeOnce"];
   LIMS: Record<string, number>;
@@ -102,7 +103,7 @@ const roleGuardText = (opt: any) => {
  * @returns dispose 句柄（注销命令注册与全部 hook；逐项 try/catch fail-soft） */
 export async function registerCommands(host: Host, deps: CommandDeps): Promise<{ dispose: () => void }> {
   const { load, save, resolveProjectDir, debugDirFor, LIMS, probeOnce, emitUpdated, emitReport, WfDef, rpcErr,
-    putReport, removeState, dumpStates, bus } = deps;
+    putReport, removeState, dumpStates, countEvents, bus } = deps;
 
   // R2 T2.4：transition/inject 编排提取至 transition.ts（createTransition 显式 deps 注入，
   // 行为逐字节=旧闭包）；R2 T2.5：命令中间件链工厂（leaderGate×tierSync，顺序单点 CMD_MW_ORDER）。
@@ -276,7 +277,10 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           slugDupes = [...actives].filter(([, s]) => s.size > 1)
             .map(([slug, s]) => `⚠️ slug=${slug} 有 ${s.size} 个活跃会话（索引兜底缺位，请手工 /wf:reset 清理对端后重建索引）`);
         } catch (e) { swallow(e, "commands:diagnose-slug-dupe-fail"); }
-        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows(), orphanLines, slugDupes });
+        // W6-3：normalize 计数 events 表直查（绕 st.log 截断；store 不支持/mock 缺省 → null=回退 st.log）
+        let normalizeCount: number | null = null;
+        try { normalizeCount = typeof countEvents === "function" ? await countEvents("session:normalize") : null; } catch (e) { swallow(e, "commands:diagnose-count-events-fail"); normalizeCount = null; }
+        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows(), orphanLines, slugDupes, normalizeCount });
       },
     });
     add({

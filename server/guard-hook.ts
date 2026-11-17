@@ -54,6 +54,8 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
   let rewriteProbed = false; // M16-r45：别名改写生效性取证一次性开关（真机核对 exec-rewrite-probe.json）
   // M16-r44：question 入参形状一次性探针（方案确认记账的形状取证；同 subagent-probe 模式）
   let questionProbed = false;
+  let agentKeyProbed = false; // W6-1：子会话工具调用 agent 来源取证一次性开关
+  let stripProbed = false; // W6-2：删键≈省略 宿主尊重性取证一次性开关
   // confirm-sentinel M3 v2：确认卡审计环境信号——守护宿主（opencode serve --service）不继承
   // wrapper env，WF_HEADLESS 对插件不可达（test_45 实证，v2 env 路径已删）。改判项目哨兵文件
   // <st.directory>/.workflow/.wf-headless：存在 + mtime 24h 内（防 kill -9 残留）+ 内容 sid 全等
@@ -86,6 +88,44 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
       // M10-c v2：shell 也经 tool hook 门控（实测 ctx.shell.hook 的 input 仅 {command,cwd,timeout,shell,env}，
       // 无 sessionID/agent 无法按会话管辖；tool hook 对 tool=="shell" 携带 input.input.command + 会话身份）
       const toolName = String(input?.tool);
+      // ── W6-1（test_49 复盘）：子会话身份通用登记——生产端固化 ──
+      // 登记必须是「子会话出现」的机械后果，不得依赖其工具选择：本轮 planner/tester/builder 全部
+      //   绕过 wf_write_artifact 与 EDIT_TOOLS（直接落盘/工作树内写码）→ roleSessions 全程空 →
+      //   前缀自愈/别名解析/纠错记账全部哑火，"ses" 残渣直通宿主报错 ×6。
+      // 任意工具调用：ses_ 形状 + resolveState 命中（W6-0 parentID 回退免疫 projectID 身份漂移）
+      //   + wf/* 非 leader → trackRoleSession，变化才 save（无抖动）。input.agent 缺失时经
+      //   sessions.get 回读兜底（session_v2 自带 agent 列）——哑火双保险的最后一环。
+      // 原 EDIT_TOOLS 登记分支保留为冗余防线；整段 fail-open 绝不阻断。
+      if (/^ses_[A-Za-z0-9]+$/.test(String(input?.sessionID ?? ""))) {
+        try {
+          const childSid = String(input?.sessionID ?? "");
+          let regAgent: unknown = input?.agent;
+          if (regAgent == null || String(regAgent) === "") {
+            try { regAgent = (await host.sessions.get({ sessionID: childSid }))?.agent ?? null; } catch (e) { swallow(e, "guard-hook:agent-key-fallback-fail"); }
+          }
+          const regSt = await resolveState(childSid, regAgent);
+          if (regSt && trackRoleSession(regSt, regAgent, childSid)) {
+            try { await save(regSt); } catch (e) { swallow(e, "guard-hook:universal-reg-save-fail"); }
+          }
+          // 一次性形状取证：子会话工具调用 input.agent 的到达性/兜底路径（评审项#1 唯一未证形态）
+          if (!agentKeyProbed) {
+            agentKeyProbed = true;
+            try {
+              let dir = process.cwd();
+              try { const s0 = await host.sessions.get({ sessionID: childSid }); if (s0?.location?.directory) dir = String(s0.location.directory); } catch (e) { swallow(e, "guard-hook:agent-key-dir-probe-fail"); }
+              const dbg = `${dir}/.workflow/_debug`;
+              if (!fs.existsSync(`${dbg}/agent-key-probe.json`)) {
+                fs.mkdirSync(dbg, { recursive: true });
+                fs.writeFileSync(`${dbg}/agent-key-probe.json`, JSON.stringify({
+                  at: new Date().toISOString(), tool: toolName,
+                  hadInputAgent: input?.agent != null, resolvedAgent: regAgent != null ? String(regAgent) : null,
+                  note: "子会话工具调用 agent 来源取证（零回显：不落 sessionID）",
+                }, null, 2));
+              }
+            } catch (e) { swallow(e, "guard-hook:agent-key-probe-fail"); }
+          }
+        } catch (e) { swallow(e, "guard-hook:universal-reg-fail"); }
+      }
       // ── M16-r41 B 层：subagent 续接自愈守卫（leader 专属；必须置于 edit/shell 过滤之前）──
       // 根因：转录/复述长 ses_ ID 本身即失真源，回显登记 ID 又会诱导再转录→死循环。A 层已自动登记
       //   roleSessions；此处（fix-sid-truncation-echo-loop T01）对截断前缀**就地改写自愈**（零回显），
@@ -240,9 +280,45 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         }
 
         const tracked = st.reuse?.roleSessions?.[target]?.sessionID;
-        if (!tracked) return; // 该角色无登记，不干预
-        if (passed === tracked) return; // ID 正确，放行
         const shapeOk = /^ses_[A-Za-z0-9]+$/.test(passed);
+        if (!tracked) {
+          // W6-3（test_49 复盘）：原 `if (!tracked) return;` 是审计盲区——静默放行致 session:correct=0
+          //   假象，登记缺口被 6 次宿主报错掩盖。任何经过此处的委派都必须留痕。
+          const inLane = Object.values(st.lanes ?? {}).some((v) => (v as any)?.sessionID === passed);
+          if (inLane) return; // lane 登记会话续接：合法路径免记账（lanes 表自证归属）
+          if (!shapeOk) {
+            // W6-2 值盲归一：残渣（转录产物）无表可续。lanes 空 → 剥离按新建（无表可续时新建是唯一
+            //   可满足续用语义的出口，且已记账非静默——收窄的是 L211 loud-fail 的适用前提，非原则）；
+            //   lanes 非空 → loud-fail 指路 @Tnn（防在 lane 纪律外造会话，评审 R2）。
+            const lanesActive = Object.keys(st.lanes ?? {}).length > 0;
+            if (lanesActive) {
+              logAdd(st, { at: new Date().toISOString(), cmd: "session:normalize", tool: toolName, detail: `${target}: 残渣无法续接（lane 语境）`, from: st.phase, to: st.phase, ok: false, note: "lane-context-reject" });
+              try { await save(st); } catch (e) { swallow(e, "guard-hook:normalize-save-fail"); }
+              throw new Error(`${GATE_ERR} 委派 sessionID「${passed}」在 lane 语境无法解析：请改用 @Tnn 显式指定 lane，或省略 sessionID 新建（勿凭记忆复述长 ID）。`);
+            }
+            logAdd(st, { at: new Date().toISOString(), cmd: "session:normalize", tool: toolName, detail: `${target}: 残渣无登记可续 → 剥离新建`, from: st.phase, to: st.phase, ok: false, note: "no-registry-stripped" });
+            try { await save(st); } catch (e) { swallow(e, "guard-hook:normalize-save-fail"); }
+            // exec-strip-probe：一次性取证宿主对「删键≈省略」的尊重（零真机证据前不宣称此路径已修复；
+            //   失败方向=仍报 not found，不劣于现状）
+            if (!stripProbed) {
+              stripProbed = true;
+              try {
+                const dirS = st.directory ?? await resolveProjectDir?.(st, input?.sessionID);
+                if (dirS && !fs.existsSync(`${dirS}/.workflow/_debug/exec-strip-probe.json`)) {
+                  fs.mkdirSync(`${dirS}/.workflow/_debug`, { recursive: true });
+                  fs.writeFileSync(`${dirS}/.workflow/_debug/exec-strip-probe.json`, JSON.stringify({ at: new Date().toISOString(), tool: toolName, target, passedLen: passed.length, note: "剥离 args.sessionID 后宿主行为取证（期望=按省略新建处理）" }, null, 2));
+                }
+              } catch (e) { swallow(e, "guard-hook:strip-probe-fail"); }
+            }
+            delete args.sessionID; // 值盲归一：残渣对模型失去信息意义，正确性由服务端机械保证
+            return;
+          }
+          // 合法形状但非登记非 lane（幻觉/他任务会话）→ 放行宿主归属校验（多 lane 既有决策，非缺陷）
+          logAdd(st, { at: new Date().toISOString(), cmd: "session:untracked", tool: toolName, detail: `${target}: 合法形状非登记 → 放行宿主归属校验`, from: st.phase, to: st.phase, ok: false, note: "untracked-passthrough" });
+          try { await save(st); } catch (e) { swallow(e, "guard-hook:untracked-save-fail"); }
+          return;
+        }
+        if (passed === tracked) return; // ID 正确，放行
         const isPrefix = tracked.startsWith(passed); // passed≠tracked 且非空 → startsWith 即真前缀
         const fuzzy = shapeOk && !isPrefix && isNearTruncation(passed, tracked); // M16-r45：中间/尾部错位复述
         if (shapeOk && !isPrefix && !fuzzy) return; // 全形状非前缀非近似→宿主归属校验（多 lane/幻觉兜底）
