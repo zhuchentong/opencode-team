@@ -80,14 +80,21 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
 
 - **必带 `--agent workflow`**：宿主默认 agent=build，不带旗标 → leader 闸 ❌ 拒（agent-rejected 审计在案）。
   `scripts/wf-headless.sh` 内建该旗标，机制性消除误启；`--model` 的 provider 入口前检（配置/auth 均无则拒跑）。
-- **子代理 depth=1 不可用**：非交互 run 无宿主 subagent 能力 → leader 单会话自演全角色（test_44 实证
-  委派 0 次）。**lane 并行 / tier / worktree 架构不被无头模式覆盖**——架构层验收必须 GUI 任务回放。
+- **子代理可用性随宿主版本变化**：test_44 实证 depth=1 无宿主 subagent 能力（leader 单会话自演全角色、
+  委派 0 次）；**test_45（2026-11-17）实证 5 角色委派全部真实生效**（planner/reviewer/builder/tester/learner
+  各自独立会话，tier-inject-skip×5 + deleg:observe×5 事件在案）→ 无头模式已覆盖 lane/subagent/判据链路；
+  tier 档位注入在无变体模型下静默旁路（no-variant skip，行为正确）。
 - **question 确认卡**：execute.before 对 question 照常触发、input 形状与 GUI 相同（生产取证
   `.workflow/_debug/question-probe.json` + wf.db `question-observed` 事件）；非交互取消/自动裁定发生在
-  hook 返回之后，插件不可观测。M3 环境信号：wrapper 设 `WF_HEADLESS=1` → 确认卡审计 note
-  追加 `auto=non-interactive`（区分用户确认 vs 自动裁定）；GUI 不设 env，note 逐字不变。
-  可达性=同进程 env 继承（生产实证：WF_DEBUG 门控的 cmd-report.jsonl 有真实输出）；env 不可达时
-  标记退化为 GUI 同形，无误标风险。
+  hook 返回之后，插件不可观测。**M3 环境信号（confirm-sentinel v2，2026-11-17 修订）**：守护宿主
+  （`opencode serve --service`）不继承 wrapper env——`WF_HEADLESS=1` 对插件不可达（test_45 实证，
+  PID 32448 environ 无该变量，v2 env 路径已删）。改判**项目哨兵文件** `<项目>/.workflow/.wf-headless`：
+  wrapper 写入（初值 `pending:<epoch>`，反查到会话 id 后定稿为 sid，每迭代 touch，EXIT/INT/TERM 三
+  trap 兜底清理）→ guard-hook confirmNote 判「文件存在 + mtime 24h 内 + 内容 sid 全等或 `pending:`
+  前缀」→ note 追加 `auto=non-interactive`；GUI（无哨兵）note 逐字不变，读取异常向 GUI 语义保守失败。
+  **已知边界①**：`pending:` 窗口（首启 run 期间）内同项目的 GUI 并发会话出卡也会被标记 auto（误标
+  窗口与 selfmod 跨任务告警场景同阶，sid 定稿后即收窄为全等判定，接受并文档化）。
+  **已知边界②**：wrapper 被 kill -9 时 trap 不执行 → 哨兵残留，靠 24h mtime 窗口过期兜底。
 - **9 个托管 skill 域门在无头模式的触发情况未验证**（test_44 仅见 5 个触发横幅；
   wf-batched-execution/wf-worktrees/wf-codemod 未见——leader 自演无 builder）→
   **无头模式不作为 skill 触发的验收环境**；skill 触发验收走 GUI 任务回放清单。

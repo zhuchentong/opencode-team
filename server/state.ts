@@ -7,11 +7,12 @@
 //   events   — append-only 流转流水（save 时按 st.log 增量尾追）。
 //   reports  — 命令输出槽（替代旧 storage 键 wf-workflow/report/<sid>；TUI 轮询 state.lastReport 主通道）。
 // resolveState：wf/* 子会话经 project_id 列反查管辖状态（替代旧项目索引键）。
-// 一次性迁移：首次初始化且 tasks 为空时，从旧 ctx.storage 行导入（旧键保留不删，作备份）。
+// 一次性迁移：meta.migrated 未置位且 tasks 为空时，从旧 ctx.storage 行导入——仅导入 directory 与
+// 本项目一致的行（项目维度过滤，migrate-meta-fix T02；旧键保留不删，作备份）。
 // 原则：本文件只放与持久化/session 相关的存取逻辑；纯流转校验见 lib.ts，组装接线见 index.ts。
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { type FlowLogEntry, type ReportLevel, type WfState, isLeader, normalizeState, DAY_MS } from "./lib.ts";
 import { type Host } from "./host.ts"; // T03：createStore 收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
@@ -177,6 +178,10 @@ CREATE TABLE IF NOT EXISTS reports (
   brief TEXT,
   level TEXT
 );
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `;
 
 // 行→快照解析（模块级纯函数：只读 row.state_json，不依赖 createStore 闭包；lint function-scoping 上提）
@@ -256,6 +261,11 @@ export function createStore(host: Host): Store {
   //   持 phase 的行（如空 slug+phase=intake 的开发态）与空 slug+done（新鲜 done 存量锚）均不满足双空条件，不受影响。
   const qGhost = db.prepare("DELETE FROM tasks WHERE slug = '' AND (phase IS NULL OR phase = '')");
   const qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
+  // migrate-meta-fix T01：迁移幂等标记——过滤迁移后 tasks 可能仍为空，原「tasks 空=未迁移」判定会
+  // 每次启动重触发；且 done GC 14 天清空 tasks 后重迁移会向无唯一约束的 events 整批重复追加。
+  // meta.migrated=1 显式收口（迁移完成即写，含零导入）。
+  const qMetaGet = db.prepare("SELECT value FROM meta WHERE key = ?");
+  const qMetaSet = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
 
   const load = async (sessionID: string): Promise<WfState | null> => {
     try { return parse(qGet.get(String(sessionID ?? ""))) ?? null; } catch { return null; }
@@ -396,15 +406,24 @@ export function createStore(host: Host): Store {
     } catch { return []; }
   };
 
-  // 一次性迁移：tasks 为空且旧 ctx.storage 行存在 → 导入（updatedAt 原样保留，不重置 GC 时钟；
-  // 旧键保留不删作备份）。失败按空库处理（新开始，不阻塞启动）。
+  // 一次性迁移：meta.migrated 未置位且 tasks 为空时，从旧 ctx.storage 行导入（旧键保留不删作备份）。
+  // migrate-meta-fix T02：项目维度过滤（test_45 双重复现：全局 storage.scan 无项目维度，新项目库被
+  // 灌入外项目行）——directory 是唯一权威维度（csvkit 行 projectID="global" 但 directory 正确，
+  // projectID 不可信，勿做 fallback）；无 directory 行跳过+记账（scanStates A6 下本就项目不可见，
+  // 与现有读语义一致）。双侧 path.resolve 纯串归一（与 A6 先例同款，勿引 realpathSync）。
+  // 失败按空库处理（新开始，不阻塞启动）。
   const ready = (async () => {
     try {
+      // 幂等收口：迁移完成即置 meta.migrated=1（含零导入），此后永不再触发——
+      // 防过滤后空库反复扫描 + 防 done GC 清空 tasks 后 events 整批重复追加（events 无唯一约束）。
+      if (String(qMetaGet.get("migrated")?.value ?? "") === "1") return;
+      const storeDir = resolve(dir);
       const n = Number(qCount.get()?.n ?? 0);
-      if (n > 0) return;
+      if (n > 0) { qMetaSet.run("migrated", "1"); return; } // 既有新形库：直接收口，不再迁移
       const res = await host.storage.scan({ prefix: STATE_PREFIX });
-      if (res === undefined) return; // T03：缺失信号=旧 !ctx?.storage?.scan 分支（跳过迁移）
+      if (res === undefined) { qMetaSet.run("migrated", "1"); return; } // T03：缺失信号=旧 !ctx?.storage?.scan 分支
       const entries = Array.isArray(res) ? res : (res?.entries ?? []);
+      const importedSids = new Set<string>();
       for (const e of entries) {
         const k = e?.key ?? e?.[0];
         let v = e?.value ?? e?.[1];
@@ -412,6 +431,10 @@ export function createStore(host: Host): Store {
         if (!ks.startsWith(STATE_PREFIX)) continue;
         if (typeof v === "string") { try { v = JSON.parse(v); } catch { continue; } }
         if (!v || typeof v !== "object") continue;
+        // 项目归属判定：directory 缺失=归属不可证 → 跳过并记账（fail-open 可观测）
+        const vDir = v.directory != null ? String(v.directory).trim() : "";
+        if (!vDir) { swallow(new Error(`skip-no-dir: ${ks}`), "state:migrate-skip-no-dir"); continue; }
+        if (resolve(vDir) !== storeDir) continue; // 外项目行：跳过（旧键保留 storage 作备份）
         const sid = String(v.sessionID ?? ks.slice(STATE_PREFIX.length));
         if (!sid) continue;
         v.sessionID = sid;
@@ -422,6 +445,7 @@ export function createStore(host: Host): Store {
           v.projectID != null ? String(v.projectID) : null,
           v.directory != null ? String(v.directory) : null,
           isActive, 1, v.updatedAt ?? null, JSON.stringify(v));
+        importedSids.add(sid);
         for (const le of (Array.isArray(v.log) ? v.log : [])) qEv.run(sid, String(le?.at ?? v.updatedAt ?? ""), JSON.stringify(le ?? {}));
       }
       const rr = await host.storage.scan({ prefix: REPORT_PREFIX });
@@ -433,9 +457,12 @@ export function createStore(host: Host): Store {
         if (!ks.startsWith(REPORT_PREFIX)) continue;
         if (typeof v === "string") { try { v = JSON.parse(v); } catch { continue; } }
         if (v && typeof v === "object" && v.text != null) {
-          qRep.run(String(v.sessionID ?? ks.slice(REPORT_PREFIX.length)), String(v.text), v.at ? String(v.at) : null, null, null);
+          const sid = String(v.sessionID ?? ks.slice(REPORT_PREFIX.length));
+          if (!importedSids.has(sid)) continue; // 报告仅随已导入任务行（同源过滤）
+          qRep.run(sid, String(v.text), v.at ? String(v.at) : null, null, null);
         }
       }
+      qMetaSet.run("migrated", "1");
     } catch (e) { swallow(e, "state:storage-migrate-fail"); }
   })();
 

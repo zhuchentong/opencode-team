@@ -10,6 +10,7 @@
 // P4 公告（goopspec blocked-append）：拒绝消息自带当前阶段的下一步命令名（NEXT 同源），
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
 import * as fs from "node:fs";
+import { join } from "node:path";
 import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, profileOf, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
 import { logAdd } from "./state.ts";
 import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
@@ -48,10 +49,26 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
   let rewriteProbed = false; // M16-r45：别名改写生效性取证一次性开关（真机核对 exec-rewrite-probe.json）
   // M16-r44：question 入参形状一次性探针（方案确认记账的形状取证；同 subagent-probe 模式）
   let questionProbed = false;
-  // headless-orch M3：确认卡审计环境信号——非交互 run（wrapper 设 WF_HEADLESS=1，同进程 env 可达，
-  // 探针结论见 docs/OPT-plan-headless-orchestration.md §二 M3）出卡记账追加 auto=non-interactive，
-  // 区分「用户确认」与「宿主自动裁定」；GUI（env 未设）note 零改动——存量锚按未设路径逐字不变。
-  const confirmNote = (): string => (process.env.WF_HEADLESS === "1" ? "question-observed:auto=non-interactive" : "question-observed");
+  // confirm-sentinel M3 v2：确认卡审计环境信号——守护宿主（opencode serve --service）不继承
+  // wrapper env，WF_HEADLESS 对插件不可达（test_45 实证，v2 env 路径已删）。改判项目哨兵文件
+  // <st.directory>/.workflow/.wf-headless：存在 + mtime 24h 内（防 kill -9 残留）+ 内容 sid 全等
+  // 或 "pending:" 前缀（首启未定稿窗口——intake 卡恰出在此阶段，评审 BLOCKER b，照标）→ 追加
+  // auto=non-interactive，区分「用户确认」与「宿主自动裁定」；GUI（无哨兵文件）note 逐字不变，
+  // 存量锚按未标记路径原样保留。任何读取异常均向 GUI 语义保守失败（不标记）。
+  const HEADLESS_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const confirmNote = (st: any, sessionID?: unknown): string => {
+    try {
+      const dir = st?.directory != null ? String(st.directory).trim() : "";
+      if (!dir) return "question-observed";
+      const sentinel = join(dir, ".workflow", ".wf-headless");
+      if (!fs.existsSync(sentinel)) return "question-observed";
+      if (Date.now() - fs.statSync(sentinel).mtimeMs > HEADLESS_WINDOW_MS) return "question-observed";
+      const content = fs.readFileSync(sentinel, "utf8").trim();
+      if (content.startsWith("pending:")) return "question-observed:auto=non-interactive";
+      if (String(sessionID ?? "") && content === String(sessionID)) return "question-observed:auto=non-interactive";
+      return "question-observed"; // sid 不匹配=同项目 GUI 并发会话（哨兵归属别的无头会话）
+    } catch { return "question-observed"; }
+  };
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
   return host.tools.hook("execute.before", async (input: any, output: any) => {
@@ -282,7 +299,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           if (!confirmedI) return; // 无锚定标签的澄清问不记账
           if (stC.verdicts?.intakeConfirmedAt) return; // 已记账不重复 save（防抖动，幂等）
           stC.verdicts = { ...stC.verdicts, intakeConfirmedAt: new Date().toISOString() };
-          logAdd(stC, { at: stC.verdicts.intakeConfirmedAt, cmd: "intake:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote() });
+          logAdd(stC, { at: stC.verdicts.intakeConfirmedAt, cmd: "intake:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote(stC, input?.sessionID) });
           try { await save(stC); } catch (e) { swallow(e, "guard-hook:intake-confirm-save-fail"); }
           return; // 评审 N4：记账后 return（与 review 分支结构对称）
         }
@@ -294,7 +311,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         if (!approvedC) return; // 无批准类选项的澄清问不记账
         if (stC.verdicts?.confirmedAt) return; // 已记账不重复 save（防抖动）
         stC.verdicts = { ...stC.verdicts, confirmedAt: new Date().toISOString() }; // R3 T3.1 子步 B
-        logAdd(stC, { at: stC.verdicts.confirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote() });
+        logAdd(stC, { at: stC.verdicts.confirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote(stC, input?.sessionID) });
         try { await save(stC); } catch (e) { swallow(e, "guard-hook:confirm-save-fail"); }
         return;
       }

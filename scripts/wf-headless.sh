@@ -28,6 +28,15 @@ if [ -n "${WF_HEADLESS_MODEL:-}" ]; then
   [ "$cfg_hit" = 1 ] || { echo "❌ model provider=$provider 未在项目/全局配置或 auth 中找到（复用 anthropic 失败教训——先配置再跑）"; exit 2; }
 fi
 export WF_HEADLESS=1
+# confirm-sentinel M3：无头确认标记哨兵——守护宿主（opencode serve --service）不继承 wrapper env，
+# WF_HEADLESS 对插件不可达（test_45 实证）。改用项目哨兵文件 <$DIR>/.workflow/.wf-headless 传信号：
+# 初值 pending:<epoch>（首启 run 期间的 intake 卡亦须被标记——SID 未定稿阶段，评审 BLOCKER b）；
+# 反查到 SID 后改写为会话 id（guard-hook 以 sid 全等为主防误标机制）。GUI 场景无此文件=零影响。
+SENTINEL="$DIR/.workflow/.wf-headless"
+mkdir -p "$DIR/.workflow"
+printf '%s' "pending:$(date +%s)" > "$SENTINEL"
+trap 'rm -f "$SENTINEL"' EXIT
+trap 'exit 130' INT TERM # bash 的 INT/TERM 不自动触发 EXIT trap，须显式中转否则 Ctrl-C 必残留哨兵
 RUN_ARGS=(--agent workflow)
 [ -n "${WF_HEADLESS_MODEL:-}" ] && RUN_ARGS+=(--model "$WF_HEADLESS_MODEL")
 
@@ -52,11 +61,13 @@ SID="$(db_retry "$WF_DB" "SELECT session_id FROM tasks ORDER BY updated_at DESC 
   [ -n "$SID" ] || { echo "❌ 首启后仍无法定位会话 id（反查 $GLOBAL_DB 失败）"; exit 2; }
 fi
 echo "· 会话 $SID｜项目 $DIR"
+printf '%s' "$SID" > "$SENTINEL" # 哨兵定稿：此后以 sid 全等防 GUI 并发会话误标
 
 # ── 推进循环 ───────────────────────────────────────────────────────
 MAX_ITER="${WF_HEADLESS_MAX_ITER:-40}"
 INTERVAL="${WF_HEADLESS_INTERVAL:-5}"
 for i in $(seq 1 "$MAX_ITER"); do
+  touch "$SENTINEL" # 每迭代刷新 mtime（guard-hook 24h 新鲜窗口；含 wf.db 未出现的 WAIT 分支）
   [ -f "$WF_DB" ] || { echo "· 待 wf.db 出现（$WF_DB）…"; sleep "$INTERVAL"; continue; }
   PHASE="$(db_retry "$WF_DB" "SELECT phase FROM tasks WHERE session_id='$SID' ORDER BY rowid DESC LIMIT 1;")" \
     || { echo "❌ FAIL：wf.db 读数失败（重试 3 次仍败）"; exit 3; }

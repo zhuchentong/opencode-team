@@ -188,23 +188,56 @@ test("M16-r44 e2e：plan 内容修订（content 全量）作废确认（artifact
   assert.match(rej, /方案确认关卡未过/, "作废后 wf:build 重新被确认关卡拒");
 });
 
-// ── headless-orch M3：确认卡审计环境信号（WF_HEADLESS 两态）──────────────
-test("M3 headless：WF_HEADLESS=1 → plan:confirm note 追加 auto=non-interactive", async () => {
-  const prev = process.env.WF_HEADLESS;
-  process.env.WF_HEADLESS = "1";
+// ── confirm-sentinel M3 v2：确认卡审计环境信号（项目哨兵文件两态+四分支）──────────────
+// env 路径已删（守护宿主不继承 wrapper env，test_45 实证）；哨兵=<DIR>/.workflow/.wf-headless。
+const SENTINEL = `${DIR}/.workflow/.wf-headless`;
+const writeSentinel = (content, mtimeMs = Date.now()) => {
+  fs.mkdirSync(`${DIR}/.workflow`, { recursive: true });
+  fs.writeFileSync(SENTINEL, content);
+  fs.utimesSync(SENTINEL, new Date(mtimeMs), new Date(mtimeMs));
+};
+const rmSentinel = () => { try { fs.rmSync(SENTINEL, { force: true }); } catch { } };
+
+test("M3 哨兵：内容=sid 且新鲜 → plan:confirm note 追加 auto=non-interactive", async () => {
+  const sid = "ses_pc_hl1"; const m = await setupAtReview(sid, "[M] confirm-hl");
+  writeSentinel(sid);
   try {
-    const sid = "ses_pc_hl1"; const m = await setupAtReview(sid, "[M] confirm-hl");
     await ask(m, sid);
     const ev = stOf(sid).log.find((l) => l.cmd === "plan:confirm");
     assert.ok(ev, "headless 下照常记账");
     assert.equal(ev.note, "question-observed:auto=non-interactive", "note 追加 auto 标记");
-  } finally {
-    if (prev === undefined) delete process.env.WF_HEADLESS; else process.env.WF_HEADLESS = prev;
-  }
+  } finally { rmSentinel(); }
 });
 
-test("M3 GUI 回归：env 未设 → note 逐字 question-observed（存量锚零改动）", async () => {
-  delete process.env.WF_HEADLESS; // 显式未设（防前例泄漏）
+test("M3 哨兵：pending: 前缀（首启未定稿窗口）→ 照标 auto", async () => {
+  const sid = "ses_pc_hl3"; const m = await setupAtReview(sid, "[M] confirm-pending");
+  writeSentinel(`pending:${Date.now()}`);
+  try {
+    await ask(m, sid);
+    assert.equal(stOf(sid).log.find((l) => l.cmd === "plan:confirm")?.note, "question-observed:auto=non-interactive");
+  } finally { rmSentinel(); }
+});
+
+test("M3 哨兵：sid 不匹配（同项目 GUI 并发会话）→ 不标记", async () => {
+  const sid = "ses_pc_hl4"; const m = await setupAtReview(sid, "[M] confirm-mismatch");
+  writeSentinel("ses_other_session");
+  try {
+    await ask(m, sid);
+    assert.equal(stOf(sid).log.find((l) => l.cmd === "plan:confirm")?.note, "question-observed");
+  } finally { rmSentinel(); }
+});
+
+test("M3 哨兵：mtime 超 24h（kill -9 残留）→ 不标记", async () => {
+  const sid = "ses_pc_hl5"; const m = await setupAtReview(sid, "[M] confirm-stale");
+  writeSentinel(sid, Date.now() - 25 * 60 * 60 * 1000);
+  try {
+    await ask(m, sid);
+    assert.equal(stOf(sid).log.find((l) => l.cmd === "plan:confirm")?.note, "question-observed");
+  } finally { rmSentinel(); }
+});
+
+test("M3 GUI 回归：无哨兵文件 → note 逐字 question-observed（存量锚零改动）", async () => {
+  rmSentinel(); // 显式无哨兵（防前例泄漏）
   const sid = "ses_pc_hl2"; const m = await setupAtReview(sid, "[M] confirm-gui");
   await ask(m, sid);
   const ev = stOf(sid).log.find((l) => l.cmd === "plan:confirm");

@@ -42,8 +42,8 @@ const host = mkHostStub({
   tools: { hook: (_ev: any, fn: any) => { hookFn = fn; return { dispose() { } }; } },
   agents: async () => [{ name: "wf/planner" }, { name: "wf/builder" }], // ping 需 agents.list（缺省 undefined=降级轨）
 });
-await plugin.setup(host.rawCtx);
-const m = { ctx: host.rawCtx, tools: host.toolDefs, cmds: host.cmdDefs, hook: () => hookFn };
+await plugin.setup((host as any).rawCtx);
+const m = { ctx: (host as any).rawCtx, tools: (host as any).toolDefs, cmds: (host as any).cmdDefs, hook: () => hookFn };
 const cmd = (name: string) => m.cmds.find((c: any) => c.name === name);
 const artifactTool = m.tools.find((t: any) => t.name === "wf_write_artifact");
 const stOf = (sid = LEADER) => {

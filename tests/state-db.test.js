@@ -163,7 +163,7 @@ test("resolveState：own 优先；wf/* agent 经项目反查；普通 agent 不�
 
 test("一次性迁移：旧 storage 状态行/报告行导入，updatedAt 保留，events 一并导入", async () => {
   const dir = tmpDir();
-  const legacy = { sessionID: "ses_old", slug: "legacy", phase: "review", rounds: { plan_review: 1 }, updatedAt: "2026-11-01T00:00:00.000Z", log: [{ cmd: "wf:review", at: "2026-11-01T00:00:00.000Z" }] };
+  const legacy = { sessionID: "ses_old", slug: "legacy", phase: "review", directory: dir, rounds: { plan_review: 1 }, updatedAt: "2026-11-01T00:00:00.000Z", log: [{ cmd: "wf:review", at: "2026-11-01T00:00:00.000Z" }] };
   const s = await newStore(dir, {
     storage: {
       scan: async (o) => {
@@ -184,8 +184,98 @@ test("一次性迁移：旧 storage 状态行/报告行导入，updatedAt 保留
   s.close();
 });
 
-test("events 增量流水：两次 save 只追加新增 log 尾项", async () => {
+// ── migrate-meta-fix T03：迁移项目维度过滤 + meta 幂等标记（test_45 双重复现修复）──
+const mkLegacy = (sid, over = {}) => ({
+  sessionID: sid, slug: `slug-${sid}`, phase: "review",
+  rounds: {}, updatedAt: "2026-11-01T00:00:00.000Z",
+  log: [{ cmd: "wf:intake", at: "2026-11-01T00:00:00.000Z" }], ...over,
+});
+
+test("迁移过滤：外项目 directory 行跳过（不灌入新项目库）", async () => {
   const dir = tmpDir();
+  const s = await newStore(dir, {
+    storage: { scan: async (o) => o?.prefix === "wf-workflow/state/"
+      ? { entries: [{ key: "wf-workflow/state/ses_foreign", value: mkLegacy("ses_foreign", { directory: "/other/project" }) }] }
+      : { entries: [] } },
+  });
+  assert.equal(await s.load("ses_foreign"), null, "外项目行不得导入");
+  const d = new Database(dbFile(dir), { readonly: true });
+  assert.equal(d.query("SELECT COUNT(*) AS n FROM tasks").get().n, 0);
+  assert.equal(d.query("SELECT COUNT(*) AS n FROM events").get().n, 0, "外项目行事件不随行");
+  d.close();
+  s.close();
+});
+
+test("迁移过滤：无 directory 行跳过且 fail-open 不阻塞（state:migrate-skip-no-dir）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir, {
+    storage: { scan: async (o) => o?.prefix === "wf-workflow/state/"
+      ? { entries: [{ key: "wf-workflow/state/ses_nodir", value: mkLegacy("ses_nodir") }] }
+      : { entries: [] } },
+  });
+  assert.equal(await s.load("ses_nodir"), null, "无 directory 行不得导入");
+  const d = new Database(dbFile(dir), { readonly: true });
+  assert.equal(d.query("SELECT value FROM meta WHERE key='migrated'").get()?.value, "1", "跳过后仍收口 migrated=1");
+  d.close();
+  s.close();
+});
+
+test("迁移过滤：projectID 相同但 directory 不同 → 仍跳过（projectID 不可信，无 fallback）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir, {
+    storage: { scan: async (o) => o?.prefix === "wf-workflow/state/"
+      ? { entries: [{ key: "wf-workflow/state/ses_global", value: mkLegacy("ses_global", { projectID: "global", directory: "/elsewhere" }) }] }
+      : { entries: [] } },
+  });
+  assert.equal(await s.load("ses_global"), null, "csvkit 'global' 反例：directory 不匹配即跳过");
+  s.close();
+});
+
+test("迁移过滤：reports 仅随已导入 sid（外项目报告不落库）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir, {
+    storage: { scan: async (o) => {
+      if (o?.prefix === "wf-workflow/state/") return { entries: [{ key: "wf-workflow/state/ses_in", value: mkLegacy("ses_in", { directory: dir }) }] };
+      if (o?.prefix === "wf-workflow/report/") return { entries: [
+        { key: "wf-workflow/report/ses_in", value: { sessionID: "ses_in", text: "内报告" } },
+        { key: "wf-workflow/report/ses_out", value: { sessionID: "ses_out", text: "外报告" } },
+      ] };
+      return { entries: [] };
+    } },
+  });
+  assert.equal((await s.getReport("ses_in"))?.text, "内报告");
+  assert.equal(await s.getReport("ses_out"), null, "未导入 sid 的报告不落库");
+  s.close();
+});
+
+test("meta 幂等：迁移完成后二次 ready 不重复导入；tasks 清空后再迁移不重复追事件", async () => {
+  const dir = tmpDir();
+  const legacy = mkLegacy("ses_idem", { directory: dir });
+  const s = await newStore(dir, {
+    storage: { scan: async (o) => o?.prefix === "wf-workflow/state/"
+      ? { entries: [{ key: "wf-workflow/state/ses_idem", value: legacy }] }
+      : { entries: [] } },
+  });
+  const d = new Database(dbFile(dir), { readonly: true });
+  assert.equal(d.query("SELECT value FROM meta WHERE key='migrated'").get()?.value, "1", "首次迁移即收口");
+  d.close();
+  // done GC 清空 tasks 后（模拟 14 天 GC），store 重新 ready → events 不得重复
+  const dw = new Database(dbFile(dir));
+  dw.run("DELETE FROM tasks");
+  dw.close();
+  const s2 = await newStore(dir, {
+    storage: { scan: async (o) => o?.prefix === "wf-workflow/state/"
+      ? { entries: [{ key: "wf-workflow/state/ses_idem", value: legacy }] }
+      : { entries: [] } },
+  });
+  const d2 = new Database(dbFile(dir), { readonly: true });
+  assert.equal(d2.query("SELECT COUNT(*) AS n FROM events WHERE session_id='ses_idem'").get().n, 1, "migrated=1 已收口：仅首迁移的 1 条，GC 后不整批重追");
+  d2.close();
+  s.close();
+  s2.close();
+});
+
+test("events 增量流水：两次 save 只追加新增 log 尾项", async () => {  const dir = tmpDir();
   const s = await newStore(dir);
   await s.save({ sessionID: "ses_e", slug: "", phase: "intake", rounds: {}, log: [{ cmd: "wf:intake", at: "t1" }] });
   const st = await s.load("ses_e");
