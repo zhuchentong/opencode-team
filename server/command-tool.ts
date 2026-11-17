@@ -31,7 +31,7 @@ export function registerCommandTool(host: import("./host.ts").Host, deps: any) {
         "适用域：本工具的冷启动铁律仅适用于 wf 工作流 leader 会话（agent=workflow，含兼容别名 wf/leader；判据=你的角色提示词声明你是 wf leader）。" +
         "若你的角色提示词未声明你是 wf leader（如 build/plan/general 等默认 agent）：忽略冷启动铁律，勿主动开任务或推进状态机，按默认方式直接执行用户任务，勿要求用户切换 agent（除非用户明确要求走工作流）；只读查询（wf:status/diagnose/ping/open）仍可用。" +
         "推进 wf 工作流状态机（等价用户手敲 /wf:*，**服务端强制仅 leader（workflow）**：非 leader agent 调用将被拒绝；wf/* 子会话调用会被拒绝）。" +
-        "冷启动铁律（仅 leader 主会话）：本会话无活动任务且用户给出开发任务时，第一步立即调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（slug 从需求提炼，kebab-case），勿等用户手敲 /wf:intake；需求不足以提炼 slug 时先澄清再 intake；普通问答/咨询不开任务。" +
+        "冷启动铁律（仅 leader 主会话）：本会话无活动任务且用户给出开发任务时，第一步立即调用 wf_command(name=\"wf:intake\", prompt=\"<slug>\") 开任务（slug 从需求提炼，kebab-case），勿等用户手敲 /wf:intake；需求不足以提炼 slug 时先澄清再 intake；普通问答/咨询不开任务。M 级加 [FULL] 须附理由（高语义密度域才用：协议对齐/规范符合性/并发语义；日常 M 级默认 daily——历史实证 18-25 分钟零事故）。" +
         "name 形如 \"wf:plan\"；prompt = 命令参数（wf:intake 传 slug，wf:lane 传 \"set T01 ses_xxx\"，其余留空）。" +
         "返回该阶段 guidance / 命令输出文本。关卡与循环上限由服务端强制。",
       input: {

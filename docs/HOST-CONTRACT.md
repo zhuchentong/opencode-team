@@ -144,3 +144,29 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   归一/放行」成对出现；r2 续接时点登记表非空（含身份漂移场景）；双探针落盘且形状符合预期。
 - **处置指引（身份漂移预防）**：新项目 intake 前置 `git init`（需求基线提交后再开任务），或依赖
   W6-0 parentID 链兜底；存量漂移任务无需人工修复（回退自动覆盖）。
+
+## W7 提速批（M 级耗时优化，test_50 六轮数据复盘，2026-11-17）
+
+> 依据：test_45–50 六轮 timing/子会话 token 回溯——两条强相关律：① planner 墙钟 ∝ 输出 token
+>（有效吞吐 ~12 tok/s：6.7k tok→3.9m；17k tok→9-15m）；② 返工轮数第二杠杆（test_46 三轮=43m vs
+> test_47 一轮=18m）。68 分钟（test_50 full）不是流程慢，是档位错配：full 三重审查六轮只拦到
+> minor（br 2 minor+1 info ×2 轮、testing 零 blocking），daily 档（test_47/48）18-24 分钟零事故。
+
+- **A 流向分流（政策默认值）**：M 级 intake 默认 daily；`[FULL]` 须附理由（高语义密度域：协议对齐/
+  规范符合性/并发语义——full 三重审查为该域保险）。落点=command-tool 冷启动句 + roles/leader.md
+  冷启动铁律。review 并行期 tester（feasibility+红锚）在 full 保留原样（W7-1 合并方案经三轮讨论
+  撤回：红锚生成量是常数，合并不减成本；结构性冗余由「M 默认 daily」消解）。
+- **B planner 输出压缩（无信息损失三件套）**：M 级风险与未知项并入 T<nn> 验收行（不设独立长节）+
+  每任务验收判据 ≤5 条冻结；裁决性实跑探针 ≤3 个（env 契约四探针按 skill 触发不受限）plan 内一行化；
+  修订 patch 硬性（全量重写仅限节区结构不兼容并须声明理由）。预算 20KB 维持不变——**12KB 提案已否决**
+  （低于自然密度 15.5-20.5KB → 软告警→重写循环，r49 S 级 5KB 先例），新增「告警线非目标线」口径句。
+- **C full 档并行纪律（零流程改动）**：`wf:test` from 白名单本就含 `build_review`——F5/F6 改并行
+  （review-build 过渡后立即双委派 builder-reviewer ∥ tester(verify)，双回执到齐统一裁决）；M 级
+  oracle 抽查聚焦 critical ≤40 项。9.2m → ~5.5m。
+- **否决记录**（防回潮）：plan 预算 12KB（压缩循环）；tester 并行合并（生成量常数+daily 已消解）；
+  test_design/reconcile/fixing 节点移除（收益 ≤2m vs 流转表/TUI/守卫多快照面；fixing happy-path
+  零成本）；br 与 testing 角色合并（破坏审查者≠复核者对抗结构与 done 证据链）。
+- **验收（test_51 起）**：M 默认 daily ≤25m（历史区间上限）；显式 full ≤52m（证据：planner 输出
+  ≤11k tok / plan r1 ≤16KB / 探针 ≤3 / br∥test 并行事件可查）；质量门禁零松动（reconcile md5 全对 /
+  `not found: ses`=0 / 返工轮如实记录）。观察项：daily 连跑 ≥3 轮零缺陷逃逸 → M 默认 daily 升级为
+  intake 硬默认；full 连续两轮 br/test 仍零 blocking → 评估 D2' 瘦身态（daily+build_review）立项。
