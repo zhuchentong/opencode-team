@@ -17,20 +17,32 @@ export const DONE_ENTRY = "wf 工作流已完成（done）。新任务：/wf:int
 // done-git-delivery-confirm T01：done 交付确认指令——仅 st.delivery.doneGit.isGit 时渲染（无记账=输出字节级不变，
 // 与 guidance/DONE_ENTRY 各消费方测试零回归）。IO 检测在 commands.ts transition，本函数纯渲染。
 // F4（用户报告竞态实证：并行 learner 在提交后继续写 .learnings/ → 提交后工作区复脏）：git 项目流程
-// 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（learner 回执/S 级自写）在交付确认之前；
-// 确认批准后不得再有新的经验写入。M16-r52：.learnings/ 默认策略翻转「入库→ignore」（intake 补
-// gitignore），提交后复脏竞态机制性消失——顺序纪律保留为兜底；希望经验随交付的项目显式删 ignore 行。
+// 顺序固定「总结 → 提交/不提交 → 完成」——经验文件落盘（效率批 P2 起 leader 内联自写，learner 委派
+// 仅存 FAIL 取证/显式深审）在交付确认之前；确认批准后不得再有新的经验写入。M16-r52：.learnings/ 默认
+// 策略翻转「入库→ignore」（intake 补 gitignore），提交后复脏竞态机制性消失——顺序纪律保留为兜底；
+// 希望经验随交付的项目显式删 ignore 行。done 关卡已强制校验 lessons.md 在案（GATES["wf:done"]），
+// learner 等待串行整体移除——前置即根治。
 function doneGitLine(st: WfState): string | null {
   if (!st.delivery?.doneGit?.isGit) return null; // R3 T3.1 子步 D
   const opts = st.delivery.doneGit.hasRemote
     ? "选项标签固定：提交并推送/仅提交/跳过"
     : "未配置 remote——选项标签固定：仅提交/跳过（隐藏推送）";
   return `📦 交付确认（git）：检测到 git 环境。流程顺序固定「总结 → 提交/不提交 → 完成」：审计汇报与经验沉淀全部落盘后` +
-    `（非 S 级须等 wf/learner 完成回执，S 级须先自写 lessons），才用 question 工具询问用户是否提交代码（${opts}）；` +
+    `（lessons.md 已由 /wf:done 关卡强制校验在案——leader 内联自写，无需等待任何回执），才用 question 工具询问用户是否提交代码（${opts}）；` +
     "未经用户批准不得 commit/push；批准后先跑项目门禁（如 bun run check）通过才提交，" +
     "提交范围=本任务代码（.learnings/ 已默认 ignore 不入提交，M16-r52；确认前落盘，提交后不得再写），" +
     "只暂存本任务相关文件，提交信息用中文约定式提交+emoji。";
 }
+
+// 效率批 P2：lessons 内联沉淀指引（daily/full done 案共用）——learn 移交 leader 自写（S 级先例升格），
+// learner 改职 FAIL 事后取证/显式深审。四指标全部自 wf.db 机械取数（events/timing），硬条款
+// 「反事实必须实测」：test_51 实证 learner 以 plan 估算做串行反事实虚高 5.7 倍（宣称省 14min，实测 2m28s）。
+const LESSONS_INLINE_LINE =
+  `done 前内联沉淀 lessons（learn 已移交 leader 自写，PASS 日常跑不委派 wf/learner）：` +
+  `wf_write_artifact(kind="lessons") 四节模板（新增/更新/退役/晋升候选）+ 流程效率观察节` +
+  `（r1 首过率/并行有效度=(Σlane−墙钟)/Σlane/流程墙∥进程墙/返修根因类别）——` +
+  `指标自 .workflow/wf.db 的 events/timing 机械取数（sqlite3 -readonly），反事实必须实测口径、禁止用 plan 估算；` +
+  `等待后台回执的空闲窗可提前起草。`;
 /** 组装 instructions entry 值：完整阶段 guidance + 机器可读头行（易变内容殿后保 prompt cache）；done 只留一行。
  * @param st 工作流状态快照
  * @param limits 生效上限（缺省 LIMITS）
@@ -246,7 +258,7 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
           : DISPATCH_BY_TIER[tier] ?? DISPATCH_M,
         ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派契约：prompt 给任务行摘录+接口签名+验收标准+预算，禁止全仓扫描、勿贴整份 plan。`,
           // M16-r51：回执上限 2KB→4KB（test_005 实证 2003B 贴线损质），与 CHUNK_KB 分段阈值（2KB=防流中断窗口）解耦——证据细节在 git 历史，不进模型可见面
-          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB：测试命令+红→绿输出摘要+变更文件清单+未验证项+areas 越界声明+commit hash）——testing 裁决与 learner 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。**回执路径=主树绝对路径**（勿让 builder 写 worktree 相对路径——树内 .workflow/ 是 gitignored 副本，清理即丢）。`,
+          `执行回执：委派 prompt 须要求 builder 完成后写 .workflow/${s}/build-receipt.md（单 builder）或 build-receipt-<Tnn>.md（每 lane 一份，≤4KB：测试命令+红→绿输出摘要+变更文件清单+未验证项+areas 越界声明+commit hash）——testing 裁决与 lessons 复盘的一审证据以此为准（daily 无 build_review 阶段，回执=证据链补位；读侧逐 lane 汇总勿遗漏）。**回执路径=主树绝对路径**（勿让 builder 写 worktree 相对路径——树内 .workflow/ 是 gitignored 副本，清理即丢）。`,
           `lane 登记纪律：放行波次前一次性串行登记该波全部 lane（多 builder 运行期并发 wf:lane set 曾触发 wf.db 写错误）；builder 运行期禁增量登记，补登等该 builder 回执后的空窗。`]),
         `完成（含红→绿证据）→ wf_command(name="wf:test")`,
       ];
@@ -280,9 +292,9 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
             ? `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，先自写 lessons 与 .learnings/ 落盘，再发起交付确认——顺序固定「总结→提交/不提交→完成」。`
             : `S 级：leader 简短汇报核对结果（不委派 learner）；如有可沉淀经验，自写 3 行 lessons。`)
           : (serial
-            ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」+ lessons 含流程效率观察节：各阶段墙钟自 events 表取）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
-            : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`),
-        ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `委派 wf/learner 须声明：learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
+            ? `审计并汇报；${LESSONS_INLINE_LINE} lessons.md 落盘后发起交付确认（顺序固定：总结→提交/不提交→完成）。`
+            : `审计并汇报；test-report=PASS 后：${LESSONS_INLINE_LINE} 再 wf:done（关卡校验 lessons 在案）。`),
+        ...(S ? [] : [WRITE_CONTRACT, DELEGATE_SID_LINE, `仅 FAIL 事后取证或用户显式要求深度复盘时才委派 wf/learner；learner 不推进状态机（不调 wf_command/不 /wf:*），仅写 .learnings/ 与 lessons.md。${artifactPathLine(st, "lessons")}`]),
         budgetLine(st, ["lessons"]),
         ...(git ? [git] : []),
       ].join("\n");
@@ -399,11 +411,11 @@ function guidanceBase(phase: string | null | undefined, st: WfState, limits: Lim
       return [
         `【wf 工作流｜done】slug=${s}`,
         git
-          ? `审计并汇报；委派 wf/learner 复盘沉淀并等其完成回执（回执必含「已写 .learnings/ 文件清单+完成时刻」）——learner 回执到齐前不得发起交付确认，确认后不得再写经验（顺序固定：总结→提交/不提交→完成）。`
-          : `审计并汇报；test-report=PASS 后并行委派 wf/learner 复盘沉淀（不阻塞交付）。`,
+          ? `审计并汇报；${LESSONS_INLINE_LINE} lessons.md 落盘后发起交付确认（顺序固定：总结→提交/不提交→完成）。`
+          : `审计并汇报；test-report=PASS 后：${LESSONS_INLINE_LINE} 再 /wf:done（关卡校验 lessons 在案）。`,
         WRITE_CONTRACT, DELEGATE_SID_LINE,
         budgetLine(st, ["lessons"]),
-        `委派 wf/learner 时必须声明：learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
+        `仅 FAIL 事后取证或用户显式要求深度复盘时才委派 wf/learner；learner **不推进状态机**——不调用 wf_command、不执行任何 /wf:* 命令、不 wf:intake 新任务、不 reset；仅写 .learnings/ 与（经工具）lessons.md。若 wf_write_artifact 报「无活动任务」，停止并向 leader 报告，不得绕道。${artifactPathLine(st, "lessons")}`,
         ...(git ? [git] : []),
       ].join("\n");
     }

@@ -13,6 +13,7 @@
 #   .workflow/.wf-headless，confirm-sentinel M3 v2——守护宿主 env 不可达）。
 set -u
 DIR="${1:?用法: wf-headless.sh <项目目录> [初始提示]}"; DIR="$(cd "$DIR" && pwd)"
+T0=$(date +%s) # 效率批 P3：进程墙起点（脚本起止——learner/收尾尾巴不再隐形混入单一墙钟口径）
 # headless-fix W1（test_45 首启事故）：opencode run 按调用者 cwd 定项目——不切换则任务落进
 # 调用者所在库（跨项目 wf.db 污染实证）。静默切换（cd 后无论从哪调用都正确，比拒绝式更根治：
 # 拒绝会给自动化跨目录调用引入新失败模式）；exit 2 为防御性冗余（上一行归一化已 cd 成功，实际不可达）。
@@ -79,7 +80,17 @@ for i in $(seq 1 "$MAX_ITER"); do
   PHASE="$(db_retry "$WF_DB" "SELECT phase FROM tasks WHERE session_id='$SID' ORDER BY rowid DESC LIMIT 1;")" \
     || { echo "❌ FAIL：wf.db 读数失败（重试 3 次仍败）"; exit 3; }
   if [ "$PHASE" = "done" ]; then
-    echo "✅ PASS：任务已推到 done（迭代 $i）"; exit 0
+    echo "✅ PASS：任务已推到 done（迭代 $i）"
+    # 效率批 P3：双墙钟——流程墙（state_json timing startedAt→finishedAt，GNU date 换算；读失败降级只打进程墙）
+    FLOW=""
+    TIMING="$(db_retry "$WF_DB" "SELECT json_extract(state_json,'\$.timing.startedAt')||'|'||json_extract(state_json,'\$.timing.finishedAt') FROM tasks WHERE session_id='$SID' LIMIT 1;" 2>/dev/null)" || TIMING=""
+    if [ -n "${TIMING:-}" ] && [[ "$TIMING" == *|* ]]; then
+      S_AT="${TIMING%%|*}"; F_AT="${TIMING##*|}"
+      S_EPOCH=$(date -d "$S_AT" +%s 2>/dev/null) && F_EPOCH=$(date -d "$F_AT" +%s 2>/dev/null) && [ -n "$S_EPOCH" ] && [ -n "$F_EPOCH" ] && FLOW=$(( F_EPOCH - S_EPOCH ))
+    fi
+    PROC=$(( $(date +%s) - T0 ))
+    if [ -n "$FLOW" ]; then echo "⏱ 流程墙 ${FLOW}s｜进程墙 ${PROC}s（差值=done 后收尾尾巴）"; else echo "⏱ 进程墙 ${PROC}s（timing 缺失，仅进程墙）"; fi
+    exit 0
   fi
   LAST="$(db_retry "$WF_DB" "SELECT entry_json FROM events WHERE session_id='$SID' ORDER BY id DESC LIMIT 1;")" \
     || { echo "❌ FAIL：事件读数失败（重试 3 次仍败）"; exit 3; }

@@ -170,3 +170,43 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   ≤11k tok / plan r1 ≤16KB / 探针 ≤3 / br∥test 并行事件可查）；质量门禁零松动（reconcile md5 全对 /
   `not found: ses`=0 / 返工轮如实记录）。观察项：daily 连跑 ≥3 轮零缺陷逃逸 → M 默认 daily 升级为
   intake 硬默认；full 连续两轮 br/test 仍零 blocking → 评估 D2' 瘦身态（daily+build_review）立项。
+
+## W8 效率批（lane 依赖边表 + learn 前置移交，test_51 复盘批，2026-11-17）
+
+> 依据：test_51 逐会话取证——① r1 首过率六轮 ≈0/6，结构性返修链 ≈10m52s/轮（F1：文件写集互斥
+> ≠ 符号级依赖互斥；F6：派生调度两处措辞漂移）；② learner 尾巴 5m31s 在 PASS 之后（进程墙隐形
+> +13%），其等待本是 F4 竞态的全局串行护栏；③「反事实必须实测」教训：learner 以 plan 估算做串行
+> 反事实虚高 5.7 倍（宣称省 14min，逐会话实测 2m28s）。25min 硬指标退役 → 效率四指标追踪
+> （r1 首过率/并行有效度/双墙钟/返修根因）。
+
+- **P1 lane 依赖边表（图版，结构正确性机械化）**：plan.md 末尾 fenced ```lane-deps 机器区
+  （nodes | T|wave|lane | + edges | 消费方|提供方|符号|kind|，edges 空表=单 lane 合法）。硬规则
+  （`server/domain/lane-graph.ts` 纯函数，解析永不 throw=评审 M7）：R0 M/L 缺区（S 豁免）；
+  R2 无环；R3 **跨 lane 边 provider.wave < consumer.wave（kind=value|type 同规——worktree 类型
+  import 同样编译失败）**；R6 声明 wave < 拓扑层深=违规（危险方向单边拦截；声明更深=安全不拒）。
+  双执法（评审 C/M3）：`markVerdicts` 单点自 derive `laneDepsOk`（gate-reconcile 补记同源）+
+  artifact-tool 写时预检（**评审 M5 修订：硬拒仅限 planning/review**；building/testing 降级
+  ⚠️+记账 false；register 幂等 no-op 早退先于检查）；daily `GATES_DAILY["wf:build"]` 第四要素 +
+  **full `GATES["wf:build"]` 同加**（评审 M1：daily-only 执法会让 test_49/50 形态完全绕过）。
+  执法面：写时 ❌ 逐条 violations（planning/review）→ wf:build 关卡 ❌ 兜底（`LANE_DEPS_GATE_MSG`，
+  shared/prompts/gates.ts）。lane 均衡**不机械化**（预估实证通胀 55%）——planner 契约文字 +
+  wf-plan-grill 问项 6（漏边检索）。F6 类由 order 派生（同 wave 多 lane ∥ 合并序）消除。
+- **P2 learn 前置移交 leader（S 级自写先例升格 M/L 级 daily/full）**：lessons 在 **testing 阶段
+  产出**（`ARTIFACT_PHASE.lessons` done→testing，评审 M2）；`wf:done` 关卡新增
+  `lessonsWritten` 要件（`DONE_LESSONS_GATE_MSG`）+ `gate-reconcile` GATE_KINDS["wf:done"] 增
+  lessons（评审 M4：原生 write 忘 register 自动对账恢复）；`doneGitLine` 删「非 S 级须等
+  wf/learner 回执」串行（F4 竞态根治——经验落盘先于交付确认）；done 阶段 entry guidance 全改
+  内联沉淀行（评审 B1：daily L283/284 与 full L402 双侧，含 learner 改职行）。lessons 质量契约：
+  四节模板 + 效率四指标（wf.db events/timing 机械取数）+ 硬条款「反事实必须实测口径」。
+  learner 改职不删：FAIL 事后取证 + 用户显式深审（roles/learner.md 头注）。
+- **P3 双墙钟**：`wf-headless.sh` PASS 退出打「流程墙（state timing）｜进程墙（脚本起止）」，
+  PASS 后尾巴（收尾委派等）不再隐形混入单一口径。
+- **新增接受面**：lib barrel +2 导出（checkLaneDeps/parseLaneDeps，全集锁 81→83）；verdicts
+  子对象 +2 字段（laneDepsOk/lessonsWritten，字段快照锁同步）；diagnose gates 行 +laneDeps/lessons
+  可见性。守护宿主热载注意：批量编辑 server 模块的**中间态失败加载会污染守护模块缓存**（指纹
+  热载对失败态中间模块失效，实测「Export not found」在最终态仍复现）——唯一根治=完全重启守护
+  进程（2026-11-17 实证：kill+relaunch 后冒烟零失败；编辑窗口期纪律新增）。
+- **验收（test_52 起）**：①含跨 lane 符号依赖的任务，plan 关卡/边表机械拦截可复现；②wf:done
+  缺 lessons 被拒、补写后放行（正路径）；③双墙钟输出落 job 尾部；④效率四指标进 lessons 效率
+  观察节（首建基线=test_51：40m41s 流程墙/46m53s 进程墙/r1 首过 0/6/wave-1 并行有效度 28%）；
+  ⑤`not found: ses`=0 与登记表非空持续维持。

@@ -39,10 +39,10 @@ const toDone = async (h, slug) => {
   await h.run("wf:intake", slug);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true }); // v2：lane 表关卡记账
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true }); // v2：lane 表关卡记账（效率批 P1：+边表）
   await h.run("wf:build");
   await h.run("wf:test");
-  h.patch({ testReportVerdict: "PASS" });
+  h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案
   return h.run("wf:done");
 };
 
@@ -87,23 +87,26 @@ test("A4：.git 为文件（linked worktree gitdir 指针）→ 解析 config �
 });
 
 // ── F4（用户报告竞态实证）：git 项目 done=「总结→提交/不提交→完成」串行 ──
-test("F4：git 项目 done 文案串行——learner 回执门控交付确认+提交范围含经验文件；S 级同构；无记账零变化", async () => {
+test("F4：git 项目 done 文案串行——lessons 关卡前置+提交范围含经验文件；S 级同构；无记账零变化", async () => {
   const dir = mkTmp(); writeGit(dir, "remote");
   const h = await mkHarness(dir);
   const out = await toDone(h, "git-f4");
   assert.match(out, /总结 → 提交\/不提交 → 完成/, "F4：顺序固定并写入文案");
   assert.match(out, /提交范围=本任务代码（\.learnings\/ 已默认 ignore/, "M16-r52 F4 翻转：经验默认 ignore 不入提交");
-  assert.match(out, /确认前落盘，提交后不得再写|回执到齐前不得发起交付确认/, "F4：确认前经验全部落盘（防提交后复脏）");
+  assert.match(out, /确认前落盘，提交后不得再写/, "F4：确认前经验全部落盘（防提交后复脏）");
+  assert.match(out, /关卡强制校验在案/, "效率批 P2：learner 回执门控移除——lessons 由 done 关卡前置校验");
   h.dispose(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ── F4（用户报告竞态实证）：git 项目 done=「总结→提交/不提交→完成」串行 ──
-test("F4b（full 模式同源）：git=回执门控交付确认；无记账=旧并行文案逐字", () => {
+test("F4b（full 模式同源）：git=lessons 关卡前置交付确认；无记账=内联沉淀指路", () => {
   const g = guidance("done", { slug: "x", phase: "done", rounds: {}, mode: "full", size: "M", delivery: { doneGit: { isGit: true, hasRemote: true } } }); // R3 T3.1 子步 D
-  assert.match(g, /回执到齐前不得发起交付确认/, "full 模式也串行");
+  assert.match(g, /关卡强制校验在案/, "效率批 P2：learner 回执门控移除——done 关卡前置校验");
   assert.match(g, /总结→提交\/不提交→完成/, "顺序固定行内标注");
+  assert.match(g, /learn 已移交 leader 自写/, "learn 内联沉淀（PASS 日常跑不委派 learner）");
   const old = guidance("done", { slug: "x", phase: "done", rounds: {}, mode: "full", size: "M" });
-  assert.match(old, /并行委派 wf\/learner 复盘沉淀（不阻塞交付）/, "无记账=旧文案零回归（残窗=检测 fail-open，接受）");
+  assert.match(old, /learn 已移交 leader 自写/, "无记账=内联沉淀指路（done 关卡兜底）");
+  assert.doesNotMatch(old, /并行委派 wf\/learner 复盘沉淀/, "旧并行委派文案已退役（B1 修订）");
 });
 
 test("A5：done 后新任务 intake → doneGit 清除，不残留旧交付提示", async () => {

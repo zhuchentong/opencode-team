@@ -106,6 +106,13 @@ export interface WfState {
     //（诚实边界同 confirmedAt：保证「问过了」，不保证「答的是确认」）。
     intakeConfirmedAt?: string;
     laneTableWritten?: boolean; // v2：plan.md 含「lane 分组表」（kind=plan 注册时解析记账；daily M/L 级 wf:build 关卡校验——并行优先，串行须以 lane 表书面举证）
+    // 效率批 P1（test_51 F1/F6 复盘）：lane 依赖边表机器区合法记账——markVerdicts 单点自 derive
+    //（checkLaneDeps 纯函数：跨 lane 边须 provider.wave<consumer.wave（type 同规）/无环/声明≥层深）；
+    // daily+full 双模式 M/L 级 wf:build 关卡校验；plan 修订随 mark 无条件重算（laneTableWritten 同款）。
+    laneDepsOk?: boolean;
+    // 效率批 P2（learn 前置移交）：lessons.md 已产出记账——GATES["wf:done"] 验收要件
+    //（learn 移交 leader 内联，learner 改职 FAIL 取证/显式深审；F4 竞态随之根治：经验落盘先于交付确认）。
+    lessonsWritten?: boolean;
     // R2 T2.3（arch-r2-profile-statemachine）：最近一次关卡判定快照（Gate 对象化产物）——
     // evaluateTransition 每次执行 gate 判定时覆写；levelFor 结构化优先输入（不依赖文案前缀）；
     // intake 重置块清除（跨任务不残留）。保持 R2 形状（id/ok/at）整体迁入。

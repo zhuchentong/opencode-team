@@ -18,6 +18,8 @@ export const VD = {
   planConfirmedAt: "confirmedAt",
   intakeConfirmedAt: "intakeConfirmedAt", // intake-discuss-gate T01：identity 映射（无 legacy 平铺别名；JSDoc 键域自动锁）
   laneTableWritten: "laneTableWritten",
+  laneDepsOk: "laneDepsOk", // 效率批 P1：lane 依赖边表合法记账（identity 映射）
+  lessonsWritten: "lessonsWritten", // 效率批 P2：lessons 已产出记账（identity 映射）
   gateStatus: "gateStatus",
 };
 /** 平铺 over 键 → 新分组形状（原地修改并返回 st）。fixture 入参故意宽松（残缺/非法状态是测试本意），

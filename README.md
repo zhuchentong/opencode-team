@@ -171,6 +171,7 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | 引擎自改并发护栏 | `server/lib.ts`（isSelfModDir/selfModWarnLine）+ `server/state.ts`（PROJECT_DBS+持久清单+scanActiveTasks 跨库扫描）+ `server/commands.ts`（intake 接线） | 任务目录=插件仓库根→跨项目扫描其它活动任务（活跃/休眠分级）告警+st.selfMod 记账；探测根可 `options.selfModRoot` 覆盖；清单路径钩子 `WF_PROJECTS_FILE`（测试隔离） |
 | 需求确认关卡（intake→plan） | `options.requireIntakeConfirm` + `server/guidance.ts`（确认卡指引）+ `server/transition.ts`（固化） | 默认 true；显式 false 关闭关卡与卡指引（intake 固化 intakeConfirmOff，re-intake 重算；服务端只保「出过卡」不保「答的是批准」） |
 | 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
+| lane 依赖边表（机器区）/ learn 前置移交 | `server/domain/lane-graph.ts`（解析+校验纯函数）+ `server/artifact-tool.ts`（写时预检）+ `server/domain/flow.ts`（GATES/GATES_DAILY 第四要素与 done lessons 要件）+ `roles/{planner,learner,leader}.md` | 效率批 W8：跨 lane 边须早波次（type 同规）/无环/声明≥层深；lessons 前置至 testing 由 leader 内联（done 关卡校验）；learner 改职 FAIL 取证/显式深审；详见 docs/HOST-CONTRACT.md「W8 效率批」 |
 | 无头编排（opencode run） | `scripts/wf-headless.sh`（唯一驱动）+ `wf:resume`（审计轨）+ `WF_HEADLESS=1`（确认卡 auto 标记） | 边界与复现命令见 `docs/HOST-CONTRACT.md`「无头模式（opencode run）实测边界」；lane/tier/worktree 架构验收不在无头覆盖面 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 

@@ -44,7 +44,7 @@ const stOf = (sid) => {
 };
 const setup = async (childShape) => {
   const m = mkCtx(childShape); await plugin.setup(m.ctx);
-  await cmd(m, "wf:intake").execute({ sessionID: LEADER, prompt: { text: "[M] normalize" } });
+  await cmd(m, "wf:intake").execute({ sessionID: LEADER, prompt: { text: "[S] normalize" } });
   await cmd(m, "wf:plan").execute({ sessionID: LEADER, prompt: {} }); // → planning
   return m;
 };
@@ -118,7 +118,7 @@ test("回归：有登记的 'ses' 残渣 → 前缀自愈改写（原 T01 路径
   const m = await setup((sid) => sid === LEADER
     ? { projectID: "pi1", agent: "wf/leader", location: { directory: DIR }, parentID: null }
     : { projectID: "pi1", agent: "wf/planner", location: { directory: DIR }, parentID: LEADER });
-  await cmd(m, "wf:intake").execute({ sessionID: LEADER, prompt: { text: "[M] guard" } });
+  await cmd(m, "wf:intake").execute({ sessionID: LEADER, prompt: { text: "[S] guard" } });
   await cmd(m, "wf:plan").execute({ sessionID: LEADER, prompt: {} });
   await m.tools.find((t) => t.name === "wf_write_artifact").execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_normRegP01", agent: "wf/planner" });
   const input = { agent: "wf/planner", sessionID: "ses" };

@@ -12,6 +12,9 @@ import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（raw
 import { GATES, evaluateTransition, flowFor } from "../server/lib.ts";
 import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
+// 效率批 P1：plan 机器区 fixture（M 级真写路径预检要求；单 lane edges 空表合法）
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+
 const DIR = "/tmp/opencode/wf-plan-confirm";
 const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
@@ -58,7 +61,10 @@ test("M16-r44 full wf:build 关卡：无确认拒（指路 question）、有确�
   assert.match(String(msg), /方案确认关卡未过/);
   assert.match(String(msg), /question/, "拒绝文案指路 question 交互");
   assert.match(String(msg), /批准执行/, "指路含固定选项标签");
-  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z" })), null);
+  // 效率批 P1（评审 M1 修订）：full 模式 M/L 加边表要件——确认齐缺边表 → 边表关卡拒（size 缺省=M）
+  assert.match(String(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z" }))), /lane 依赖边表关卡未过/, "M 确认齐缺边表 → 边表关卡拒");
+  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z", laneDepsOk: true })), null, "确认+边表 → 放行");
+  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z", size: "S" })), null, "S 豁免边表");
 });
 
 test("M16-r44 清零：wf:plan 重开规划作废确认（纯函数）", () => {
@@ -155,7 +161,7 @@ test("M16-r44 观察：重复批准幂等（审计恰一条）", async () => {
 // ── harness：三路清零 + 关卡 e2e ─────────────────────────────────────
 test("M16-r44 e2e：full 链——未确认 wf:build 拒；确认后放行；确认记账贯穿至 done", async () => {
   const sid = "ses_pc7"; const m = mkCtx(); await plugin.setup(m.ctx);
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] pc-e2e" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL][S] pc-e2e" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_pc7p", agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
@@ -170,6 +176,7 @@ test("M16-r44 e2e：full 链——未确认 wf:build 拒；确认后放行；确
   assert.match(await cmd(m, "wf:review-build").execute({ sessionID: sid, prompt: {} }), /build_review/);
   assert.match(await cmd(m, "wf:test").execute({ sessionID: sid, prompt: {} }), /testing/);
   await tool(m).execute({ kind: "test-report", content: "**结论**: PASS\n证据" }, { sessionID: "ses_pc7t", agent: "wf/tester" });
+  await tool(m).execute({ kind: "lessons", content: "# lessons\n1 条（效率批 P2）" }, { sessionID: "ses_pc7t", agent: "wf/tester" });
   assert.match(await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} }), /done/, "确认记账不拦 done（贯穿全程）");
 });
 
@@ -177,12 +184,12 @@ test("M16-r44 e2e：plan 内容修订（content 全量）作废确认（artifact
   const sid = "ses_pc8"; const m = mkCtx(); await plugin.setup(m.ctx);
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] pc-inval" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\n旧方案" }, { sessionID: "ses_pc8p", agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\n旧方案" + BLOCK }, { sessionID: "ses_pc8p", agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await ask(m, sid);
   assert.ok(stOf(sid).verdicts?.confirmedAt);
   // planner content 全量重写 plan → 确认作废（与 planReviewVerdict/testPlanWritten 同点）
-  await tool(m).execute({ kind: "plan", content: "# plan v2\n新方案" }, { sessionID: "ses_pc8p", agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan v2\n新方案" + BLOCK }, { sessionID: "ses_pc8p", agent: "wf/planner" });
   assert.equal(stOf(sid).verdicts?.confirmedAt, undefined, "kind=plan 写入清 planConfirmedAt");
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /方案确认关卡未过/, "作废后 wf:build 重新被确认关卡拒");

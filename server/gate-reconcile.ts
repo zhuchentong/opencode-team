@@ -17,9 +17,11 @@ const hashOf = (buf: Buffer): string => createHash("sha256").update(buf).digest(
 
 /** 命令 → gate 依赖产物 kind（关卡的文件面；确认类记账 confirmedAt 经 question 观测，不在文件面内）。 */
 const GATE_KINDS: Record<string, string[]> = {
-  "wf:build": ["plan-review", "plan"], // daily-build（M/L 须 planReview=PASS+lane 表；plan 兼带 laneTableWritten 解析）
+  "wf:build": ["plan-review", "plan"], // daily-build（M/L 须 planReview=PASS+lane 表+边表；plan 兼带 laneTableWritten/laneDepsOk 解析）
   "wf:test-design": ["test-plan"],     // dual-channel（full 双通道）
-  "wf:done": ["test-report"],          // acceptance（结论 PASS）
+  // 效率批 P2（评审 M4 修订）：lessons 前置为 done 关卡要件——原生 write lessons.md 忘 register 时
+  // 由对账补记自动修复（否则 done 被拒且无自动恢复路径）。
+  "wf:done": ["test-report", "lessons"], // acceptance（结论 PASS + lessons 在案）
 };
 
 /**

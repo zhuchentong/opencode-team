@@ -28,8 +28,8 @@ test("FLOWS 全表正向流转链（主路径，无返工；M16-r28：assign 并
   for (const cmd of steps) {
     if (cmd === "wf:plan") (st.verdicts ??= {}).intakeConfirmedAt = "2026-01-01T00:00:00Z"; // intake-discuss-gate T04：需求确认关卡前置条件
     if (cmd === "wf:test-design") (st.verdicts ??= {}).testPlanWritten = true; // gate 前置条件（R3 T3.1 子步 B）
-    if (cmd === "wf:build") (st.verdicts ??= {}).confirmedAt = "2026-01-01T00:00:00Z"; // M16-r44：方案确认关卡前置条件
-    if (cmd === "wf:done") (st.verdicts ??= {}).testReport = "PASS"; // gate 前置条件
+    if (cmd === "wf:build") { (st.verdicts ??= {}).confirmedAt = "2026-01-01T00:00:00Z"; st.verdicts.laneDepsOk = true; } // M16-r44：方案确认关卡 + 效率批 P1：边表要件（full M/L）
+    if (cmd === "wf:done") { (st.verdicts ??= {}).testReport = "PASS"; st.verdicts.lessonsWritten = true; } // gate 前置条件（效率批 P2：+lessons 在案）
     const r = advance(st, cmd, "[FULL] demo-task"); // M16-r34：本测试验证完整 9 阶段流，显式 [FULL]
     assert.equal(r.ok, true, `${cmd} 应通过：${JSON.stringify(r)}`);
   }
@@ -115,7 +115,7 @@ test("计数器「进入即计数」：review 首入=1，重复递增，达 LIMI
 });
 
 test("计数器独立：build_review 与 test_fix 各自计数", () => {
-  const st = mkSt("test_design", { planConfirmedAt: "2026-01-01T00:00:00Z" }); // M16-r44：wf:build 关卡前置
+  const st = mkSt("test_design", { planConfirmedAt: "2026-01-01T00:00:00Z", laneDepsOk: true }); // M16-r44：wf:build 关卡前置（效率批 P1：+边表要件）
   assert.equal(advance(st, "wf:build").ok, true);
   assert.equal(advance(st, "wf:reconcile").ok, true);
   assert.equal(advance(st, "wf:review-build").ok, true);
@@ -216,10 +216,10 @@ const runDailyToDone = async (h, slug) => {
   await h.run("wf:intake", slug);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true });
   await h.run("wf:build");
   await h.run("wf:test");
-  h.patch({ testReportVerdict: "PASS" });
+  h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案
   await h.run("wf:done");
 };
 
@@ -293,10 +293,10 @@ test("A5 计时：强制重 intake（!slug）4 字段重置（phaseDurations 回
 const runDailyToDoneNoIntake = async (h) => {
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true });
   await h.run("wf:build");
   await h.run("wf:test");
-  h.patch({ testReportVerdict: "PASS" });
+  h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案
   await h.run("wf:done");
 };
 
@@ -426,9 +426,14 @@ test("v2 lane 分组表硬关卡（daily M/L）：evaluateTransition 层拒绝+�
   assert.match(r.msg, /^❌/, "拒绝文案 REJECT_PREFIX 不变量");
   assert.match(r.msg, /lane 分组表关卡未过/);
   assert.match(r.msg, /wf:plan/, "指路 wf:plan 修订补表");
-  // 补记账（laneTableWritten=true）→ 放行
+  // 补记账（laneTableWritten=true）→ 效率批 P1：边表关卡拒（第四要素，先于结论校验）
   m.verdicts.laneTableWritten = true;
-  assert.ok(evaluateTransition("wf:build", m, "").ok, "补 lane 表记账后放行");
+  const rDep = evaluateTransition("wf:build", m, "");
+  assert.equal(rDep.ok, false);
+  assert.match(rDep.msg, /^❌/);
+  assert.match(rDep.msg, /lane 依赖边表关卡未过/);
+  m.verdicts.laneDepsOk = true;
+  assert.ok(evaluateTransition("wf:build", m, "").ok, "补 lane 表+边表记账后放行");
   // S 级豁免：无 lane 表也放行（仅须确认）
   const s = mkSt("review", { mode: "daily", size: "S", planConfirmedAt: "x" });
   assert.ok(evaluateTransition("wf:build", s, "").ok, "S 级豁免 lane 表");

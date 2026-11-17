@@ -1,5 +1,6 @@
 // wf-workflow — domain/artifact：kind→文件名/verdict 解析/patch 模糊匹配/阶段纪律/瘦身预算（自 lib.ts 逐字节平移）。
 import { tierOf, type WfState } from "./types.ts"; // R2 T2.1：tierOf 平移至 types 叶子（flow 域消费合法化）
+import { checkLaneDeps } from "./lane-graph.ts"; // 效率批 P1：lane 依赖边表校验（M3 修订——markVerdicts 单点自 derive）
 
 // ── M3：产物 kind → 文件名（循环类产物按轮次编号）──────────────────
 /** 产物 kind → 文件名工厂（循环类产物按当前轮次编号）。 */
@@ -125,7 +126,9 @@ export const ARTIFACT_PHASE: Record<string, string> = {
   "test-plan": "review",
   "build-review": "build_review",
   "test-report": "testing",
-  lessons: "done",
+  // 效率批 P2（评审 M2 修订）：lessons 前置至 testing 阶段产出（leader 内联自写、done 前完成）——
+  // 期望阶段仍留 "done" 会与新契约正面冲突（testing 期写 lessons 每写必噪 ⚠️）。
+  lessons: "testing",
 };
 /**
  * 产物错位告警：kind 有期望阶段且当前阶段不符时返回 ⚠️ 文案，否则 null（纯函数）。
@@ -240,11 +243,18 @@ export function markVerdicts(
   st.artifacts[file] = { at, bytes, hash };
   st.verdicts = st.verdicts ?? {};
   if (kind === "test-plan") st.verdicts.testPlanWritten = true;
+  // 效率批 P2：lessons 已产出记账（GATES["wf:done"] 验收要件；gate-reconcile GATE_KINDS["wf:done"]
+  // 增 lessons——原生 write 忘 register 由对账补记自动修复，同一记账单点）。
+  if (kind === "lessons") st.verdicts.lessonsWritten = true;
   if (kind === "test-report") st.verdicts.testReport = parseVerdict(content);
   if (kind === "plan-review") st.verdicts.planReview = parseVerdict(content);
   if (kind === "plan") {
     const v = st.verdicts;
     if (opts.clearOnPlan) { delete v.planReview; delete v.testPlanWritten; delete v.confirmedAt; } // M16-r39 T02 + M16-r44：plan 修订清双通道+确认记账
     v.laneTableWritten = laneTableWritten(content); // r55 修复 1 同源口径（大小写归一+容空白）
+    // 效率批 P1（评审 M3 修订）：laneDepsOk 记账同点自 derive——gate-reconcile 补记只经 markVerdicts
+    //（拿不到 artifact-tool 的预检结果），故判定必须在本单点完成（artifact-tool 预检仅 fail-fast 副本）；
+    // 随 mark 无条件重算（laneTableWritten 同款，clearOnPlan 无需清）。tierOf：T2.1 纪律，禁 size 字面量。
+    v.laneDepsOk = checkLaneDeps(content, tierOf(st.size)).ok;
   }
 }

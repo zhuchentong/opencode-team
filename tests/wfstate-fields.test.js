@@ -57,7 +57,7 @@ test("T3.1 WfState 顶层字段名集快照锁（新字段须显式登记）", (
 test("T3.1 WfState 各子对象字段名集快照锁", () => {
   const body = ifaceBody("WfState");
   assert.deepEqual(subProps(body, "timing").toSorted(), ["finishedAt", "phaseDurations", "phaseEnteredAt", "startedAt"].toSorted());
-  assert.deepEqual(subProps(body, "verdicts").toSorted(), ["confirmedAt", "gateStatus", "intakeConfirmedAt", "laneTableWritten", "planReview", "testPlanWritten", "testReport"].toSorted());
+  assert.deepEqual(subProps(body, "verdicts").toSorted(), ["confirmedAt", "gateStatus", "intakeConfirmedAt", "laneDepsOk", "laneTableWritten", "lessonsWritten", "planReview", "testPlanWritten", "testReport"].toSorted()); // 效率批 P1/P2：+laneDepsOk/lessonsWritten
   assert.deepEqual(subProps(body, "reuse").toSorted(), ["roleSessions", "tierBase"].toSorted());
   assert.deepEqual(subProps(body, "delivery").toSorted(), ["doneGit", "selfMod"].toSorted());
 });

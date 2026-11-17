@@ -90,10 +90,10 @@ const toDoneWithLanes = async (t, dir, withLanes = true) => {
   await h.run("wf:intake", `f1-${t}`);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true });
   await h.run("wf:build");
   await h.run("wf:test");
-  h.patch({ testReportVerdict: "PASS" });
+  h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案
   if (withLanes) h.patch({ lanes: { ...activeLanes(2), T02: { ...activeLanes(2).T02, status: "done" } } }); // 混合形态：1 active + 1 done
   return { h, out: await h.run("wf:done") };
 };
@@ -150,7 +150,8 @@ const toBuildGate = async (h, slug) => {
 
 test("批次2 gate 拒绝路径：盘上 plan-review/plan 已落盘未记账 → 自动补注册后放行", async () => {
   const dir = mkReconcileDir("gr-ok", {
-    "plan.md": "# 计划\n\n## lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n",
+    // 效率批 P1：盘上 plan 须含合法机器区——对账补记经 markVerdicts 自 derive laneDepsOk，缺块则关卡仍拒
+    "plan.md": "# 计划\n\n## lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n",
     "plan-review-r1.md": "**结论**: PASS\n\n五维过。\n",
   });
   const h = await mkWiringHarness({ sessionID: "ses_gr1", dir });

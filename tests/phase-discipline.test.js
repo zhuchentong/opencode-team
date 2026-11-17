@@ -15,7 +15,9 @@ const mkSt = (phase, extra = {}) => withVerdicts({
 test("ARTIFACT_PHASE：六类产物期望阶段映射齐全", () => {
   assert.deepEqual(ARTIFACT_PHASE, {
     plan: "planning", "plan-review": "review", "test-plan": "review",
-    "build-review": "build_review", "test-report": "testing", lessons: "done",
+    "build-review": "build_review", "test-report": "testing",
+    // 效率批 P2（评审 M2 修订）：lessons 前置至 testing 产出（leader 内联、done 前完成）
+    lessons: "testing",
   });
 });
 
@@ -29,7 +31,8 @@ test("artifactPhaseWarning：错位才告警，归位/未知/无阶段不告警"
   assert.equal(artifactPhaseWarning("plan-review", "review"), null);
   assert.equal(artifactPhaseWarning("test-report", "testing"), null);
   assert.equal(artifactPhaseWarning("plan", "planning"), null);
-  assert.equal(artifactPhaseWarning("lessons", "done"), null);
+  assert.equal(artifactPhaseWarning("lessons", "testing"), null); // 效率批 P2：lessons 前置至 testing 归位
+  assert.match(artifactPhaseWarning("lessons", "done"), /产物阶段错位.*lessons.*testing.*done/, "done 期写 lessons=迟写（前置契约下应已在 testing 产出）→ 告警");
   // 未知 kind / 无阶段 → null（不阻断）
   assert.equal(artifactPhaseWarning("bogus", "planning"), null);
   assert.equal(artifactPhaseWarning("plan-review", null), null);

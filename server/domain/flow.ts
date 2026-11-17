@@ -9,7 +9,7 @@
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
 import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type Slug, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
-import { CONFIRM_GATE_MSG, GATE_DUAL_CHANNEL_MSG, INTAKE_CONFIRM_GATE_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
+import { CONFIRM_GATE_MSG, DONE_LESSONS_GATE_MSG, GATE_DUAL_CHANNEL_MSG, INTAKE_CONFIRM_GATE_MSG, LANE_DEPS_GATE_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
 
 // M16-r28（性能审计批次 1/2）：B1-1 shell 误伤翻案（=>/比较符/tee<）+ guard 项目 containment
 //   （项目外写放行，对齐 shell 分支语义）；B1-2~B1-5 guidance 提速（reconcile 去全量、并发委派、
@@ -89,15 +89,24 @@ export const GATES: Record<string, Gate> = {
     explain: () => GATE_DUAL_CHANNEL_MSG,
   },
   // M16-r44：方案确认关卡（full 模式；daily 用 GATES_DAILY["wf:build"] 同源校验）
+  // 效率批 P1（评审 M1 修订）：full 模式 M/L 同加 lane 依赖边表要件——daily-only 执法会让
+  // test_49/50 形态的 full 任务完全绕过边表（F1 类结构性返修在 full 模式同样发生且更贵）。
   "wf:build": {
     id: "plan-confirm",
-    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt,
-    explain: () => CONFIRM_GATE_MSG,
+    isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt
+      && (tierOf(st.size) === "S" || st.verdicts?.laneDepsOk === true),
+    explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG
+      : (tierOf(st.size) !== "S" && st.verdicts?.laneDepsOk !== true) ? LANE_DEPS_GATE_MSG
+      : CONFIRM_GATE_MSG),
   },
+  // 效率批 P2（learn 前置移交）：done 验收=测试 PASS + lessons 在案（learn 移交 leader 内联，
+  // learner 改职 FAIL 取证/显式深审；F4 竞态随之根治——经验落盘先于交付确认）。
   "wf:done": {
     id: "acceptance",
-    isSatisfiedBy: (st) => st.verdicts?.testReport === "PASS",
-    explain: (st) => gateAcceptanceMsg(st.verdicts?.testReport),
+    isSatisfiedBy: (st) => st.verdicts?.testReport === "PASS" && st.verdicts?.lessonsWritten === true,
+    explain: (st) => (st.verdicts?.testReport !== "PASS"
+      ? gateAcceptanceMsg(st.verdicts?.testReport)
+      : DONE_LESSONS_GATE_MSG),
   },
 };
 
@@ -118,20 +127,24 @@ export const FLOWS_DAILY: Record<string, FlowDef> = {
   "wf:test":   { to: "testing",  from: ["building", "testing"],        counter: null },
   "wf:done":   { to: "done",     from: ["testing"],                    counter: null },
 };
-// R2 T2.3：daily wf:build 关卡=确认（全 tier 必经）+ M/L 独立验证结论双要素；
+// R2 T2.3：daily wf:build 关卡=确认（全 tier 必经）+ M/L 独立验证结论双要素 + lane 依赖边表（效率批 P1）；
 // S 只跳结论不跳确认；size 判定走 tierOf（T2.1 TierCtx 纪律：`st.size ===` 字面清零）。
-/** daily 模式关卡表：wf:plan 需求确认（同对象复用）+ wf:build 三要素判定（确认→lane 表→review 结论，S 级只跳后两者）。 */
+/** daily 模式关卡表：wf:plan 需求确认（同对象复用）+ wf:build 四要素判定（确认→lane 表→边表→review 结论，S 级只跳后三者）。 */
 export const GATES_DAILY: Record<string, Gate> = {
   // intake-discuss-gate T04：同 wf:done 模式——同对象复用（判定/文案单源，双表行为恒一致）
   "wf:plan": GATES["wf:plan"],
   "wf:build": {
     id: "daily-build",
-    // v2：判定顺序=用户确认 → lane 分组表（M/L，并行优先硬卡——串行须以 lane 表书面举证）→ review 结论（M/L）
+    // v2：判定顺序=用户确认 → lane 分组表（M/L，并行优先硬卡——串行须以 lane 表书面举证）
+    //   → lane 依赖边表（效率批 P1，M/L——结构正确性机械化：跨 lane 边须早波次/无环/声明≥层深）
+    //   → review 结论（M/L）
     isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt
       && (tierOf(st.size) === "S" || !!st.verdicts?.laneTableWritten)
+      && (tierOf(st.size) === "S" || st.verdicts?.laneDepsOk === true)
       && (tierOf(st.size) === "S" || st.verdicts?.planReview === "PASS"),
     explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG
       : (tierOf(st.size) !== "S" && !st.verdicts?.laneTableWritten) ? LANE_TABLE_GATE_MSG
+      : (tierOf(st.size) !== "S" && st.verdicts?.laneDepsOk !== true) ? LANE_DEPS_GATE_MSG
       : gateDailyVerifyMsg(st.verdicts?.planReview)),
   },
   "wf:done": GATES["wf:done"],

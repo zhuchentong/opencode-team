@@ -61,7 +61,7 @@ test("项① 路径等价：大写「Lane 分组表」经 gate 对账补记 → 
   // 旧口径 /lane 分组表/ 对大写标题误记 false → wf:build 补记后仍拒绝；现经 markVerdicts 单点应放行
   const dir = fs.mkdtempSync("/tmp/opencode/wf-mv-");
   fs.mkdirSync(`${dir}/.workflow/mv-lane`, { recursive: true });
-  fs.writeFileSync(`${dir}/.workflow/mv-lane/plan.md`, "# 计划\n\n## Lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n");
+  fs.writeFileSync(`${dir}/.workflow/mv-lane/plan.md`, "# 计划\n\n## Lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n"); // 效率批 P1：盘上 plan 须含合法机器区（对账补记自 derive laneDepsOk）
   fs.writeFileSync(`${dir}/.workflow/mv-lane/plan-review-r1.md`, "**结论**: PASS\n\n五维过。\n");
   const h = await mkWiringHarness({ sessionID: "ses_mv2", dir });
   await h.run("wf:intake", "mv-lane");

@@ -11,6 +11,9 @@ import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（raw
 
 // 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
 
+// 效率批 P1：plan 机器区 fixture（M 级预检要求；单 lane edges 空表合法——预算用例 M 档专用）
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+
 const DIR = "/tmp/opencode/wf-patch";
 const DB = `${DIR}/.workflow/wf.db`;
 
@@ -55,7 +58,7 @@ test("M16-r33 patch：首写 content→patch 命中更新文件与记账；审�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p1";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "patch-demo" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] patch-demo" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   const w = await tool(m).execute({ kind: "plan", content: "# 计划\n\n## 风险\n\n旧风险描述\n" }, { sessionID: sid, agent: "wf/planner" });
   assert.match(w.content, /已写入/);
@@ -77,7 +80,7 @@ test("M16-r33 patch：未命中/歧义/目标不存在/双缺/双给 → 报错�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p2";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "patch-err" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] patch-err" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   // 目标不存在（首写必须 content）
   const noFile = await tool(m).execute({ kind: "plan", patch: [{ old: "a", new: "b" }] }, { sessionID: sid, agent: "wf/planner" });
@@ -111,7 +114,7 @@ test("M16-r33 patch：多补丁顺序应用（后条匹配前条结果）；old=
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p3";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "patch-seq" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] patch-seq" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "A1\nB1\n" }, { sessionID: sid, agent: "wf/planner" });
   const p = await tool(m).execute({
@@ -131,7 +134,7 @@ test("M16-r33 patch：test-report verdict 从结果重解析——FAIL→patch �
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p4";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] patch-verdict" } }); // M16-r34：完整流（test-design/reconcile/review-build）
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL][S] patch-verdict" } }); // M16-r34：完整流（test-design/reconcile/review-build）
   // 直推 testing（测试只关心 verdict 记账链路）
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
@@ -152,6 +155,7 @@ test("M16-r33 patch：test-report verdict 从结果重解析——FAIL→patch �
   assert.match(p.content, /已写入/);
   assert.equal(stOf(sid).verdicts?.testReport, "PASS", "patch 后 verdict 应从结果重解析");
   assert.match(p.content, /验收 PASS/, "verdict 指路应基于重解析结果");
+  await tool(m).execute({ kind: "lessons", content: "# lessons\n1 条（效率批 P2）" }, { sessionID: sid, agent: "wf/leader" });
   const ok = await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} });
   assert.match(ok, /【wf 工作流｜done】/);
   dispose?.();
@@ -161,7 +165,7 @@ test("M16-r33 patch：test-plan patch 保持 testPlanWritten；轮次编号文�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_p5";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "patch-round" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] patch-round" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "test-plan", content: "# 用例\n\n旧用例\n" }, { sessionID: sid, agent: "wf/tester" });
@@ -193,7 +197,7 @@ test("M16-r33 tier：S 级预算收紧——11KB plan 在 S 级告警、M 级不
   await cmd(m, "wf:intake").execute({ sessionID: sidM, prompt: { text: "mid-task" } });
   assert.equal(stOf(sidM).size, "M", "缺省体量=M");
   await cmd(m, "wf:plan").execute({ sessionID: sidM, prompt: {} });
-  const wM = await tool(m).execute({ kind: "plan", content: elevenKb }, { sessionID: sidM, agent: "wf/planner" });
+  const wM = await tool(m).execute({ kind: "plan", content: elevenKb + BLOCK }, { sessionID: sidM, agent: "wf/planner" });
   assert.ok(!/超瘦身预算/.test(wM.content), "M 级 11KB 在预算内不告警");
   // S 级 guidance 渲染 S 预算 + 从简指引
   assert.match(rS, /\[S\]\/\[M\]\/\[L\]|体量/, "intake guidance 应含体量分级指引");
@@ -205,7 +209,7 @@ test("M16-r47 fuzzy：exact 命中仍 mode=patch；引号/破折号变体回退�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_f1";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "fuzzy-demo" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] fuzzy-demo" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   // 盘上：弯引号 + 破折号（模型转录常写成直引号/连字符）
   await tool(m).execute({ kind: "plan", content: "他说\u201C保留\u201D——风险与\u2018未知\u2019项\n其余内容\n" }, { sessionID: sid, agent: "wf/planner" });
@@ -226,7 +230,7 @@ test("M16-r47 fuzzy：行尾空白回退命中；归一后歧义报错不落盘�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_f2";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "fuzzy-ws" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] fuzzy-ws" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   // 盘上行尾有不可见空白，模型转录省略
   await tool(m).execute({ kind: "plan", content: "第一行   \n第二行\t\n尾部\n" }, { sessionID: sid, agent: "wf/planner" });

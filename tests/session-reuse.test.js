@@ -13,6 +13,9 @@ import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（raw
 import { trackRoleSession, evaluateTransition } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts";
 
+// 效率批 P1：plan 机器区 fixture（M 级预检要求；单 lane edges 空表合法）
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+
 const DIR = "/tmp/opencode/wf-session-reuse";
 const DB = `${DIR}/.workflow/wf.db`;
 // mock 形状与 integration.test.js 同源（含 tool.hook 捕获，供 guard-hook 登记测试）
@@ -131,7 +134,7 @@ test("wf_write_artifact：wf/planner 子会话写 plan → 管辖状态自动登
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] reuse" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   // 子会话（独立 sessionID）写 plan → 登记到 leader 管辖状态
-  await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: "ses_plannerChild", agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nT01" + BLOCK }, { sessionID: "ses_plannerChild", agent: "wf/planner" });
   const st = stOf(leader);
   assert.equal(st.reuse.roleSessions["wf/planner"].sessionID, "ses_plannerChild", "产物写入自动登记子会话");
   // 重委派点（回 planning 修订）guidance 渲染续用指引——零回显（T02）
@@ -163,7 +166,7 @@ test("guard-hook：wf/builder 子会话 edit（building 非阻断阶段）→ �
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] build" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: leader, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\nT01" }, { sessionID: "ses_plannerB", agent: "wf/planner" }); // v2：lane 表关卡记账
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\nT01" + BLOCK }, { sessionID: "ses_plannerB", agent: "wf/planner" }); // v2：lane 表关卡记账
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: "ses_reviewerB", agent: "wf/planner-reviewer" });
   // M16-r44：wf:build 关卡须方案确认（leader question 观察记账）
   await m.hook()({ tool: "question", sessionID: leader, agent: "workflow",
@@ -202,7 +205,7 @@ test("wf:status：输出含 roleSessions 行（真机续用取证；诊断命令
   const leader = "ses_lead5";
   await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] status" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan" }, { sessionID: "ses_pStatus", agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan" + BLOCK }, { sessionID: "ses_pStatus", agent: "wf/planner" });
   const out = await cmd(m, "wf:status").execute({ sessionID: leader, prompt: {} });
   assert.match(out, /roleSessions:/);
   assert.match(out, /ses_pStatus/);

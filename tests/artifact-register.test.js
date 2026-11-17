@@ -115,7 +115,7 @@ test("M16-r47 register：test-report 注册 PASS → wf:done 关卡放行（与 
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_r3";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] register-done" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL][S] register-done" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   nativeWrite("register-done", "test-plan.md", "# 用例\n");
@@ -131,6 +131,8 @@ test("M16-r47 register：test-report 注册 PASS → wf:done 关卡放行（与 
   const w = await tool(m).execute({ kind: "test-report" }, { sessionID: sid, agent: "wf/tester" });
   assert.equal(stOf(sid).verdicts?.testReport, "PASS");
   assert.match(w.content, /验收 PASS/, "verdict 指路基于盘上解析");
+  nativeWrite("register-done", "lessons.md", "# lessons\n1 条（效率批 P2：done 关卡校验在案）\n");
+  await tool(m).execute({ kind: "lessons" }, { sessionID: sid, agent: "wf/leader" });
   const ok = await cmd(m, "wf:done").execute({ sessionID: sid, prompt: {} });
   assert.match(ok, /【wf 工作流｜done】/);
   dispose?.();
@@ -140,7 +142,7 @@ test("M16-r47 register：plan 幂等守卫——bytes 未变重放 no-op 不清�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_r4";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "register-plan" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] register-plan" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# 计划 v1\n" }, { sessionID: sid, agent: "wf/planner" });
@@ -192,7 +194,7 @@ test("M16-r47 register：超预算产物注册仍告警（字节计，不阻断�
 
 // ── r53 批次 1：register 幂等守卫 hash 复核（bytes 弱比较升级 sha256 前 12 位）─────────
 const setupPlan = async (m, sid, slug) => {
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: slug } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: `[S] ${slug}` } }); // 效率批 P1：S 豁免边表预检（机制测试与体量无关）
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan", content: "# 计划 v1\n" }, { sessionID: sid, agent: "wf/planner" });

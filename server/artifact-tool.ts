@@ -9,7 +9,7 @@
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
-import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源）
+import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, checkLaneDeps, tierOf, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源） // 效率批 P1：checkLaneDeps/tierOf（预检 fail-fast 副本）
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -139,6 +139,15 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           }
           const bytes = fs.statSync(target).size;
           const hash = hashOf(fs.readFileSync(target)); // r53 批次 1：落盘结果 hash（write 补 \n 后以盘上为准）
+          // 效率批 P1：plan lane-deps 机器区预检（fail-fast 副本——记账判定以 markVerdicts 单点自 derive 为准，
+          // 评审 M3；gate-reconcile 补记路径同样只经 markVerdicts）。
+          // 评审 M5 修订：硬拒仅限 planning/review（未来关卡的保护窗口内）；building/testing 降级 ⚠️+记账
+          // laneDepsOk=false（此时 wf:build 已过，硬拒=纯摩擦）；register 幂等 no-op 早退（上方 bytes+hash
+          // 一致路径）先于本检查——保 pre-upgrade 无机器区 plan 的重放不受拒。
+          const dep = kind === "plan" ? checkLaneDeps(finalContent, tierOf(initial.size)) : null;
+          if (dep && !dep.ok && (initial.phase === "planning" || initial.phase === "review")) {
+            return { content: `❌ lane 依赖边表校验未过（${file}，本次未落盘/未记账——修订机器区后重试；violations 清单如下）：\n` + dep.violations.map((s) => `- ${s}`).join("\n") };
+          }
           // M16-r33/M16-r34（语义随 markVerdicts 迁移）：verdict 从**结果全文**解析（patch/register
           // 模式入参无 content——markVerdicts 内部经 domain parseVerdict 对全文判定，否则 done 关卡误拦）
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
@@ -180,6 +189,15 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）；M16-r33：按任务体量分级
           const sizeWarn = artifactSizeWarning(kind, bytes, st.size);
           if (sizeWarn) note += `\n${sizeWarn}`;
+          // 效率批 P1：lane-deps 预检结果回显（通过=合并序信息面；未过硬拒降级=⚠️+violation 清单，
+          // laneDepsOk=false 已由 markVerdicts 记账、wf:build 关卡兜底）。
+          if (dep) {
+            if (dep.ok) {
+              if (dep.order) note += `\n→ lane 依赖边表通过；合并序：${dep.order}`;
+            } else {
+              note += `\n⚠️ lane 依赖边表未过（${dep.violations.length} 项，已记账 laneDepsOk=false，wf:build 关卡将拒——修订机器区后重新注册）：\n` + dep.violations.map((s) => `- ${s}`).join("\n");
+            }
+          }
           if ((kind === "test-report" || kind === "plan-review") && !hasStrictVerdictLine(finalContent)) {
             note += `\n⚠️ ${kind} 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 ${kind === "test-report" ? "/wf:done" : "日常模式 /wf:build"} 会被关卡拦截）`;
           }

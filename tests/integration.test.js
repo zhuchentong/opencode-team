@@ -76,7 +76,7 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   const dispose = await plugin.setup(m.ctx);
 
   // 1) intake：guidance 返回 + entry 注入含完整阶段指引
-  const r1 = await cmd(m, "wf:intake").execute({ sessionID: "ses_i", prompt: { text: "[FULL] demo" } }); // M16-r34：本测试验证完整流
+  const r1 = await cmd(m, "wf:intake").execute({ sessionID: "ses_i", prompt: { text: "[FULL][S] demo" } }); // M16-r34：本测试验证完整流
   assert.match(r1, /【wf 工作流｜intake】slug=demo/);
   assert.equal(stOf(m).phase, "intake");
   assert.match(m.entries.at(-1).value, /phase=intake slug=demo/);
@@ -148,6 +148,7 @@ test("全链路：intake→plan 注入 guidance；planning 阶段阻断并记账
   assert.match(await cmd(m, "wf:done").execute({ sessionID: "ses_i", prompt: {} }), /验收关卡未过/);
   const trP = await tool(m).execute({ kind: "test-report", content: "**结论**: PASS\n全绿" }, { sessionID: "ses_i", agent: "wf/tester" });
   assert.match(trP.content, /→ 验收 PASS/); // P4 公告
+  await tool(m).execute({ kind: "lessons", content: "# lessons\n1 条（效率批 P2）" }, { sessionID: "ses_i", agent: "wf/tester" });
   await cmd(m, "wf:done").execute({ sessionID: "ses_i", prompt: {} });
   assert.equal(stOf(m).phase, "done");
 
@@ -512,7 +513,7 @@ test("M16-r32 产物瘦身：超预算告警不阻断落盘/记账；预算内�
   const m = mkCtx();
   const dispose = await plugin.setup(m.ctx);
   const sid = "ses_budget";
-  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "budget" } });
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[S] budget" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} }); // → planning
   // 超预算 plan（>20KB）→ 告警，但落盘/记账照常
   const big = "x".repeat(21 * 1024);

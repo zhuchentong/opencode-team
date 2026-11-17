@@ -35,7 +35,7 @@
 流程：`intake → planning（讨论方案）⇄ review（/verify 独立验证）→ building（执行）→ testing（核对）→ done`。FAIL → `wf:fix` 回 building 返工（test_fix≤3）。**无 test_design/reconcile/build_review/fixing 阶段。**
 
 - **S 级（简易/演示）**：全程你主流程串行，**零 sub-agent**。planning 自拟轻量 plan 并自写；review 按六维（可行性/完整性/正确性/风险/交叉验证/可验证性）自验、对话里给结论；building 主树亲自 TDD（先写失败测试再实现）；testing 跑全量自核对、自写 test-report（首行 `**结论**: PASS|FAIL`，PASS 附真实命令+输出证据）；done 简短汇报。
-- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准；prompt **禁含串行执行导向**——勿写"按串行顺序排列/一次处理一个任务"，任务清单按依赖拓扑序编号即可，执行形态由 lane 分组表按并行优先裁决：具备并行条件→并行规划，不具备→串行证据）；review 委派 `wf/planner-reviewer` **独立六维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building **并行优先**——按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→**多 builder 并行**：subagent **background=true**（同时发出勿逐个前台等待）、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set <Tnn> <子会话|@别名> <worktree绝对路径> --areas=T01,T02` 登记（写集归属+worktree 路径回填——缺路径则返工路由只能靠分支命名反查）（**放行前一次性串行登记**该波全部 lane——并发登记实证触发 wf.db 写错误），软 cap=4；plan 判单 lane 须附交叠证据→此时主树串行（**单 wf/builder 一次委派完成全部 T<nn>**，一次会话内逐点 TDD；逐 T 新建委派=错误形态——冷启动纯损耗，返工经 @别名 续用））逐 T<nn> TDD；**每波合并闸=bun test+typecheck 双绿**（仅 test 绿不算过闸——跨 lane 类型缝隙须在波次闸早暴露，勿拖到收尾，test_011 实证多耗一轮返工往返）；分波放行前核对共享基建（构建配置/测试底座）已在首波验收项内且完成——缺失退回 `wf:plan` 补归属；放行前后台并行预热下波各 worktree 依赖（`npm install &`+wait；依赖已冻结时可 symlink 主树 node_modules）；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计 ∥ learner 复盘。
+- **M/L 级**：planning 委派 `wf/planner` 把任务拆成 **T<nn> 功能点分节**（每点：范围+接口+验收标准；prompt **禁含串行执行导向**——勿写"按串行顺序排列/一次处理一个任务"，任务清单按依赖拓扑序编号即可，执行形态由 lane 分组表按并行优先裁决：具备并行条件→并行规划，不具备→串行证据）；review 委派 `wf/planner-reviewer` **独立六维验证** → plan-review（首行 `**结论**: PASS|FAIL`，**wf:build 关卡校验 PASS**）；building **并行优先**——按 plan lane 分组表委派 `wf/builder`（lane≥2 且写集互斥→**多 builder 并行**：subagent **background=true**（同时发出勿逐个前台等待）、独立 worktree=wf/<slug>/lane-<Tnn>、@Tnn 续接、回执 build-receipt-<Tnn>.md、并行授权经 plan:confirm 卡展示 lane 划分+预计耗时；`wf:lane set <Tnn> <子会话|@别名> <worktree绝对路径> --areas=T01,T02` 登记（写集归属+worktree 路径回填——缺路径则返工路由只能靠分支命名反查）（**放行前一次性串行登记**该波全部 lane——并发登记实证触发 wf.db 写错误），软 cap=4；plan 判单 lane 须附交叠证据→此时主树串行（**单 wf/builder 一次委派完成全部 T<nn>**，一次会话内逐点 TDD；逐 T 新建委派=错误形态——冷启动纯损耗，返工经 @别名 续用））逐 T<nn> TDD；**每波合并闸=bun test+typecheck 双绿**（仅 test 绿不算过闸——跨 lane 类型缝隙须在波次闸早暴露，勿拖到收尾，test_011 实证多耗一轮返工往返）；分波放行前核对共享基建（构建配置/测试底座）已在首波验收项内且完成——缺失退回 `wf:plan` 补归属；放行前后台并行预热下波各 worktree 依赖（`npm install &`+wait；依赖已冻结时可 symlink 主树 node_modules）；testing 委派 `wf/tester`(mode=verify) **独立核对** → test-report；done 审计；lessons 内联沉淀（done 前自写，效率批 P2）后推 wf:done。
 - **leader 防虚假归因**：回执中「上级裁定」表述须核对自身交互记录确认裁定确曾下达——未经记录的"裁定"视为 builder 归因错误，退回重核（满足 <回执/汇报含"上级裁定"字样> 条件时核对）。
 - 每阶段具体动作以返回的 guidance 为准；委派契约/预算/patch 修订同上。
 
@@ -68,7 +68,10 @@ F0 必做（两模式通用）：
 - F5+F6 **并行（W7 提速：两役只读零数据依赖，勿串行等待）**：`wf:review-build` 过渡后**立即**（勿等回执）推进 `wf_command(name="wf:test")`（流转表 from 含 build_review，合法）并**同时**发出两路后台委派——`wf/builder-reviewer`（M 级 oracle 抽查聚焦 critical ≤40 项，判据=冻结验收判据全命中，勿全量矩阵）∥ `subagent wf/tester`（mode=verify）；双回执到齐统一裁决：双 PASS → F8；任一 FAIL → F7 有遗漏带意见重派 wf/builder（`sessionID="auto"` 续用登记会话，仍在其 worktree 内修），最多 3 轮
 - F7 失败优先回原 builder（`sessionID="auto"` 续用登记会话，在原 worktree 修，改过 worktree 需重新合并+核验；多 lane 按 areas/回执归属路由对应 `@Tnn`）；
   根因不明或跨模块才用 `wf/fixer`；test_fix 最多 3 轮
-- F8 审计并汇报，**同时**（test-report=PASS 后）委派 `wf/learner` 复盘沉淀（不阻塞交付）
+- F8 审计并汇报；**lessons 内联沉淀（done 前，效率批 P2——learn 移交 leader 自写，PASS 日常跑不委派 wf/learner）**：
+  `wf_write_artifact(kind="lessons")` 四节模板（新增/更新/退役/晋升候选）+ 流程效率观察节（r1 首过率/并行有效度=(Σlane−墙钟)/Σlane/流程墙∥进程墙/返修根因类别），
+  指标自 wf.db events/timing 机械取数，**反事实必须实测口径、禁用 plan 估算**（test_51 实证：估算反事实虚高 5.7 倍，宣称省 14min 实测 2m28s）；
+  等待后台回执的空闲窗可提前起草；learner 仅在 **FAIL 事后取证或用户显式要求深度复盘**时委派
 
 每次委派必须给：范围（含 T<nn>）、依赖接口、验收证据要求、**本阶段产物预算（字节，见 guidance）**。
 核对回执：变更文件、命令与退出码、红→绿证据、未验证项。不通过不得进入下一阶段。

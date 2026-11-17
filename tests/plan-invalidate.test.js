@@ -9,6 +9,9 @@ import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
 import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 
+// 效率批 P1：plan 机器区 fixture（M 级预检要求；单 lane edges 空表合法）
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+
 const DIR = "/tmp/opencode/wf-plan-inval";
 const DB = `${DIR}/.workflow/wf.db`;
 const mkCtx = () => {
@@ -44,7 +47,7 @@ test("T02 daily M：plan-review PASS 后 patch 改 plan → 验证结论被清�
   const sid = "ses_inv_d";
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] inv-daily" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" + BLOCK }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   assert.equal(stOf(sid).verdicts?.planReview, "PASS");
@@ -72,7 +75,7 @@ test("T02 full：test-plan 已写后 content 改 plan → 记账被清，wf:test
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });
   assert.equal(stOf(sid).verdicts?.testPlanWritten, true);
   // plan 修订（content 全量重写）→ 旧 test-plan 记账必须被清
-  const w = await tool(m).execute({ kind: "plan", content: "# plan v2\n方案变更\n" }, { sessionID: sid, agent: "wf/planner" });
+  const w = await tool(m).execute({ kind: "plan", content: "# plan v2\n方案变更\n" + BLOCK }, { sessionID: sid, agent: "wf/planner" });
   assert.match(w.content, /已写入/);
   assert.equal(stOf(sid).verdicts?.testPlanWritten, undefined, "plan 修订清 testPlanWritten");
   const rej = await cmd(m, "wf:test-design").execute({ sessionID: sid, prompt: {} });
@@ -87,14 +90,14 @@ test("T02 提示模式感知：daily 含 wf:review 不含 wf:test-design；full 
   const sidD = "ses_note_d";
   await cmd(m, "wf:intake").execute({ sessionID: sidD, prompt: { text: "note-daily" } });
   await cmd(m, "wf:plan").execute({ sessionID: sidD, prompt: {} });
-  const rd = await tool(m).execute({ kind: "plan", content: "# plan\n" }, { sessionID: sidD, agent: "wf/planner" });
+  const rd = await tool(m).execute({ kind: "plan", content: "# plan\n" + BLOCK }, { sessionID: sidD, agent: "wf/planner" });
   assert.match(rd.content, /plan 已修订/, "kind=plan 输出应含修订提示");
   assert.match(rd.content, /wf:review/);
   assert.ok(!rd.content.includes("wf:test-design"), "daily 提示不得含 wf:test-design");
   const sidF = "ses_note_f";
   await cmd(m, "wf:intake").execute({ sessionID: sidF, prompt: { text: "[FULL] note-full" } });
   await cmd(m, "wf:plan").execute({ sessionID: sidF, prompt: {} });
-  const rf = await tool(m).execute({ kind: "plan", content: "# plan\n" }, { sessionID: sidF, agent: "wf/planner" });
+  const rf = await tool(m).execute({ kind: "plan", content: "# plan\n" + BLOCK }, { sessionID: sidF, agent: "wf/planner" });
   assert.match(rf.content, /wf:review/);
   assert.match(rf.content, /wf:test-design/, "full 提示应含 wf:test-design");
 });
@@ -107,7 +110,7 @@ test("T02 边界：full 双记账并存（PASS+testPlanWritten）→ patch 改 p
   const sid = "ses_inv_both";
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[FULL] inv-both" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
-  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane\n\n旧方案\n" + BLOCK }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   await tool(m).execute({ kind: "plan-review", content: "**结论**: PASS\n通过" }, { sessionID: sid, agent: "wf/planner-reviewer" });
   await tool(m).execute({ kind: "test-plan", content: "# 用例" }, { sessionID: sid, agent: "wf/tester" });

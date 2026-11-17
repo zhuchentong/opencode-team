@@ -31,6 +31,20 @@ export const LANE_TABLE_GATE_MSG =
   "判单 lane 串行须附交叠证据）。请 wf_command(name=\"wf:plan\") 修订补表后再推进 /wf:build（若 plan.md 已原生补写落盘，" +
   "wf_write_artifact(kind=plan)（不带 content=注册）补记账即可）。";
 
+// 效率批 P1（test_51 F1/F6 复盘）：lane 依赖边表关卡拒绝文案（daily+full 共用，M/L 级）
+export const LANE_DEPS_GATE_MSG =
+  "❌ lane 依赖边表关卡未过：M/L 级 plan.md 须含合法 ```lane-deps 机器区（nodes 表 | T | wave | lane | +" +
+  " edges 表 | 消费方 | 提供方 | 符号 | kind |）。硬规则：跨 lane 边的提供方 wave 必须小于消费方 wave" +
+  "（kind=value|type 同规——worktree 里类型 import 同样编译失败）、无环、声明 wave ≥ 拓扑层深；" +
+  "被并行 lane 消费的符号必须下沉更早 wave。请 wf_command(name=\"wf:plan\") 修订（机器区仅许边级改写）后再推进 /wf:build" +
+  "（violations 逐条清单见 wf_write_artifact 回显；已原生补写落盘则 wf_write_artifact(kind=plan)（不带 content=注册）补记账）。";
+
+// 效率批 P2（learn 前置移交）：done 验收关卡——lessons 缺失分支文案（learn 已移交 leader 内联）
+export const DONE_LESSONS_GATE_MSG =
+  "❌ 经验沉淀关卡未过：lessons.md 未产出。learn 已移交 leader 内联自写（无需委派 wf/learner）：" +
+  "请 leader 用 wf_write_artifact(kind=lessons) 落盘四节模板（新增/更新/退役/晋升候选）+ 流程效率观察节" +
+  "（r1 首过率/并行有效度/流程墙∥进程墙/返修根因，自 events 表取数、反事实必须实测口径）后再推进 /wf:done。";
+
 // intake-discuss-gate T04：intake 讨论确认关卡拒绝文案（full/daily 共用；wf:plan 入口）。
 // 诚实边界（沿 M16-r44 口径）：出卡记账≠用户已批准——宿主观测不到卡片中的实际选择（只回模型），
 // 文案只保「出过卡」，不得断言「用户已批准/未批准」。

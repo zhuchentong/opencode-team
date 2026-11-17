@@ -48,7 +48,7 @@ fs.mkdirSync(`${DIR}/src`, { recursive: true });
 const FULL = "ses_planFull123";
 const setupLeader = async (leader) => {
   const m = mkCtx(); await plugin.setup(m.ctx);
-  await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[M] guard" } });
+  await cmd(m, "wf:intake").execute({ sessionID: leader, prompt: { text: "[S] guard" } });
   await cmd(m, "wf:plan").execute({ sessionID: leader, prompt: {} }); // → planning
   await tool(m).execute({ kind: "plan", content: "# plan\nT01" }, { sessionID: FULL, agent: "wf/planner" });
   return m;
