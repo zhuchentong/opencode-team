@@ -129,7 +129,12 @@ export function createCommandGuard(deps: GuardDeps) {
     if (actions.length) notes.push(`__AUDIT__${actions.join(" ")}`);
     if (notes.length) {
       for (const n of notes) {
-        if (n.startsWith("__AUDIT__")) logAdd(st, { at, cmd, from: st.phase, to: st.phase, ok: true, note: n.slice(9) });
+        // headless-fix W5：tier-model-switch 固定独立 cmd（复用流转命令会让按 cmd 过滤的消费者
+        // 把模型切换误算作该命令次数，test_46 实证显示为 wf:intake；guard-hook 已有
+        // session:alias/session:correct 独立 cmd 先例）。该记账可发生在任意 wf:* 命令上，
+        // 独立后可被精确查询；tests 无锚（rpc-drift 锁形状不锁 cmd 枚举）。
+        if (n.startsWith("__AUDIT__tier-model-switch:")) logAdd(st, { at, cmd: "tier:model-switch", from: st.phase, to: st.phase, ok: true, note: n.slice(9) });
+        else if (n.startsWith("__AUDIT__")) logAdd(st, { at, cmd, from: st.phase, to: st.phase, ok: true, note: n.slice(9) });
       }
       await save(st);
     }

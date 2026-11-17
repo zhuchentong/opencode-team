@@ -100,8 +100,9 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   **无头模式不作为 skill 触发的验收环境**；skill 触发验收走 GUI 任务回放清单。
 - **injectReport resume:false 不唤醒模型**（2.2.6 源码 session.ts:187 保证不 wake）→
   `wf:resume` 诚实降级为审计/guidance 轨（`resume:issued` 事件+推进指令写入，活跃回合才被消费）；
-  **持续推进唯一驱动=`scripts/wf-headless.sh`**（循环踢进；终态判定锚=事件 ok:false，非 phase——
-  halt 时 phase 保持原值）。
+  **持续推进唯一驱动=`scripts/wf-headless.sh`**（循环踢进；终态判定锚（W2 R2-收窄）=「全表末事件
+  恰为 `wf:*` 流转命令且 ok=false」——记账事件（gate:block/session:correct，ok:0 常态）不触发
+  halt；halt 时 phase 保持原值）。
 - **复现命令**：`WF_HEADLESS=1 WF_DEBUG=1 opencode run --agent workflow "<任务描述>"` 于目标项目根执行，
   联查 `.workflow/_debug/question-probe.json`（input 形状）与 `sqlite3 .workflow/wf.db "SELECT entry_json
   FROM events WHERE note LIKE 'question-observed%'"`（auto 标记）；驱动闭环

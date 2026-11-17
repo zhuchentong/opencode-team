@@ -3,14 +3,21 @@
 # 用法：wf-headless.sh <项目目录> [初始提示]
 #   无既存会话：自动发起首次 `opencode run --agent workflow`（内建，防默认 build 误启）；
 #   有既存会话：按全局 opencode.db 反查该目录最新顶层 workflow 会话续接。
-# 终态：wf.db tasks.phase=done → PASS 退出 0；最后事件 ok:false（halt 判定锚是事件，非 phase——
-#   halt 时 phase 保持原值）/ 迭代上限耗尽 / sqlite3 读数失败重试 3 次仍败 → FAIL 退出非 0 并输出末事件。
+# 终态：wf.db tasks.phase=done → PASS 退出 0；末事件恰为 wf:* 流转拒绝 ok:false（W2 R2-收窄：
+#   记账事件 gate:block/session:correct 不触发 halt；halt 时 phase 保持原值）/ 迭代上限耗尽 /
+#   sqlite3 读数失败重试 3 次仍败 → FAIL 退出非 0 并输出末事件。
 # 环境变量：WF_HEADLESS_MAX_ITER（默认 40）、WF_HEADLESS_INTERVAL（默认 5 秒）、
 #   WF_HEADLESS_MODEL（provider/model，入口前检 provider 已配置——复用 anthropic 未配置失败教训）、
 #   WF_HEADLESS_PROMPT（无既存会话时的初始提示，缺省=按 entry 指引发起 intake）。
-# 本脚本导出 WF_HEADLESS=1（guard-hook 确认卡审计 auto=non-interactive 标记的数据源，M3）。
+# 本脚本导出 WF_HEADLESS=1（兼容非守护宿主+语义自描述；确认卡审计标记的权威信号是项目哨兵文件
+#   .workflow/.wf-headless，confirm-sentinel M3 v2——守护宿主 env 不可达）。
 set -u
 DIR="${1:?用法: wf-headless.sh <项目目录> [初始提示]}"; DIR="$(cd "$DIR" && pwd)"
+# headless-fix W1（test_45 首启事故）：opencode run 按调用者 cwd 定项目——不切换则任务落进
+# 调用者所在库（跨项目 wf.db 污染实证）。静默切换（cd 后无论从哪调用都正确，比拒绝式更根治：
+# 拒绝会给自动化跨目录调用引入新失败模式）；exit 2 为防御性冗余（上一行归一化已 cd 成功，实际不可达）。
+cd "$DIR" || exit 2
+echo "· cwd 已切换至 $DIR" # 防静默掩盖调用方路径错误
 FIRST_PROMPT="${2:-${WF_HEADLESS_PROMPT:-}}"
 
 # ── 依赖与前置检查（fail-fast）─────────────────────────────────────
@@ -76,12 +83,19 @@ for i in $(seq 1 "$MAX_ITER"); do
   fi
   LAST="$(db_retry "$WF_DB" "SELECT entry_json FROM events WHERE session_id='$SID' ORDER BY id DESC LIMIT 1;")" \
     || { echo "❌ FAIL：事件读数失败（重试 3 次仍败）"; exit 3; }
-  case "$LAST" in
-    *'"ok":false'*)
-      echo "❌ FAIL（halt）：最后事件为 ok:false（phase=$PHASE 保持原值）"
-      echo "末事件：$LAST"
-      exit 1 ;;
-  esac
+  # headless-fix W2（R2-收窄定案）：halt 锚=「全表末事件恰为 wf:* 流转命令且 ok=false」。
+  # 白名单 wf:% 而非黑名单（未来新增记账 cmd 不会重新引入误报）；gate:block/session:correct 等
+  # 记账事件（ok:0 常态）不再触发误 halt（test_46 实证 correct 垫底 4 次）。不对称取舍：漏报
+  # （真 halt 被记账事件垫底遮住）=多踢一轮无害；误报=杀死活任务。
+  LAST_ID="$(db_retry "$WF_DB" "SELECT id FROM events WHERE session_id='$SID' ORDER BY id DESC LIMIT 1;")" \
+    || { echo "❌ FAIL：事件读数失败（重试 3 次仍败）"; exit 3; }
+  HALT_ID="$(db_retry "$WF_DB" "SELECT id FROM events WHERE session_id='$SID' AND json_extract(entry_json,'\$.cmd') LIKE 'wf:%' AND json_extract(entry_json,'\$.ok')=0 ORDER BY id DESC LIMIT 1;")" \
+    || { echo "❌ FAIL：事件读数失败（重试 3 次仍败）"; exit 3; }
+  if [ -n "$HALT_ID" ] && [ "$HALT_ID" = "$LAST_ID" ]; then
+    echo "❌ FAIL（halt）：末事件为 wf:* 流转拒绝 ok:false（phase=$PHASE 保持原值）"
+    echo "末事件：$LAST"
+    exit 1
+  fi
   echo "· [$i/$MAX_ITER] phase=$PHASE——踢进下一回合"
   opencode run --session "$SID" "${RUN_ARGS[@]}" \
     "继续推进当前 wf 任务：按 entry/guidance 执行 phase=$PHASE 的下一步并推进状态机；若需要确认卡，选择推荐项继续。" \
