@@ -19,6 +19,7 @@ export interface DiagnoseFacts {
   limits?: Limits;
   swallows?: SwallowEntry[]; // T01：静默失败环形采样（缺省/空 → 摘要节零行，存量输出逐字不变）
   orphanLines?: string[]; // r54 批次 B：孤儿产物目录告警行（orphanArtifactLines 产出；缺省/空=零新增行）
+  slugDupes?: string[]; // headless-orch M2：同 slug 多活跃会话告警行（commands 侧 dumpStates 采集；缺省/空=零新增行）
 }
 
 // ── r54 批次 B（test_008 实证）：孤儿产物对账——.workflow 子目录近期有产物但 tasks 无对应
@@ -119,6 +120,7 @@ export function diagnoseReport(st: WfState, facts: DiagnoseFacts = {}): string {
 
   // r54 批次 B：孤儿产物目录（commands 侧 IO 采集 + orphanArtifactLines 纯函数判定；空=零新增行）
   for (const l of facts.orphanLines ?? []) out.push(`  ${l}`);
+  for (const l of facts.slugDupes ?? []) out.push(`  ${l}`);
 
   // 5) 注入/观测通道异常
   if (st.entryErr) out.push(`  ⚠️ 阶段注入失败（guidance 可能未进系统提示）：${st.entryErr}`);

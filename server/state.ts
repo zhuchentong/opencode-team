@@ -221,6 +221,14 @@ export function createStore(host: Host): Store {
     } catch (e) { swallow(e, "state:reports-col-migrate-fail"); }
   }
 
+  // headless-orch M2：slug 唯一性并发收口（check-then-insert TOCTOU 兜底）——partial unique index。
+  // 不入 SCHEMA 字符串：存量库可能有既有重复行，SCHEMA 批量执行遇 IntegrityError 会阻塞启动；
+  // 独立 try/catch fail-open：swallow 记账（不阻塞启动，闸逻辑仍在前置），手工清理重复行后下次
+  // 启动建索引生效；新库天然生效。回滚：DROP INDEX IF EXISTS tasks_unique_active_slug;
+  try {
+    db.run("CREATE UNIQUE INDEX IF NOT EXISTS tasks_unique_active_slug ON tasks(slug) WHERE is_active = 1 AND slug != ''");
+  } catch (e) { swallow(e, "state:slug-unique-index-fail"); }
+
   const qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
   // M16-r39 T04：qUpsert 仅留一次性迁移用（save 路径改委托 writeTaskRow 单语句 CAS）
   const qUpsert = db.prepare(

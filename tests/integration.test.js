@@ -495,7 +495,7 @@ test("T09 wf:debug sessProbe：单一扁平形状 {ok:true,topKeys,location}，�
 test("T10 allowRegexps 容错：非法正则不抛 setup，合法正则并入放行判定", async () => {
   const m = mkCtx({ allowRegexps: ["[invalid", "\\.custom$"] });
   const dispose = await plugin.setup(m.ctx); // 旧实现：new RegExp("[invalid") SyntaxError
-  assert.equal(m.cmds.length, 17, "命令注册齐全（10 流转 + 7 辅助：M16-r46 +wf:open）");
+  assert.equal(m.cmds.length, 18, "命令注册齐全（10 流转 + 8 辅助：M16-r46 +wf:open；headless-orch M1 +wf:resume）");
   assert.ok(m.tools.some((t) => t.name === "wf_write_artifact"), "工具注册齐全");
   // 合法正则生效：planning 阶段 .custom 后缀放行，业务代码仍阻断
   await cmd(m, "wf:intake").execute({ sessionID: "ses_re", prompt: { text: "re" } });
@@ -525,4 +525,30 @@ test("M16-r32 产物瘦身：超预算告警不阻断落盘/记账；预算内�
   assert.match(small.content, /已写入/);
   assert.ok(!/超瘦身预算/.test(small.content), "预算内不告警");
   dispose?.();
+});
+
+// ── headless-orch M1：wf:resume 审计/guidance 轨（诚实降级：不唤醒模型）────
+test("M1 wf:resume：resume:issued 审计 + 推进指令组装；无任务 ❌ 拒；leader-only 变更类", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const run = (name, sessionID = "ses_res1") => m.cmds.find((c) => c.name === name).execute({ sessionID, prompt: {} });
+  // 无任务 → ❌ 拒绝（REJECT_PREFIX 不变量）
+  const empty = String(await run("wf:resume"));
+  assert.ok(empty.startsWith("❌"), `无任务须 ❌ 拒：${empty.slice(0, 40)}`);
+  // intake 后 resume：审计记账 + 输出含 phase 与 headless 指引
+  await m.cmds.find((c) => c.name === "wf:intake").execute({ sessionID: "ses_res1", prompt: { text: "resume-t" } });
+  await m.cmds.find((c) => c.name === "wf:plan").execute({ sessionID: "ses_res1", prompt: {} });
+  const out = String(await run("wf:resume"));
+  assert.match(out, /resume:issued/, "输出声明审计已记");
+  assert.match(out, /phase=planning/, "输出含当前 phase");
+  assert.match(out, /wf-headless\.sh/, "诚实降级：指路唯一驱动轨");
+  const d = new Database(DB);
+  const row = d.query("SELECT state_json FROM tasks WHERE session_id='ses_res1'").get();
+  d.close();
+  const st = JSON.parse(row.state_json);
+  const ev = (st.log ?? []).find((l) => l.cmd === "resume:issued");
+  assert.ok(ev, "审计轨含 resume:issued");
+  assert.equal(ev.ok, true);
+  assert.equal(ev.phase ?? st.phase, "planning");
+  dispose();
 });

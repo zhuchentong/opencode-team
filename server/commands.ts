@@ -1,5 +1,5 @@
 // wf-workflow — 命令层：10 个流转命令表驱动（/wf:intake…/wf:done，全部经 transition 走状态机）
-// + 6 个辅助命令（status/diagnose/ping/lane/reset/debug）。
+// + 8 个辅助命令（status/diagnose/ping/lane/reset/debug/open/resume）。
 // R2 T2.4/T2.5（arch-r2-profile-statemachine）：transition/inject/done-git/selfmod 编排迁
 // transition.ts；leaderGate×tierSync 中间件链迁 middleware.ts；byName+runner 可变盒子退役，
 // 三入口统一经 CommandBus（command-bus.ts）。本文件剩：命令注册表 + 双轨输出编排
@@ -20,7 +20,7 @@ import {
   type WfState,
 } from "./lib.ts"; // R2 T2.4/T2.5：flowFor/evaluateTransition/leaderOnlyReject/isSelfModDir/selfModWarnLine/briefFallback 随体迁出；+renderReport 文本链单点
 import { briefFor, guidanceBytesLine } from "./guidance.ts"; // r53 批次 3：注入预算仪表 // M16-r39 T08：guidance 拆分（文案逐字不变）// R2：guidance/entryValue 消费随 transition 迁出
-import { ENTRY_KEY, HINT_KEY, withStateRetry, scanActiveTasks, type Store } from "./state.ts"; // P1-E：lane 准入复用跨库扫描（勿新建计数器）
+import { ENTRY_KEY, HINT_KEY, withStateRetry, scanActiveTasks, logAdd, type Store } from "./state.ts"; // P1-E：lane 准入复用跨库扫描（勿新建计数器）；headless-orch M1：resume 审计记账
 import { PAYLOAD_MAX } from "../shared/report.ts"; // 报文截断上限单一来源
 import { type Observer, swallow, listSwallows } from "./observe.ts";
 import { type Host } from "./host.ts"; // T03：registerCommands 收 Host（原 ctx:any；入口 setup(ctx) 签名不变） // T01：swallow 记账 + diagnose 摘要接线
@@ -94,7 +94,7 @@ const roleGuardText = (opt: any) => {
   } catch { return ""; }
 };
 
-/** 注册全部 wf 命令与输出编排：10 流转命令（表驱动）+6 辅助命令，统一经 CommandBus（三入口同调）；
+/** 注册全部 wf 命令与输出编排：10 流转命令（表驱动）+8 辅助命令（status/diagnose/ping/lane/reset/debug/open/resume），统一经 CommandBus（三入口同调）；
  * 双轨输出=publishOutput（reports 表+report 事件）与 injectReport（降级轨 prompt 注入，按 metadata 标记剥离）；
  * 另注册 context/compaction/generate/title 剥离 hook。
  * @param host T03 防腐层（commands.transform/sessions.hook/instructions/rpc.client 访问面）
@@ -106,7 +106,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
 
   // R2 T2.4：transition/inject 编排提取至 transition.ts（createTransition 显式 deps 注入，
   // 行为逐字节=旧闭包）；R2 T2.5：命令中间件链工厂（leaderGate×tierSync，顺序单点 CMD_MW_ORDER）。
-  const { transition } = createTransition({ host, load, save, resolveProjectDir, LIMS, emitUpdated });
+  const { transition } = createTransition({ host, load, save, resolveProjectDir, dumpStates, LIMS, emitUpdated });
   const cmdGuard = createCommandGuard({ host, load, save, probeOnce, resolveProjectDir });
 
   // 诊断探针（ERR-20261110-007 真机定位）：每次命令输出广播追加 .workflow/_debug/cmd-report.jsonl
@@ -260,7 +260,23 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
             });
           orphanLines = orphanArtifactLines(dirs, [...knownSlugs], Date.now());
         } catch (e) { swallow(e, "commands:diagnose-wfdir-fail"); }
-        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows(), orphanLines });
+        // headless-orch M2：同 slug 多活跃会话取证（partial unique index 建索引失败的存量库
+        // 需手工清理——在此给出可见提示，配合 state:slug-unique-index-fail swallow 记账联查）
+        let slugDupes: string[] = [];
+        try {
+          const actives = new Map<string, Set<string>>();
+          for (const row of await dumpStates()) {
+            const v: any = row?.value;
+            if (v && typeof v === "object" && v.slug && v.phase && v.phase !== "done") {
+              const set = actives.get(String(v.slug)) ?? new Set<string>();
+              set.add(String(v.sessionID ?? row.key));
+              actives.set(String(v.slug), set);
+            }
+          }
+          slugDupes = [...actives].filter(([, s]) => s.size > 1)
+            .map(([slug, s]) => `⚠️ slug=${slug} 有 ${s.size} 个活跃会话（索引兜底缺位，请手工 /wf:reset 清理对端后重建索引）`);
+        } catch (e) { swallow(e, "commands:diagnose-slug-dupe-fail"); }
+        return diagnoseReport(st, { version: VERSION, artifactFiles, rpcErr, limits: LIMS, swallows: listSwallows(), orphanLines, slugDupes });
       },
     });
     add({
@@ -458,6 +474,22 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
         try { await host.instructions.remove({ sessionID: a.sessionID, key: HINT_KEY }); } catch (e) { swallow(e, "commands:reset-hint-remove-fail"); }
         await emitUpdated({ sessionID: a.sessionID, slug: "", phase: null, rounds: {} } as WfState); // M10-a：A3，TUI 实时反映清除
         return "wf 工作流：本会话状态已清除。可用 /wf:intake <slug> 重新开始。";
+      },
+    });
+    add({
+      name: "wf:resume",
+      description: "无头/续接辅助：读当前阶段、记 resume:issued 审计并组装推进指令（诚实降级：服务端注入 resume:false 不唤醒模型——推进唯一驱动=scripts/wf-headless.sh；若恰有活跃回合则本轮被消费）",
+      execute: async (a: any) => {
+        const st = await load(a.sessionID);
+        if (!st || (!st.slug && !st.phase)) return "❌ wf:resume：本会话无活动任务。先 /wf:intake <slug>。";
+        const at = new Date().toISOString();
+        logAdd(st, { at, cmd: "resume:issued", from: st.phase, to: st.phase, ok: true, note: `phase=${st.phase}` }); // M1 审计轨：headless 复盘可区分「外踢」与「自发」推进
+        try { await save(st); } catch (e) { swallow(e, "commands:resume-audit-save-fail"); }
+        const next = nextFor(st, st.phase);
+        const instr = `[wf:resume] 继续推进 ${st.slug}（phase=${st.phase}）：执行当前阶段下一步（${next ?? "按 entry 指引"}），完成后照常推进状态机；本注入不唤醒模型，仅活跃回合可见。`;
+        try { await host.instructions.put({ sessionID: a.sessionID, key: HINT_KEY, value: instr }); }
+        catch (e) { swallow(e, "commands:resume-inject-fail"); }
+        return `wf:resume：已记审计（resume:issued）并写入推进指令（phase=${st.phase}，下一步 ${next ?? "见 entry"}）。注意：回合已结束时本注入不唤醒模型——持续推进用 scripts/wf-headless.sh。`;
       },
     });
     add({

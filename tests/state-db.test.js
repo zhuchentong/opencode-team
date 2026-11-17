@@ -8,7 +8,7 @@ import { createStore, logAdd, writeTaskRow, shouldRunGc } from "../server/state.
 // T04：装配收敛 helpers/host-stub（extra=ctx 形命名空间覆盖：storage/session→sessions）
 import { mkHostStub } from "./helpers/host-stub.js";
 
-const tmpDir = () => fs.mkdtempSync("/tmp/opencode/wf-state-");
+const tmpDir = () => { fs.mkdirSync("/tmp/opencode", { recursive: true }); return fs.mkdtempSync("/tmp/opencode/wf-state-"); }; // headless-orch：父目录显式创建（干净环境首跑 /tmp/opencode 不存在=整文件连红）
 const dbFile = (dir) => `${dir}/.workflow/wf.db`;
 const mkHost = (dir, extra = {}) => mkHostStub({
   location: { directory: dir },
@@ -393,5 +393,41 @@ test("r54 A3：shouldRunGc 纯函数锚 + scanStates 节流（60s 内二次调�
   assert.equal(d.query("SELECT COUNT(*) AS n FROM tasks").get().n, 1, "节流窗口内二次 scanStates 不得执行 GC");
   assert.equal(d.query("SELECT n FROM gc_probe WHERE id=1").get().n, 1, "GC 全程恰执行一次");
   d.close();
+  s.close();
+});
+
+// ── headless-orch M2：slug 唯一索引（并发收口）────────────────────────────
+test("M2 unique index：新库存量干净 → 索引在位，跨会话同 slug 双活写入被拒（IntegrityError）", async () => {
+  const dir = tmpDir();
+  const s = await newStore(dir);
+  await s.save({ sessionID: "ses_ix1", slug: "dupix", phase: "building", log: [] });
+  let threw = false;
+  try {
+    await s.save({ sessionID: "ses_ix2", slug: "dupix", phase: "building", log: [] });
+  } catch { threw = true; }
+  // 行为面：闸在前置已拒；索引兜底=直接写行须违反唯一约束（两者至少其一成立）
+  const d = new Database(dbFile(dir), { readonly: true });
+  const rows = d.query("SELECT session_id FROM tasks WHERE slug='dupix' AND is_active=1").all();
+  d.close();
+  assert.ok(threw || rows.length === 1, `双活不得同时落行：threw=${threw} rows=${rows.length}`);
+  s.close();
+});
+
+test("M2 unique index：存量库含重复活跃 slug → 建索引 fail-open 不阻塞启动（swallow 记账）", async () => {
+  const dir = tmpDir();
+  fs.mkdirSync(`${dir}/.workflow`, { recursive: true });
+  const d0 = new Database(dbFile(dir));
+  d0.run(`CREATE TABLE tasks (session_id TEXT PRIMARY KEY, slug TEXT NOT NULL DEFAULT '', phase TEXT, project_id TEXT, directory TEXT, is_active INTEGER, rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT, state_json TEXT NOT NULL)`);
+  d0.run(`INSERT INTO tasks (session_id, slug, phase, is_active, rev, state_json) VALUES ('ses_d1','dupold','building',1,1,'{}'),('ses_d2','dupold','building',1,1,'{}')`);
+  d0.close();
+  const s = await newStore(dir); // 建索引 IntegrityError → fail-open，不得抛出
+  const rd = new Database(dbFile(dir), { readonly: true }); // 断言打 DB 行（快照 {} 经 normalizeState 出口无 slug，不可作读回锚）
+  const nKept = rd.query("SELECT COUNT(*) AS n FROM tasks WHERE session_id IN ('ses_d1','ses_d2')").get().n;
+  rd.close();
+  assert.equal(nKept, 2, "存量行照常在库（fail-open 不阻塞、不误清）");
+  const d = new Database(dbFile(dir), { readonly: true });
+  const idx = d.query("SELECT name FROM sqlite_master WHERE type='index' AND name='tasks_unique_active_slug'").get();
+  d.close();
+  assert.ok(!idx, "重复行存在时索引不得建成（下次启动清理后生效）");
   s.close();
 });

@@ -433,3 +433,51 @@ test("v2 lane 分组表硬关卡（daily M/L）：evaluateTransition 层拒绝+�
   const s = mkSt("review", { mode: "daily", size: "S", planConfirmedAt: "x" });
   assert.ok(evaluateTransition("wf:build", s, "").ok, "S 级豁免 lane 表");
 });
+
+// ── headless-orch M2：intake slug 唯一性闸（5 例 + fail-soft 反例）────────────
+// 闸数据源=dumpStates（同库全行转储 stub 读同一 Map）；对端活跃口径=快照 phase 存在且非 done。
+const mkSlugPeer = (sessionID, phase, slug = "dup-slug") => ({ sessionID, slug, phase, rev: 1 });
+const mkSlugHarness = async (peers = [], over = {}) => {
+  const store = new Map(peers.map((p) => [p.sessionID, structuredClone(p)]));
+  const h = await mkWiring({
+    store, sessionID: "ses_gate", dir: "/tmp/opencode/wf-sluggate",
+    deps: over.dumpFail
+      ? { dumpStates: async () => { throw new Error("dump boom"); } }
+      : { dumpStates: async () => [...store].map(([sid, v]) => ({ key: `wf-workflow/state/${sid}`, value: structuredClone(v) })) },
+  });
+  return { ...h, store };
+};
+
+test("M2 slug 闸①：跨会话同名活跃 → ❌ 拒绝含 wf:reset 出口与对端短前缀，本会话不建行", async () => {
+  const h = await mkSlugHarness([mkSlugPeer("ses_peer1", "building")]);
+  const out = String(await h.run("wf:intake", "dup-slug"));
+  assert.ok(out.startsWith("❌"), `应拒绝：${out.slice(0, 60)}`);
+  assert.ok(out.includes("wf:reset"), "拒绝文案须含 reset 出口");
+  assert.ok(out.includes("ses_peer"), "拒绝文案含对端短前缀别名（零完整 ID 回显）");
+  assert.equal(h.st(), undefined, "拒绝路径本会话不得建行");
+  h.dispose();
+});
+
+test("M2 slug 闸②③④：本会话 re-intake／对端 done／对端非活跃 → 三正例放行", async () => {
+  // ② 本会话 re-intake（同 slug 同会话，done 后重开同 slug）
+  const h2 = await mkSlugHarness([mkSlugPeer("ses_gate", "done")]);
+  assert.ok(!String(await h2.run("wf:intake", "dup-slug")).startsWith("❌"), "本会话 re-intake 放行");
+  h2.dispose();
+  // ③ 对端 done 放行
+  const h3 = await mkSlugHarness([mkSlugPeer("ses_peer3", "done")]);
+  assert.ok(!String(await h3.run("wf:intake", "dup-slug")).startsWith("❌"), "对端 done 放行");
+  h3.dispose();
+  // ④ 对端非活跃（phase=null）放行
+  const h4 = await mkSlugHarness([mkSlugPeer("ses_peer4", null)]);
+  assert.ok(!String(await h4.run("wf:intake", "dup-slug")).startsWith("❌"), "对端非活跃放行");
+  h4.dispose();
+});
+
+test("M2 slug 闸⑤：dumpStates fail-soft → 闸放行 + 记账 slug-gate-dump-fail（静默漏拦由唯一索引兜底的显式反例）", async () => {
+  const h = await mkSlugHarness([mkSlugPeer("ses_peer5", "building")], { dumpFail: true });
+  const out = String(await h.run("wf:intake", "dup-slug"));
+  assert.ok(!out.startsWith("❌"), "fail-soft 约定=放行（不阻塞 intake）");
+  const notes = (h.st()?.log ?? []).map((l) => l.note);
+  assert.ok(notes.includes("slug-gate-dump-fail:fail-open"), `应记账 fail-open 形态：${notes.join(",")}`);
+  h.dispose();
+});

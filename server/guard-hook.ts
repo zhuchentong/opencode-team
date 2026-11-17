@@ -48,6 +48,10 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
   let rewriteProbed = false; // M16-r45：别名改写生效性取证一次性开关（真机核对 exec-rewrite-probe.json）
   // M16-r44：question 入参形状一次性探针（方案确认记账的形状取证；同 subagent-probe 模式）
   let questionProbed = false;
+  // headless-orch M3：确认卡审计环境信号——非交互 run（wrapper 设 WF_HEADLESS=1，同进程 env 可达，
+  // 探针结论见 docs/OPT-plan-headless-orchestration.md §二 M3）出卡记账追加 auto=non-interactive，
+  // 区分「用户确认」与「宿主自动裁定」；GUI（env 未设）note 零改动——存量锚按未设路径逐字不变。
+  const confirmNote = (): string => (process.env.WF_HEADLESS === "1" ? "question-observed:auto=non-interactive" : "question-observed");
 
   // ── M4：阶段越权硬阻断（planning/review 拒业务代码写）──────────
   return host.tools.hook("execute.before", async (input: any, output: any) => {
@@ -278,7 +282,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           if (!confirmedI) return; // 无锚定标签的澄清问不记账
           if (stC.verdicts?.intakeConfirmedAt) return; // 已记账不重复 save（防抖动，幂等）
           stC.verdicts = { ...stC.verdicts, intakeConfirmedAt: new Date().toISOString() };
-          logAdd(stC, { at: stC.verdicts.intakeConfirmedAt, cmd: "intake:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
+          logAdd(stC, { at: stC.verdicts.intakeConfirmedAt, cmd: "intake:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote() });
           try { await save(stC); } catch (e) { swallow(e, "guard-hook:intake-confirm-save-fail"); }
           return; // 评审 N4：记账后 return（与 review 分支结构对称）
         }
@@ -290,7 +294,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
         if (!approvedC) return; // 无批准类选项的澄清问不记账
         if (stC.verdicts?.confirmedAt) return; // 已记账不重复 save（防抖动）
         stC.verdicts = { ...stC.verdicts, confirmedAt: new Date().toISOString() }; // R3 T3.1 子步 B
-        logAdd(stC, { at: stC.verdicts.confirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: "question-observed" });
+        logAdd(stC, { at: stC.verdicts.confirmedAt, cmd: "plan:confirm", tool: toolName, from: stC.phase, to: stC.phase, ok: true, note: confirmNote() });
         try { await save(stC); } catch (e) { swallow(e, "guard-hook:confirm-save-fail"); }
         return;
       }

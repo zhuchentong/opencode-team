@@ -58,6 +58,7 @@ export interface TransitionDeps {
   load: Store["load"];
   save: Store["save"];
   resolveProjectDir: Store["resolveProjectDir"];
+  dumpStates: Store["dumpStates"]; // headless-orch M2：slug 唯一性闸数据源（同库全行转储）
   LIMS: Record<string, number>;
   emitUpdated: (st: WfState) => Promise<void>;
 }
@@ -66,7 +67,7 @@ export interface TransitionDeps {
  * @param deps 显式注入依赖：host（Host 防腐层）/load/save/resolveProjectDir（Store 契约）/LIMS（生效上限）/emitUpdated（TUI 广播）
  * @returns 编排闭包集合——transition(sessionID, cmd, text?): Promise<string>，guidance 或 ❌ 拒绝/失败文案；inject(st)：entry 指引写入（entryErr 记账不抛出）。 */
 export function createTransition(deps: TransitionDeps) {
-  const { host, load, save, resolveProjectDir, LIMS, emitUpdated } = deps;
+  const { host, load, save, resolveProjectDir, dumpStates, LIMS, emitUpdated } = deps;
 
   const inject = async (st: WfState) => {
     try {
@@ -125,6 +126,33 @@ export function createTransition(deps: TransitionDeps) {
           logAdd(st, { at, cmd, from, to: from, ok: false, note: r.gate ? `${r.note}:${r.gate}` : r.note });
           if (lastLoaded) { try { await save(st); } catch (e) { swallow(e, "transition:reject-audit-save-fail"); } } // T02：无前行不落盘
           return r.msg; // halt：不重试
+        }
+
+        // headless-orch M2：intake slug 唯一性闸（评估通过后、写行前）——同库同 slug 双活
+        // （跨会话 ∧ 对端活跃 ∧ 对端非 done）→ ❌ 拒绝（含对端短前缀别名 + wf:reset 出口）。
+        // 放行分支：本会话 re-intake／对端 done／对端非活跃。对端活跃口径=快照 phase 存在且非 done
+        // （行维度 is_active 的快照代理，与 ready() 迁移 isActive 推导同源）。
+        // fail-soft 约定：dumpStates 读败=闸放行（fail-open）+ 记账 slug-gate-dump-fail——静默漏拦
+        // 由 partial unique index tasks_unique_active_slug 兜底，不阻塞 intake。
+        if (cmd === "wf:intake" && st.slug) {
+          let peers: any[] = [];
+          try {
+            peers = (await dumpStates())
+              .map((e) => e?.value as any)
+              .filter((v) => v && typeof v === "object" && v.slug === st.slug
+                && String(v.sessionID ?? "") !== sessionID
+                && v.phase && v.phase !== "done");
+          } catch (e) {
+            swallow(e, "transition:slug-gate-dump-fail");
+            try { logAdd(st, { at, cmd, from, to: from, ok: true, note: "slug-gate-dump-fail:fail-open" }); } catch (e2) { swallow(e2, "transition:slug-gate-note-fail"); }
+          }
+          if (peers.length) {
+            const alias = String(peers[0].sessionID ?? "").slice(0, 8);
+            const msg = `❌ 同 slug 任务已存在活跃会话（${alias}…，phase=${peers[0].phase}）——同库 slug 须唯一。处置：续用原会话（session-lookup 管道按前缀定位）或 /wf:reset 清理对端后再 intake。`;
+            logAdd(st, { at, cmd, from, to: from, ok: false, note: `slug-gate-rejected:${alias}` });
+            if (lastLoaded) { try { await save(st); } catch (e) { swallow(e, "transition:slug-gate-audit-save-fail"); } }
+            return msg; // halt：不重试
+          }
         }
 
         // M16-r34：mode 选择流转表（daily 子表 vs full）；evaluateTransition 已放行 → flow 必存在

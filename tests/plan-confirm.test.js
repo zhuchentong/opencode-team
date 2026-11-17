@@ -187,3 +187,26 @@ test("M16-r44 e2e：plan 内容修订（content 全量）作废确认（artifact
   const rej = await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} });
   assert.match(rej, /方案确认关卡未过/, "作废后 wf:build 重新被确认关卡拒");
 });
+
+// ── headless-orch M3：确认卡审计环境信号（WF_HEADLESS 两态）──────────────
+test("M3 headless：WF_HEADLESS=1 → plan:confirm note 追加 auto=non-interactive", async () => {
+  const prev = process.env.WF_HEADLESS;
+  process.env.WF_HEADLESS = "1";
+  try {
+    const sid = "ses_pc_hl1"; const m = await setupAtReview(sid, "[M] confirm-hl");
+    await ask(m, sid);
+    const ev = stOf(sid).log.find((l) => l.cmd === "plan:confirm");
+    assert.ok(ev, "headless 下照常记账");
+    assert.equal(ev.note, "question-observed:auto=non-interactive", "note 追加 auto 标记");
+  } finally {
+    if (prev === undefined) delete process.env.WF_HEADLESS; else process.env.WF_HEADLESS = prev;
+  }
+});
+
+test("M3 GUI 回归：env 未设 → note 逐字 question-observed（存量锚零改动）", async () => {
+  delete process.env.WF_HEADLESS; // 显式未设（防前例泄漏）
+  const sid = "ses_pc_hl2"; const m = await setupAtReview(sid, "[M] confirm-gui");
+  await ask(m, sid);
+  const ev = stOf(sid).log.find((l) => l.cmd === "plan:confirm");
+  assert.equal(ev?.note, "question-observed", "GUI 路径 note 零改动");
+});
