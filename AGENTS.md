@@ -23,7 +23,7 @@
 - `server/state-scan.ts`（P1-A）：selfmod 护栏域（scanActiveTasks/项目清单）自 state.ts 拆出——state.ts re-export 兼容旧导入路径；**新 scan 类代码写本文件，swallow 前缀 `state-scan:*`**；勿建 state/ 子目录（逃逸 swallow-coverage 非递归扫描）。
 - lane 并行（P1-E）：`LANE_CAP`（types 叶子）、`wf:lane set --areas=T01,T02`/`done <Tnn>`、receipt per-lane `build-receipt-<Tnn>.md`（写读成对）、planner lane 分组表契约——详见 roles/{planner,leader,builder}.md。
 - 测试环境：mock 包自举**只许**在 `tests/_preload.js`（P0-A 单点化，mock-bootstrap.test.js 守卫）；测试文件禁散装自举副本。
-- `server/skills.ts` skill 托管同步（M16-r45）：仓库 `skills/{session-lookup,wf-worktrees}/SKILL.md` 单一来源（`SKILL_IDS` 注册），setup 同步到宿主全局 `~/.config/opencode/skills/`（默认开启 `syncSkills`，显式 false 关闭；备份/尾行托管标记/hash 跳过同 roles 模式）。wf-worktrees=worktree 生命周期协议（清理五步序/lane 分支命名，P0-E）。
+- `server/skills.ts` skill 托管同步（M16-r45；latency-v3+batch-2 共 9 个）：仓库 `skills/{session-lookup,wf-worktrees,wf-verify-criteria,wf-env-contract-probe,wf-plan-grill,wf-batched-execution,wf-build-receipt,wf-codemod,wf-plan-revision}/SKILL.md` 单一来源（`SKILL_IDS` 注册，**新 skill 追加数组尾部**——测试按下标取 session-lookup），setup 同步到宿主全局 `~/.config/opencode/skills/`（默认开启 `syncSkills`，显式 false 关闭；备份/尾行托管标记/hash 跳过同 roles 模式）。wf-worktrees=worktree 生命周期协议（清理五步序/lane 分支命名，P0-E）；wf-verify-criteria=判据前台验证纪律（通用无域门）；wf-env-contract-probe=环境契约四探针（域门）；wf-plan-grill=plan 可验证性拷问（域门）；wf-batched-execution=批量执行/e2e 选链路/裁定合并（域门）；wf-build-receipt=回执撰写协议（域门）；wf-codemod=pattern 批量改写 dryRun 纪律（域门）；wf-plan-revision=plan 返修/增量 patch 协议（域门）。
 - 完整「想改什么 → 改哪个文件」映射见 README「配置变更点速查」表；升级宿主/改流程语义先过 `docs/UPGRADE.md`。
 
 ## 宿主联动 gotchas（2.2.6 真机实证）

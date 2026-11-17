@@ -23,7 +23,7 @@ export const gateAcceptanceMsg = (verdict?: string): string =>
 // daily M/L 独立验证关卡文案模板（planReviewVerdict 非 PASS）
 export const gateDailyVerifyMsg = (verdict?: string): string =>
   `❌ 验证关卡未过：plan-review 结论为「${verdict ?? "未产出"}」（要求 PASS）。` +
-  `请委派 wf/planner-reviewer 独立五维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；报告若已原生落盘未记账，wf_write_artifact(kind=plan-review)（不带 content=注册）补记账；FAIL → wf:plan 带意见修订后再验。`;
+  `请委派 wf/planner-reviewer 独立六维验证 plan.md，用 wf_write_artifact(kind=plan-review) 写入（首行 **结论**: PASS|FAIL）；报告若已原生落盘未记账，wf_write_artifact(kind=plan-review)（不带 content=注册）补记账；FAIL → wf:plan 带意见修订后再验。`;
 
 // v2：lane 分组表关卡拒绝文案（daily M/L；并行优先——串行须以 lane 表书面举证）
 export const LANE_TABLE_GATE_MSG =

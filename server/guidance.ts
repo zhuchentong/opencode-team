@@ -149,7 +149,7 @@ function reuseLines(st: WfState, ...agents: string[]): string[] {
 
 // ── M16-r34：日常模式指引——忠实用户 5 步习惯，tier 只改委派与否 ──────────────────
 // S=leader 全程串行零 sub-agent（亲自实现+自写产物+自验，覆盖「不亲自实现」与 WRITE_CONTRACT 两条契约）；
-// M/L=planner 拆 T<nn> 功能点 + reviewer 独立五维验证 + builder 逐点 TDD + tester 独立核对。
+// M/L=planner 拆 T<nn> 功能点 + reviewer 独立六维验证 + builder 逐点 TDD + tester 独立核对。
 const SELF_CONTRACT = "S 级日常模式：leader 亲自实现+自写产物（wf_write_artifact 自行落盘；S 级产物在预算内偏小，可直接 content 单次写，无需分段注册），全程零 sub-agent 串行——本条覆盖默认「不亲自实现」与「leader 禁代写」契约。验证在对话里完成（不落 verify 文件），PASS 须附真实跑测证据（命令+输出）。";
 // ── v2 并行优先：派发策略统一为「先判并行，串行=例外须举证」────────────────
 // 旧 A3「size 决定串行/并行」（M 分 2 派 vs L 一派到底=裁量漂移）→ 收敛为：
@@ -163,10 +163,14 @@ const DISPATCH_BY_TIER: Record<string, string> = { M: DISPATCH_M, L: DISPATCH_L 
 // 无记账=零渲染，存量 guidance 字节级不变）
 const SELFMOD_LINE = `引擎自改模式：server/ 下文件正被宿主按内容指纹热载——builder 禁分步连续 edit（中间态会被同进程其它项目的在途会话真实执行，双任务日志实证），全部编辑完成、自检通过后一次性核验；intake 告警出现的并发任务未经用户裁决不得开工——休眠任务先核实再处置（/wf:status 查归属，done 收尾或 /wf:reset 清账），唤醒后同样是干扰源。`;
 
+// latency-v3 M1-L2：判据前台纪律静态行（building 动态尾追加——observe.ts 行为级检测不做，见 docs/OPT-plan-runtime-contract.md §五）
+const CRITERIA_FOREGROUND_LINE = `判据命令（build/test/e2e/check 等决定回执结论的命令）一律前台执行 timeout≥900000ms 直采退出码，禁止放后台——后台假死=会话续接返工（波2 实证 4 次续接）；执行前按 wf-verify-criteria skill 核对。`;
+
 // P2.3（arch-maintenance-p2）：building 动态尾单点——后续动态行（观察灯/并发数/新纪律行）只在此追加，
 // 勿再散装 `...(cond ? [line] : [])` 到 lines 数组（散装=增长模式不可控，漏测试锁）。
 function dynamicTail(st: WfState, limits: Limits = LIMITS): string[] {
   const lines: string[] = [];
+  lines.push(CRITERIA_FOREGROUND_LINE); // latency-v3：判据前台纪律（无条件追加——building 全程适用）
   if (st.delivery?.selfMod) lines.push(SELFMOD_LINE); // selfmod-guard T01（entry 通道抗 compaction）
   const lanes = st.lanes ?? {};
   if (Object.keys(lanes).length) {
@@ -214,8 +218,8 @@ function guidanceDaily(phase: string | null | undefined, st: WfState, limits: Li
       const lines = [
         `【wf 工作流｜review·日常模式】slug=${s}`,
         `⚠️ 本阶段禁止修改业务代码（放行：.workflow/、.learnings/、测试目录）。`,
-        S ? `S 级：leader 按五维（可行性/完整性/正确性/风险/交叉验证）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
-          : `委派 wf/planner-reviewer 独立五维验证 plan.md（可行性/完整性/正确性/风险/交叉验证）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "plan-review")}`,
+        S ? `S 级：leader 按六维（可行性/完整性/正确性/风险/交叉验证/可验证性）自验 plan，在对话里给出结论；发现问题→修订 plan 再验。`
+          : `委派 wf/planner-reviewer 独立六维验证 plan.md（可行性/完整性/正确性/风险/交叉验证/可验证性）→ wf_write_artifact(kind=plan-review)，首行 **结论**: PASS|FAIL。${artifactPathLine(st, "plan-review")}`,
         ...(S ? [] : [WRITE_CONTRACT, `委派契约：prompt 只带 plan.md 路径+任务行摘录+预算，禁止全仓扫描。`,
           `分级审查：初检聚焦验收标准覆盖+可行性硬伤，直接出完整结论；命中升级触发（架构级冲突/粒度不可执行/关键风险漏识别/用户要求）才 Full 全量，报告注明触发。`]),
         budgetLine(st, S ? ["plan"] : ["plan-review"]),

@@ -42,7 +42,7 @@ OpenCode 配置（`opencode.json(c)` 全局或项目级）的 `plugins` 数组�
 ```
 /wf:intake <slug>   # 入口：澄清需求、读 .learnings/
 /wf:plan            # planning：拟定方案（S 自拟轻量 / M/L 委派 planner 拆 T<nn> 功能点）
-/wf:review          # review：独立验证 ≤3 轮（S 自验五维 / M/L plan-review PASS 关卡）
+/wf:review          # review：独立验证 ≤3 轮（S 自验六维 / M/L plan-review PASS 关卡）
 /wf:build           # building：TDD 执行（全体量须先经 question 方案确认关卡）
 /wf:test            # testing：独立核对 → test-report.md（PASS|FAIL）
 /wf:done            # done：验收 + learner 复盘
@@ -165,12 +165,13 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | RPC 契约 | `shared/rpc.ts` | 改形状必须同步 `tests/rpc-drift.test.js` 快照 |
 | TUI 渲染 / 侧边栏 | `tui/index.tsx` → `bun run build` | dist/tui.js 入库；结构冻结见 harness P4 |
 | 角色行为 / 分级审查触发 / 拒绝契约 | `roles/*.md` | syncRoles 同步宿主；改后 `/wf:ping` 查漂移 |
-| session-lookup skill 内容 | `skills/session-lookup/SKILL.md` | syncSkills（默认开启）同步宿主全局 skills 目录；改后需 `/reload` 或新会话生效 |
+| 9 个 skill 内容 | `skills/*/SKILL.md`（`SKILL_IDS` 注册：session-lookup / wf-worktrees / wf-verify-criteria / wf-env-contract-probe / wf-plan-grill / wf-batched-execution / wf-build-receipt / wf-codemod / wf-plan-revision） | syncSkills（默认开启）同步宿主全局 skills 目录；改后需 `/reload` 或新会话生效 |
 | 续接别名语法 / 近似截断阈值 | `server/lib.ts`（resolveSidAlias / isNearTruncation） | guidance/leader.md/SKILL.md 文案同源靠测试内容锚 |
 | 产物预算 | `server/lib.ts`（ARTIFACT_BUDGET_KB / _S_KB） | guidance 双通道渲染 |
 | 引擎自改并发护栏 | `server/lib.ts`（isSelfModDir/selfModWarnLine）+ `server/state.ts`（PROJECT_DBS+持久清单+scanActiveTasks 跨库扫描）+ `server/commands.ts`（intake 接线） | 任务目录=插件仓库根→跨项目扫描其它活动任务（活跃/休眠分级）告警+st.selfMod 记账；探测根可 `options.selfModRoot` 覆盖；清单路径钩子 `WF_PROJECTS_FILE`（测试隔离） |
 | 需求确认关卡（intake→plan） | `options.requireIntakeConfirm` + `server/guidance.ts`（确认卡指引）+ `server/transition.ts`（固化） | 默认 true；显式 false 关闭关卡与卡指引（intake 固化 intakeConfirmOff，re-intake 重算；服务端只保「出过卡」不保「答的是批准」） |
 | 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
+| 无头编排（opencode run） | `scripts/wf-headless.sh`（唯一驱动）+ `wf:resume`（审计轨）+ `WF_HEADLESS=1`（确认卡 auto 标记） | 边界与复现命令见 `docs/HOST-CONTRACT.md`「无头模式（opencode run）实测边界」；lane/tier/worktree 架构验收不在无头覆盖面 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 
 ## 开发与测试

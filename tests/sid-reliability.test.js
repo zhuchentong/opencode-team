@@ -233,7 +233,17 @@ const HOST = `${ROOT}/skills-host`;
 test("r45-D：syncSkills create → frontmatter 居首 + 末行标记；二次 skip", () => {
   fs.rmSync(HOST, { recursive: true, force: true });
   const r1 = syncSkills(HOST);
-  assert.deepEqual(r1, [{ id: "session-lookup", action: "create" }, { id: "wf-worktrees", action: "create" }]); // P0-E：+wf-worktrees
+  assert.deepEqual(r1, [
+    { id: "session-lookup", action: "create" },
+    { id: "wf-worktrees", action: "create" },
+    { id: "wf-verify-criteria", action: "create" },
+    { id: "wf-env-contract-probe", action: "create" },
+    { id: "wf-plan-grill", action: "create" },
+    { id: "wf-batched-execution", action: "create" },
+    { id: "wf-build-receipt", action: "create" },
+    { id: "wf-codemod", action: "create" },
+    { id: "wf-plan-revision", action: "create" },
+  ]); // P0-E：+wf-worktrees；latency-v3：+4；batch-2：+3（追加尾部）
   const file = `${HOST}/session-lookup/SKILL.md`;
   const c1 = fs.readFileSync(file, "utf8");
   assert.equal(c1.startsWith("---"), true, "frontmatter 必须居首（托管标记在末行）");
@@ -255,6 +265,22 @@ test("r45-D：内容漂移 → write + 备份 + 还原；无标记 → unmanaged
   fs.writeFileSync(file, "---\nname: x\n---\n自定义内容\n");
   assert.equal(syncSkills(HOST)[0].action, "unmanaged");
   assert.match(fs.readFileSync(file, "utf8"), /自定义内容/);
+});
+
+test("latency-v3：4 新 skill 同步——域门三件在位、wf-verify-criteria 通用无域门、frontmatter 居首", () => {
+  fs.rmSync(HOST, { recursive: true, force: true });
+  const r = syncSkills(HOST);
+  assert.deepEqual(r.map((x) => x.action), Array(9).fill("create"), "9 skill 全量 create");
+  const GATE = "仅 wf 工作流任务会话内适用";
+  for (const id of ["wf-env-contract-probe", "wf-plan-grill", "wf-batched-execution", "wf-build-receipt", "wf-codemod", "wf-plan-revision"]) {
+    const c = fs.readFileSync(`${HOST}/${id}/SKILL.md`, "utf8");
+    assert.equal(c.startsWith("---"), true, `${id} frontmatter 必须居首`);
+    assert.ok(c.includes(GATE), `${id} 域门在位`);
+    assert.ok(parseSkillMarker(c), `${id} 末行托管标记在位`);
+  }
+  const vc = fs.readFileSync(`${HOST}/wf-verify-criteria/SKILL.md`, "utf8");
+  assert.equal(vc.startsWith("---"), true, "wf-verify-criteria frontmatter 必须居首");
+  assert.ok(!vc.includes(GATE), "wf-verify-criteria 通用 skill 不做域门");
 });
 
 test("r45-D：registerSkillSync 默认开启；syncSkills:false 显式关闭", () => {

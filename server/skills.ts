@@ -12,7 +12,7 @@ import { contentHash12, decideSync, syncAll, type SyncAction, type SyncTarget } 
 import { xdgConfigDir } from "./paths.ts"; // XDG 派生单点
 
 /** 托管 skill 清单（session-lookup + wf-worktrees；仓库 skills/ 为单一来源）。 */
-export const SKILL_IDS = ["session-lookup", "wf-worktrees"] as const; // P0-E：worktree 清理步协议（latency-v3.1）
+export const SKILL_IDS = ["session-lookup", "wf-worktrees", "wf-verify-criteria", "wf-env-contract-probe", "wf-plan-grill", "wf-batched-execution", "wf-build-receipt", "wf-codemod", "wf-plan-revision"] as const; // latency-v3：+4 验证/探针/拷问/批量；batch-2：+3 回执/codemod/返修（追加尾部——sid-reliability 按下标取 session-lookup，勿插前面）
 export type SkillId = typeof SKILL_IDS[number];
 export type { SyncAction };
 

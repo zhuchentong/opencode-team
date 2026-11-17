@@ -253,7 +253,7 @@ test("M16-r34 日常模式：leader 默认日常流+S 亲自实现+reviewer verd
   assert.match(leader, /零 sub-agent/, "S 级全程零 sub-agent");
   assert.match(leader, /亲自串行实现|亲自实现/, "S 级 leader 亲自实现（覆盖不亲自实现）");
   assert.match(leader, /\[FULL\]/, "完整模式须 [FULL] 显式");
-  assert.match(leader, /五维/, "review 五维验证");
+  assert.match(leader, /六维/, "review 六维验证（五维扩可验证性）");
   // reviewer：首行 verdict（日常 M/L wf:build 关卡）
   const pr = renderRole("planner-reviewer");
   assert.match(pr, /\*\*结论\*\*: PASS\|FAIL/, "reviewer plan-review 首行 verdict");
