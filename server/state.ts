@@ -200,78 +200,113 @@ const parse = (row: any): WfState | null => {
 export function createStore(host: Host): Store {
   const dir = host.location.directory ?? process.cwd();
   const dbFile = join(dir, ".workflow", "wf.db");
-  fs.mkdirSync(dirname(dbFile), { recursive: true });
-  // git 防护：状态库与 WAL/SHM 文件不入 git（产物 md 不受影响，仍可提交）
-  try {
-    const gi = join(dirname(dbFile), ".gitignore");
-    if (!fs.existsSync(gi)) fs.writeFileSync(gi, "wf.db\nwf.db-*\n");
-  } catch (e) { swallow(e, "state:gitignore-write-fail"); }
 
-  const db: any = new Database(dbFile, { create: true });
-  db.run("PRAGMA journal_mode=WAL");
-  db.run(`PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`); // SQLite 写锁等待上限（多会话并发写 wf.db 容忍窗口）
-  db.run(`PRAGMA wal_autocheckpoint=${WAL_AUTOCHECKPOINT_PAGES}`); // r54 A1a：WAL 自动收拢阈值（默认 1000 页过大，任务态长期悬于 -wal）
-  db.run(SCHEMA);
+  // ── 幻影自愈批 O1（test_53 H1）：let 可重绑定 + openAll 统一初始化 + ensureAlive 存活检测 ──
+  // 守护进程按项目目录缓存 setup 产物——项目目录被 rm -rf 后缓存 store 仍持有指向已删 inode 的连接
+  //（unlink 幻影），同目录新会话复用该 store：状态写入进不可见库、intake slug 唯一性闸（同库
+  // peers 查询）读到幻影旧行误报冲突、headless 磁盘监控轨永久失明（test_53 实证）。
+  // ensureAlive 在各方法头检测 dbFile 消失/同路径换 inode（目录重建）→ 关旧连接重跑 openAll。
+  // 扫描通道（state-scan.ts）无辜：每次开新 readonly 连接且逐条目 existsSync，不在本修复面。
+  let db: any;
+  let curIno: number | undefined; // openAll 成功后的 inode；undefined=记录失败（退化为现状：仅按消失检测）
+  let closed = false;             // close() 置位——防迟到调用经 ensureAlive 复活已删目录（mkdirSync 副作用）
+  // 幻影自愈批 O1：15 条 prepared 语句 const→let（openAll 重开时统一重建；SQL 文本单一来源在 openAll 内）
+  let qGet: any; let qUpsert: any; let qEv: any; let qRep: any; let qRepGet: any; let qRepDel: any;
+  let qTaskDel: any; let qProj: any; let qAll: any; let qGc: any; let qGhost: any; let qEvCount: any;
+  let qCount: any; let qMetaGet: any; let qMetaSet: any;
+  const openAll = (): void => {
+    fs.mkdirSync(dirname(dbFile), { recursive: true });
+    // git 防护：状态库与 WAL/SHM 文件不入 git（产物 md 不受影响，仍可提交）
+    try {
+      const gi = join(dirname(dbFile), ".gitignore");
+      if (!fs.existsSync(gi)) fs.writeFileSync(gi, "wf.db\nwf.db-*\n");
+    } catch (e) { swallow(e, "state:gitignore-write-fail"); }
+    db = new Database(dbFile, { create: true });
+    db.run("PRAGMA journal_mode=WAL");
+    db.run(`PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`); // SQLite 写锁等待上限（多会话并发写 wf.db 容忍窗口）
+    db.run(`PRAGMA wal_autocheckpoint=${WAL_AUTOCHECKPOINT_PAGES}`); // r54 A1a：WAL 自动收拢阈值（默认 1000 页过大，任务态长期悬于 -wal）
+    db.run(SCHEMA);
+    // selfmod-guard F2 v2：登记本项目库到内存表+持久清单（供引擎自改 intake 跨库扫描；fail-open 见函数内；
+    // reopen 后重登幂等——state-scan SEEN 同 dir+dbFile 去重）
+    registerProject(dir, dbFile);
+    // notification-brief-display T01：旧库 reports 表加列迁移（CREATE IF NOT EXISTS 对存量表
+    // 是 no-op，不会补列）。PRAGMA table_info 检查缺列才 ALTER——幂等，二次打开零操作不报错。
+    for (const col of ["brief", "level"]) {
+      try {
+        const cols = db.prepare("PRAGMA table_info(reports)").all() as { name: string }[];
+        if (!cols.some((c) => c?.name === col)) db.run(`ALTER TABLE reports ADD COLUMN ${col} TEXT`);
+      } catch (e) { swallow(e, "state:reports-col-migrate-fail"); }
+    }
+    // headless-orch M2：slug 唯一性并发收口（check-then-insert TOCTOU 兜底）——partial unique index。
+    // 不入 SCHEMA 字符串：存量库可能有既有重复行，SCHEMA 批量执行遇 IntegrityError 会阻塞启动；
+    // 独立 try/catch fail-open：swallow 记账（不阻塞启动，闸逻辑仍在前置），手工清理重复行后下次
+    // 启动建索引生效；新库天然生效。回滚：DROP INDEX IF EXISTS tasks_unique_active_slug;
+    try {
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS tasks_unique_active_slug ON tasks(slug) WHERE is_active = 1 AND slug != ''");
+    } catch (e) { swallow(e, "state:slug-unique-index-fail"); }
+    // O1 F5：curIno 记录（openAll 收尾）。退化模式：OS ino 复用致误匹配 → 不重开 → 退化为现状（不劣于不修）。
+    try { curIno = fs.statSync(dbFile).ino; } catch { curIno = undefined; }
+    qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
+    // M16-r39 T04：qUpsert 仅留一次性迁移用（save 路径改委托 writeTaskRow 单语句 CAS）
+    qUpsert = db.prepare(
+      `INSERT INTO tasks (session_id, slug, phase, project_id, directory, is_active, rev, updated_at, state_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         slug=excluded.slug, phase=excluded.phase, project_id=excluded.project_id,
+         directory=excluded.directory, is_active=excluded.is_active, rev=excluded.rev,
+         updated_at=excluded.updated_at, state_json=excluded.state_json`,
+    );
+    qEv = db.prepare("INSERT INTO events (session_id, at, entry_json) VALUES (?, ?, ?)");
+    qRep = db.prepare(
+      "INSERT INTO reports (session_id, text, at, brief, level) VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, at=excluded.at, brief=excluded.brief, level=excluded.level",
+    );
+    qRepGet = db.prepare("SELECT session_id, text, at, brief, level FROM reports WHERE session_id = ?");
+    qRepDel = db.prepare("DELETE FROM reports WHERE session_id = ?");
+    qTaskDel = db.prepare("DELETE FROM tasks WHERE session_id = ?");
+    qProj = db.prepare(
+      "SELECT state_json FROM tasks WHERE project_id = ? AND session_id != ? ORDER BY updated_at DESC LIMIT 1",
+    );
+    qAll = db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC");
+    qGc = db.prepare("DELETE FROM tasks WHERE phase = 'done' AND updated_at IS NOT NULL AND updated_at < ?");
+    // F3（双库幽灵行取证）：slug='' 且 phase 空=历史缺陷/迁移产物，恒非活动且现 GC（只清 done）永不回收 → 显式清理。
+    // 无误杀论证：intake 落库 slug 恒非空（slugify ‖ st.slug ‖ "untitled"）；拒绝路径无前行不落盘（T02）；
+    //   持 phase 的行（如空 slug+phase=intake 的开发态）与空 slug+done（新鲜 done 存量锚）均不满足双空条件，不受影响。
+    qGhost = db.prepare("DELETE FROM tasks WHERE slug = '' AND (phase IS NULL OR phase = '')");
+    // W6-3：events 按 cmd 计数（diagnose 直查，绕 st.log 50 条截断的低估；json_extract 与 wrapper W2 同款）
+    qEvCount = db.prepare("SELECT COUNT(*) AS n FROM events WHERE json_extract(entry_json,'$.cmd') = ?");
+    qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
+    // migrate-meta-fix T01：迁移幂等标记——过滤迁移后 tasks 可能仍为空，原「tasks 空=未迁移」判定会
+    // 每次启动重触发；且 done GC 14 天清空 tasks 后重迁移会向无唯一约束的 events 整批重复追加。
+    // meta.migrated=1 显式收口（迁移完成即写，含零导入）。
+    qMetaGet = db.prepare("SELECT value FROM meta WHERE key = ?");
+    qMetaSet = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+  };
+  openAll();
   // r54 A1b：显式 WAL 收口（done 终态/reset 后调用；并发读 busy 时 PRAGMA 自身返回 busy=1 不抛错，
   // 失败仅 swallow 记账，绝不影响 save/removeState 返回值——数据安全增益，fail-open 语义）。
   const checkpointWal = (): void => {
     try { db.run("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) { swallow(e, "state:checkpoint-fail"); }
   };
-  // selfmod-guard F2 v2：登记本项目库到内存表+持久清单（供引擎自改 intake 跨库扫描；fail-open 见函数内）
-  registerProject(dir, dbFile);
-  // notification-brief-display T01：旧库 reports 表加列迁移（CREATE IF NOT EXISTS 对存量表
-  // 是 no-op，不会补列）。PRAGMA table_info 检查缺列才 ALTER——幂等，二次打开零操作不报错。
-  for (const col of ["brief", "level"]) {
+  // O1：幻影存活检测（各公开方法头调用）。dbFile 消失（rm -rf）或同路径换 inode（目录重建）→ 关旧连接重跑
+  // openAll（新文件）。F4：先 await ready——防同步 swap 落在迁移 await 窗口内致迁移半途 abort
+  //（meta.migrated 未置位=重复迁移+events 整批重复追加风险，migrate-meta-fix T01 修过的形态）。
+  // F3：closed 早退——close 后迟到调用维持现状 throw→swallow→write-error 路径，不复活已删目录。
+  const ensureAlive = async (): Promise<void> => {
     try {
-      const cols = db.prepare("PRAGMA table_info(reports)").all() as { name: string }[];
-      if (!cols.some((c) => c?.name === col)) db.run(`ALTER TABLE reports ADD COLUMN ${col} TEXT`);
-    } catch (e) { swallow(e, "state:reports-col-migrate-fail"); }
-  }
-
-  // headless-orch M2：slug 唯一性并发收口（check-then-insert TOCTOU 兜底）——partial unique index。
-  // 不入 SCHEMA 字符串：存量库可能有既有重复行，SCHEMA 批量执行遇 IntegrityError 会阻塞启动；
-  // 独立 try/catch fail-open：swallow 记账（不阻塞启动，闸逻辑仍在前置），手工清理重复行后下次
-  // 启动建索引生效；新库天然生效。回滚：DROP INDEX IF EXISTS tasks_unique_active_slug;
-  try {
-    db.run("CREATE UNIQUE INDEX IF NOT EXISTS tasks_unique_active_slug ON tasks(slug) WHERE is_active = 1 AND slug != ''");
-  } catch (e) { swallow(e, "state:slug-unique-index-fail"); }
-
-  const qGet = db.prepare("SELECT state_json, rev FROM tasks WHERE session_id = ?");
-  // M16-r39 T04：qUpsert 仅留一次性迁移用（save 路径改委托 writeTaskRow 单语句 CAS）
-  const qUpsert = db.prepare(
-    `INSERT INTO tasks (session_id, slug, phase, project_id, directory, is_active, rev, updated_at, state_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET
-       slug=excluded.slug, phase=excluded.phase, project_id=excluded.project_id,
-       directory=excluded.directory, is_active=excluded.is_active, rev=excluded.rev,
-       updated_at=excluded.updated_at, state_json=excluded.state_json`,
-  );
-  const qEv = db.prepare("INSERT INTO events (session_id, at, entry_json) VALUES (?, ?, ?)");
-  const qRep = db.prepare(
-    "INSERT INTO reports (session_id, text, at, brief, level) VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, at=excluded.at, brief=excluded.brief, level=excluded.level",
-  );
-  const qRepGet = db.prepare("SELECT session_id, text, at, brief, level FROM reports WHERE session_id = ?");
-  const qRepDel = db.prepare("DELETE FROM reports WHERE session_id = ?");
-  const qTaskDel = db.prepare("DELETE FROM tasks WHERE session_id = ?");
-  const qProj = db.prepare(
-    "SELECT state_json FROM tasks WHERE project_id = ? AND session_id != ? ORDER BY updated_at DESC LIMIT 1",
-  );
-  const qAll = db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC");
-  const qGc = db.prepare("DELETE FROM tasks WHERE phase = 'done' AND updated_at IS NOT NULL AND updated_at < ?");
-  // F3（双库幽灵行取证）：slug='' 且 phase 空=历史缺陷/迁移产物，恒非活动且现 GC（只清 done）永不回收 → 显式清理。
-  // 无误杀论证：intake 落库 slug 恒非空（slugify ‖ st.slug ‖ "untitled"）；拒绝路径无前行不落盘（T02）；
-  //   持 phase 的行（如空 slug+phase=intake 的开发态）与空 slug+done（新鲜 done 存量锚）均不满足双空条件，不受影响。
-  const qGhost = db.prepare("DELETE FROM tasks WHERE slug = '' AND (phase IS NULL OR phase = '')");
-  // W6-3：events 按 cmd 计数（diagnose 直查，绕 st.log 50 条截断的低估；json_extract 与 wrapper W2 同款）
-  const qEvCount = db.prepare("SELECT COUNT(*) AS n FROM events WHERE json_extract(entry_json,'$.cmd') = ?");
-  const qCount = db.prepare("SELECT COUNT(*) AS n FROM tasks");
-  // migrate-meta-fix T01：迁移幂等标记——过滤迁移后 tasks 可能仍为空，原「tasks 空=未迁移」判定会
-  // 每次启动重触发；且 done GC 14 天清空 tasks 后重迁移会向无唯一约束的 events 整批重复追加。
-  // meta.migrated=1 显式收口（迁移完成即写，含零导入）。
-  const qMetaGet = db.prepare("SELECT value FROM meta WHERE key = ?");
-  const qMetaSet = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+      if (closed) return;
+      try { await ready; } catch (e) { swallow(e, "state:phantom-ready-await-fail"); } // ready 内部已全捕获不会 reject；防御性记账
+      let st: fs.Stats | null = null;
+      try { st = fs.statSync(dbFile); } catch { st = null; }
+      if (st && curIno !== undefined && st.ino === curIno) return; // 正常：同 inode，无需重开
+      if (!st && curIno === undefined) return;                     // 防御：两者皆不可证 → 维持现状
+      try { db.close(); } catch (e) { swallow(e, "state:phantom-close-fail"); }
+      openAll();
+      swallow(new Error("phantom reopened"), "state:phantom-db-reopen"); // 观测形状先例 state:migrate-skip-no-dir
+    } catch (e) { swallow(e, "state:phantom-ensure-fail"); }
+  };
 
   const load = async (sessionID: string): Promise<WfState | null> => {
+    await ensureAlive();
     try { return parse(qGet.get(String(sessionID ?? ""))) ?? null; } catch { return null; }
   };
 
@@ -279,6 +314,7 @@ export function createStore(host: Host): Store {
   // 丢更新，现在保新弃旧；console.warn 进 server 日志可回看）。无 rev 的新建快照 → 显式覆盖。
   // M16-r39 T04：pre-check 快速路径保留，实际写入委托 writeTaskRow 单语句 CAS（消除读-写窗口）。
   const save = async (st: WfState): Promise<SaveResult> => {
+    await ensureAlive();
     if (!st || st.sessionID == null) return { ok: false, reason: "no-session" };
     st.updatedAt = new Date().toISOString();
     const sid = String(st.sessionID);
@@ -321,6 +357,7 @@ export function createStore(host: Host): Store {
 
   // reset：清除任务行与报告槽（events 流水为审计保留，不删）；r54 A1b：收拢 WAL（events 是 reset 后唯一剩余数据）
   const removeState = async (sessionID: string): Promise<void> => {
+    await ensureAlive();
     try { qTaskDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:task-del-fail"); }
     try { qRepDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:report-del-fail"); }
     checkpointWal();
@@ -337,6 +374,7 @@ export function createStore(host: Host): Store {
   const parentMemo = new Map<string, string>();
   const PARENT_MEMO_CAP = 512;
   const resolveState = async (sessionID: string, agent?: string): Promise<WfState | null> => {
+    await ensureAlive();
     const own = await load(sessionID);
     if (own) return own;
     const a = String(agent ?? "");
@@ -378,6 +416,7 @@ export function createStore(host: Host): Store {
   //（写放大 + WAL 空帧 + 锁竞争窗口）；60s 窗口内跳过，判定纯函数 shouldRunGc 可直测。
   let lastGcAt = 0;
   const scanStates = async (projectID?: string | null, directory?: string | null): Promise<StateListItem[]> => {
+    await ensureAlive();
     const out: StateListItem[] = [];
     try {
       const now = Date.now();
@@ -413,10 +452,12 @@ export function createStore(host: Host): Store {
   //    ——bug A 教训：缺 sessionID 字段 TUI toastReport 过滤器会把 toast 全拦掉。
   //    T01 扩 brief/level：可选入参，缺省落 null（旧调用方零改动）──
   const putReport = async (r: { sessionID: string; text: string; at: string; brief?: string; level?: ReportLevel }): Promise<void> => {
+    await ensureAlive();
     qRep.run(String(r.sessionID ?? ""), String(r.text ?? ""), r.at ? String(r.at) : null,
       r.brief != null ? String(r.brief) : null, r.level != null ? String(r.level) : null);
   };
   const getReport = async (sessionID: string): Promise<ReportRow | null> => {
+    await ensureAlive();
     const row = qRepGet.get(String(sessionID ?? ""));
     if (!row) return null;
     return { sessionID: row.session_id, text: row.text, at: row.at ?? null, brief: row.brief ?? null, level: row.level ?? null };
@@ -424,6 +465,7 @@ export function createStore(host: Host): Store {
 
   // wf:debug 转储用：近似旧 storage scan 的 [{key, value}] 形状
   const dumpStates = async (): Promise<{ key: string; value: unknown }[]> => {
+    await ensureAlive();
     try {
       return qAll.all().map((row: any) => ({
         key: `${STATE_PREFIX}${row.session_id}`,
@@ -495,7 +537,7 @@ export function createStore(host: Host): Store {
   return {
     load, save, removeState, resolveState, resolveProjectDir, scanStates,
     putReport, getReport, dumpStates, ready,
-    countEvents: async (cmd: string) => { try { return Number(qEvCount.get(String(cmd))?.n ?? 0); } catch { return 0; } },
-    close: () => { try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } },
+    countEvents: async (cmd: string) => { await ensureAlive(); try { return Number(qEvCount.get(String(cmd))?.n ?? 0); } catch { return 0; } },
+    close: () => { closed = true; try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } },
   };
 }

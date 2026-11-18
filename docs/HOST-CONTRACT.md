@@ -142,8 +142,9 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   转录链路异常的可诊断指标**（复合风险：登记哑火×残渣剥离=续用意图系统性丢失，凭此计数暴露）。
 - **验收口径（test_50 起每轮复核）**：`not found: ses`=0；normalize/untracked 只许「有记账、有
   归一/放行」成对出现；r2 续接时点登记表非空（含身份漂移场景）；双探针落盘且形状符合预期。
-- **处置指引（身份漂移预防）**：新项目 intake 前置 `git init`（需求基线提交后再开任务），或依赖
-  W6-0 parentID 链兜底；存量漂移任务无需人工修复（回退自动覆盖）。
+- **处置指引（身份漂移预防，2026-11-18 修订）**：~~新项目 intake 前置 `git init`~~ 已废除（用户裁决：
+  无 .git 禁止主动 init）——漂移窗口本就由「任务中途 init」引入，禁 init 后项目全程同身份，防线由
+  更干净的「全程不 init」取代；W6-0 parentID 链兜底保留作双保险；存量漂移任务无需人工修复（回退自动覆盖）。
 
 ## W7 提速批（M 级耗时优化，test_50 六轮数据复盘，2026-11-17）
 
@@ -210,3 +211,34 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   缺 lessons 被拒、补写后放行（正路径）；③双墙钟输出落 job 尾部；④效率四指标进 lessons 效率
   观察节（首建基线=test_51：40m41s 流程墙/46m53s 进程墙/r1 首过 0/6/wave-1 并行有效度 28%）；
   ⑤`not found: ses`=0 与登记表非空持续维持。
+
+## W9 幻影自愈 + git 未授权单 lane + plan 粒度自适应（test_52/53 复盘批，2026-11-18）
+
+> 依据：test_52（jsondiff-cli，exit 2 脚本缺陷+双墙钟语法修复=28ffc6a 前批）与 test_53（csvq-lite，
+> M/daily，33m43s 流程墙，2023s 精确闭合）两轮复盘 + H1 幻影事故链实证。
+
+- **H1 幻影 wf.db 事故链（O1 修复面）**：守护进程按项目目录缓存插件 setup（`createStore` 每 setup
+  一次）——项目目录被 `rm -rf` 后缓存 store 仍持有指向已删 inode 的连接（unlink 幻影，/proc/fd 实证
+  wf.db+wal+shm 三件套）；同目录新会话复用该 store：状态写入进不可见库、intake slug 唯一性闸
+  （transition.ts 同库 peers 查询）读到幻影旧行误报「同 slug 已有活跃任务登记」、headless 磁盘监控轨
+  永久失明（「待 wf.db 出现」空转到迭代耗尽）。**通道修正**：scanActiveTasks 无辜——每次开新
+  readonly 连接且逐条目 existsSync；幻影唯一通道=被缓存的 store 本体。
+- **O1 修复**：state.ts createStore 初始化序列抽 `openAll()`（15 条 prepared 语句 const→let 统一重建，
+  含 mkdir/gitignore/PRAGMA/SCHEMA/迁移/索引/登记）+ `ensureAlive()` 存活检测（方法头 await；statSync
+  对比 curIno——文件消失或同路径换 inode（目录重建）即关旧连接重开，swallow `state:phantom-db-reopen`
+  观测）+ `closed` 早退（防 close 后迟到调用复活已删目录）+ 先 `await ready`（防 swap 落迁移 await 窗口
+  致重复迁移，migrate-meta-fix T01 形态）。退化模式：OS ino 复用误匹配 → 不重开 → 不劣于不修。
+  运维纪律（修复后仍建议）：删项目目录前无需再重启守护进程——下次经该 store 的方法调用自愈。
+- **O2 用户裁决落地（无 .git 禁主动 git init）**：planner lane 分组表前置判定「并行物理前提=项目已
+  git 化」，无 .git 直接裁定「单 lane 串行（git 未授权）」免交叠举证（「串行=例外须举证」加除名条款
+  消内部矛盾）；leader 委派段同步 + 禁「若判并行须先给 git init 方案」类条件授权句式（虚假归因向量，
+  test_53 实证 2m16s 返修）；wf-worktrees skill 创建节补前提；W6-0 处置指引「新项目 intake 前置
+  git init」**废除**（防线改「全程不 init」，parentID 链兜底保留双保险）。
+- **O3 plan 粒度自适应（软参考线非关卡）**：planner 瘦身节追加小任务（M 级 T 点 ≤5/单模块/无 e2e）
+  紧凑形态指引——软参考线 ≤7KB、每 T 点验收 ≤3 条、设计叙述只记非显然决策；依据=生成为主要耗时
+  （~12 tok/s 下每 KB≈1.5min 物理成本），test_53 实证 planner r1 11.5m > builder 全程 7.3m。
+  **边界**：不设硬帽不拒收（已否决的 12KB budget 帽不复活），超线仅自查压缩叙述、不减验收判据。
+- **验收口径（test_54 起）**：①删项目目录重建后，同 slug intake 直通（无幻影冲突误报）且新 wf.db
+  落磁盘、headless 监控轨可见；②非 git 目录任务的 plan/委派全链无 git init 痕迹（plan 单 lane 裁定
+  一行带过）；③小任务 planner r1 墙钟 ≤5m 级（软目标，观察项）；④守护日志零 `state:phantom-*`
+  异常即幻影通道健康。

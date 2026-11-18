@@ -10,6 +10,7 @@ description: >
 # WF Worktrees 协议
 
 ## 创建
+- 前提：worktree 仅适用于已存在 `.git` 的仓库——为启用 lane 并行而 `git init` 属越权（init 决定权在用户；项目无 .git 时 plan 应裁定单 lane 串行）。
 - `worktree_create`（opencode 工具）或 `git worktree add <path> -b <branch>`；树内先 `bun install`。
 - 宿主 `worktree_create` 对 `wf/<slug>/lane-Tnn` 斜杠名可能创建失败（test_52 实证，宿主侧根因未明）——失败一次即降级，勿反复重试：`git worktree add -b wf/<slug>/lane-<Tnn> <worktree 绝对路径> HEAD`；主树依赖已冻结（wave0 install 后）且各 lane 依赖与主树一致时，`ln -s <主树绝对路径>/node_modules <树内>/node_modules` 替代树内 `bun install`（lane 需增删依赖 → 先 `rm` symlink 改树内安装）；合并核验与清理复用下方既有节——md5 在「合并」§2，node_modules symlink 属 untracked 副本由「清理」§1 `rm`（必须先于非 force `worktree remove`，顺序不可倒）。
 - 分支命名：批次树 `wf/<slug>/batch<N>`；lane 树 `wf/<slug>/lane-Tnn`（P1-E；lane 写集归属见 `wf:lane ls` 的 areas 列）。
