@@ -242,3 +242,31 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   落磁盘、headless 监控轨可见；②非 git 目录任务的 plan/委派全链无 git init 痕迹（plan 单 lane 裁定
   一行带过）；③小任务 planner r1 墙钟 ≤5m 级（软目标，观察项）；④守护日志零 `state:phantom-*`
   异常即幻影通道健康。
+
+## W10 探针下游覆盖 + 共享边默认声明（test_54 复盘批，2026-11-18）
+
+> 依据：test_54（csvq-lite 同 slug 重跑 @ 删目录重建原路径，HEAD=b56776a 实弹，流程墙 1762s/进程墙
+> 1796s，PASS 迭代 1）复盘 + 连续两轮 plan-review r1 FAIL（test_53 授权误归因 / test_54 探针盲区）
+> 共同模式=前置可查缺陷漏到评审期——门在正常工作，修上游不松门。对抗评审两轮：FAIL（3 必改）→
+> 全吸收 → PASS（asset 非法 kind 由评审 F-R1 拦截，见 F-W10-4 注）。
+
+- **W9 验收实测（test_54 判定，含归因注记）**：①删目录重建同 slug intake 直通 ✓（守护 3 个缓存 db
+  fd 变 deleted-inode 后 wf:intake/wf:plan ok——含 H1 误报的 transition.ts:131 同库 peers 查询路径；
+  新 wf.db 落盘 inode 7001679≠旧 7001674，deleted fd 5→0 收敛）；②非 git 零 init 痕迹 ✓（plan 裁定
+  「单 lane 串行（git 未授权）」，全程无 .git）；③planner r1 4m56s ≤5m 达标但 **O3 软参考线触发条件
+  未命中**（6 T 点+e2e）——达标归因=生成物理地板（14392B/296s≈48.6 B/s≈12 tok/s），非 O3 生效，
+  归因修正记录在案；④守护日志零 `state:phantom-*` ✓（口径限定：指向该目录的 wf.db/wal/shm deleted
+  fd 5→0；守护进程自身 4 个 restart3.log deleted fd 常驻、与本链无关）。**删项目目录无需重启守护
+  =O1 实弹确证**。
+- **F-W10-1/2/3 探针下游覆盖（三落点）**：planner 探针条款 + wf-env-contract-probe 借口表 +1 行 +
+  wf-plan-grill 问项 7（条件式：探针半——样本须实际引用最下游 T/总闸的关键 API 并 tsc+test 双过；
+  通用半——写集锁死 T 点被下游发现缺声明须有合法修复路径）。问项追加尾部不重排（保护「问项 6」
+  既有引用）。
+- **F-W10-4 共享符号边默认声明**：消费共享 ambient（bun:test、types/*.d.ts）→ 默认声明 type 边；
+  只读 fixture → value 边+符号列注记「（只读 asset）」（test_54 r2 实证落盘形态）；kind 恒为
+  value|type——**asset 非法 kind**（lane-graph R1 硬限），评审拦截了原稿「type/asset 边」措辞自造
+  拒绝路径的回归。
+- **无动作（防规则通胀）**：ses 转录 ×2 由 session:correct 零成本自愈，不加规则；O3/20KB 预算线
+  不动、12KB 硬帽不复活；P3/P4 观察项维持。
+- **验收口径（test_55 起）**：①plan-review r1 首过 PASS（主判据）；②零探针盲区类 findings；
+  ③`session:correct` ≤1 且零成本（观察口径）；④守护日志零 `state:phantom-*` 持续。

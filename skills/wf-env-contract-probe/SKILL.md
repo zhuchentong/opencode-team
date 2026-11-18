@@ -33,3 +33,4 @@ description: >
 |---|---|
 | "VITE_ 前缀够用" | 探针 1 实测透传再下结论 |
 | "loadEnv 会透传 process.env" | 那是 .env 文件语义，非 runner 语义——探针 1 |
+| "探针能跑 = 下游类型面够用" | 探针样本须实际引用最下游 T 的关键符号并 tsc 过（test_54 F1：缺 spawnSync 致下游写集锁死） |
