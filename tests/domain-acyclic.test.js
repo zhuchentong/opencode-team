@@ -11,19 +11,20 @@ import * as fs from "node:fs";
 
 const domainDir = new URL("../server/domain/", import.meta.url);
 // 效率批 P1 +1：lane-graph.ts（lane 依赖边表解析/校验，零依赖叶子——任意可 import，不入出边白名单）
-const FILES = ["types.ts", "flow.ts", "guard.ts", "artifact.ts", "session.ts", "report.ts", "policy.ts", "diagnose.ts", "lane-graph.ts"];
+// W11-v2.1 +1：probe-matrix.ts（探针拓扑机器区，import lane-graph 复用 parseLaneDeps 做双射）
+const FILES = ["types.ts", "flow.ts", "guard.ts", "artifact.ts", "session.ts", "report.ts", "policy.ts", "diagnose.ts", "lane-graph.ts", "probe-matrix.ts"];
 
 // 粗筛（允许误报=plan §T02 口径）：from "..." 与副作用 import "..."
 function importsOf(src) {
   return [...src.matchAll(/(?:\bfrom|\bimport)\s*"([^"]+)"/g)].map((m) => m[1]);
 }
 
-test("T02 domain/ 九文件齐全（效率批 P1 +lane-graph.ts）", () => {
+test("T02 domain/ 十文件齐全（效率批 P1 +lane-graph.ts + W11-v2.1 +probe-matrix.ts）", () => {
   const have = fs.readdirSync(domainDir).filter((f) => f.endsWith(".ts")).toSorted();
   assert.deepEqual(have, [...FILES].toSorted());
 });
 
-test("规则①'：domain 内部边 ⊆ {任意→types} ∪ {diagnose→flow,artifact,session} ∪ {artifact→lane-graph}", () => {
+test("规则①'：domain 内部边 ⊆ {任意→types} ∪ {diagnose→flow,artifact,session} ∪ {artifact→lane-graph} ∪ {probe-matrix→lane-graph}", () => {
   for (const f of FILES) {
     const src = fs.readFileSync(new URL(f, domainDir), "utf8");
     const dom = importsOf(src).filter((s) => s.startsWith("./"));
@@ -31,7 +32,8 @@ test("规则①'：domain 内部边 ⊆ {任意→types} ∪ {diagnose→flow,ar
       const target = d.replace(/^\.\//, "");
       const allowed = target === "types.ts" ||
         (f === "diagnose.ts" && ["flow.ts", "artifact.ts", "session.ts"].includes(target)) ||
-        (f === "artifact.ts" && target === "lane-graph.ts"); // 效率批 P1：markVerdicts 单点自 derive 边表校验
+        (f === "artifact.ts" && ["lane-graph.ts", "probe-matrix.ts"].includes(target)) || // 效率批 P1：markVerdicts 单点自 derive 边表校验 // W11-v2.1：probeMatrixOk 同点派生
+        (f === "probe-matrix.ts" && target === "lane-graph.ts"); // W11-v2.1：双射与 type 边派生复用 parseLaneDeps
       assert.ok(allowed, `非法 domain 内部边：${f} → ${target}`);
       assert.ok(FILES.includes(target), `${f} import 了未知 domain 文件：${target}`);
     }

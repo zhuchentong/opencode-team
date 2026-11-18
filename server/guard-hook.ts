@@ -11,7 +11,7 @@
 // 被拦的 agent 无需再查 instructions.entry 就知道该怎么走。
 import * as fs from "node:fs";
 import { join } from "node:path";
-import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, extractPaths, shellWriteTargets, nextFor, profileOf, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
+import { GATE_ERR, EDIT_TOOLS, BLOCKING_PHASES, containsGitInit, extractPaths, shellWriteTargets, nextFor, profileOf, trackRoleSession, isLeader, SID_ALIAS_AUTO, SID_ALIAS_USAGE, resolveSidAlias, isNearTruncation } from "./lib.ts";
 import { logAdd } from "./state.ts";
 import { type Host } from "./host.ts"; // T03：收 Host（原 ctx:any）
 import { swallow } from "./observe.ts"; // T01：静默 catch → 环形审计记账
@@ -420,6 +420,26 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
       // 仅 EDIT_TOOLS 且 sessionID 变化才落盘（每子会话一次，避免 save 抖动）；登记失败不阻断（fail-open）。
       if (EDIT_TOOLS.has(toolName) && trackRoleSession(st, input?.agent, input?.sessionID)) {
         try { await save(st); } catch (e) { swallow(e, "guard-hook:role-reg-save-fail"); }
+      }
+      // W13（2026-11-18 合并批）：git init 独立拦截支——置于 blocking-phase 过滤之前（评审 F-R10：
+      //   既有 shell 分支在过滤之后，building/testing 期不生效，而 builder 恰是最可能 init 的角色）。
+      //   用户敕令「全程不 init」机检化：任务目录未 git 化期间，wf 任务会话内一切 git init 一律拒
+      //   （init 决定权在用户；保守口径含 git -C <任意目录> init）。逃生口=项目 opencode.json 插件
+      //   options allowGitInit:true（运行时活读，selfModRoot 同款——覆盖「任务本身建 git 仓库」场景）。
+      //   目录探测异常 fail-open（敕令是护栏非关卡，宁可漏判不误伤流程；引号感知见 domain/guard.ts）。
+      if (toolName === "shell" && (host as any)?.options?.allowGitInit !== true) {
+        const cmdRaw = String(input?.input?.command ?? "");
+        if (containsGitInit(cmdRaw)) {
+          const dir = String(st.directory ?? "");
+          let gitless = true;
+          try { gitless = dir === "" ? true : !fs.existsSync(`${dir}/.git`); } catch (e) { swallow(e, "guard-hook:git-init-probe-fail"); gitless = true; }
+          if (gitless) {
+            await logBlock(st, toolName, "git init");
+            throw new Error(
+              `${GATE_ERR} 硬关卡：wf 任务全程禁止 git init（任务目录未 git 化；init 决定权在用户——如确需 git 化，请在任务/会话外手动执行 git init 后继续，或在本项目 opencode.json 的插件 options 设 "allowGitInit": true）。${nextHint(st, st.phase)}`
+            );
+          }
+        }
       }
       // R2 T2.2（arch-r2-profile-statemachine）：blocking 判定=profileOf 的 PhaseDef.blocking
       // （tests/phases.test.js 守卫锁「PhaseDef.blocking ⇔ shared BLOCKING」双向一致，行为等价）；

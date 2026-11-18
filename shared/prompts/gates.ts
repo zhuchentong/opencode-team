@@ -39,6 +39,15 @@ export const LANE_DEPS_GATE_MSG =
   "被并行 lane 消费的符号必须下沉更早 wave。请 wf_command(name=\"wf:plan\") 修订（机器区仅许边级改写）后再推进 /wf:build" +
   "（violations 逐条清单见 wf_write_artifact 回显；已原生补写落盘则 wf_write_artifact(kind=plan)（不带 content=注册）补记账）。";
 
+// W11-v2.1（test_54/56 探针盲区家族复盘）：probe-matrix 机器区关卡拒绝文案（daily+full 共用，M/L 级）
+export const PROBE_MATRIX_GATE_MSG =
+  "❌ probe-matrix 关卡未过：M/L 级 plan.md 须含合法 ```probe-matrix 机器区（每 T 一行" +
+  " | T | probe_files | cross_file_import | tsconfig_notes |，与 lane-deps nodes 双射）。硬规则：" +
+  "lane-deps 存在 type 边 ⇒ 至少一行 cross_file_import=yes ∧ probe_files≥2（多文件探针按冻结 tsconfig 实跑，" +
+  "配置不兼容在规划期自曝，如 TS5097）；cross_file_import=yes ⇒ probe_files≥2 ∧ tsconfig_notes 非空。" +
+  "请 wf_command(name=\"wf:plan\") 修订机器区后重新注册（violations 逐条清单见 wf_write_artifact 回显；" +
+  "已原生补写落盘则 wf_write_artifact(kind=plan)（不带 content=注册）补记账）。";
+
 // 效率批 P2（learn 前置移交）：done 验收关卡——lessons 缺失分支文案（learn 已移交 leader 内联）
 export const DONE_LESSONS_GATE_MSG =
   "❌ 经验沉淀关卡未过：lessons.md 未产出。learn 已移交 leader 内联自写（无需委派 wf/learner）：" +

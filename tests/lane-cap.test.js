@@ -90,7 +90,7 @@ const toDoneWithLanes = async (t, dir, withLanes = true) => {
   await h.run("wf:intake", `f1-${t}`);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true });
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true }); // W11-v2.1：矩阵记账
   await h.run("wf:build");
   await h.run("wf:test");
   h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案
@@ -151,7 +151,7 @@ const toBuildGate = async (h, slug) => {
 test("批次2 gate 拒绝路径：盘上 plan-review/plan 已落盘未记账 → 自动补注册后放行", async () => {
   const dir = mkReconcileDir("gr-ok", {
     // 效率批 P1：盘上 plan 须含合法机器区——对账补记经 markVerdicts 自 derive laneDepsOk，缺块则关卡仍拒
-    "plan.md": "# 计划\n\n## lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n",
+    "plan.md": "# 计划\n\n## lane 分组表\n\n| lane | areas |\n|---|---|\n| T01 | src/a |\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```\n", // W11-v2.1：盘上 plan 双机器区（对账自 derive probeMatrixOk）
     "plan-review-r1.md": "**结论**: PASS\n\n五维过。\n",
   });
   const h = await mkWiringHarness({ sessionID: "ses_gr1", dir });

@@ -270,3 +270,36 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
   不动、12KB 硬帽不复活；P3/P4 观察项维持。
 - **验收口径（test_55 起）**：①plan-review r1 首过 PASS（主判据）；②零探针盲区类 findings；
   ③`session:correct` ≤1 且零成本（观察口径）；④守护日志零 `state:phantom-*` 持续。
+
+## W11 探针同构机器区 + 取证标准化 + git-init 机检（合并批 v2.1，2026-11-18，对抗评审三轮 PASS）
+
+> 依据：test_55（wc-lite，S 级，260s 墙钟零返工——S 路径首证）与 test_56（cronnext-lite，M 级压测，
+> 流程墙 1837s，plan-review r1 FAIL→r2，返修链仅 2.3min=patch 纪律红利）复盘。W10 符号维**确证生效**
+> （test_56 探针节头显式覆盖最下游 spawnSync/ambient、评审「逐符号同构」✓，test_54 类未复发）；但盲区
+> 家族按维度轮转——test_56 漏出**结构维**（probe.ts 单文件双绿不支撑跨文件 .ts import，冻结 tsconfig 漏
+> allowImportingTsExtensions → wave2 起必红 TS5097）。教训定案：**措辞约束只能堵已见维度，机检关闭整类**。
+> 方向转变（用户裁决）：凡可机检必机检，措辞只留机器不可判定的判断类。
+
+- **W11-v2.1 probe-matrix 机器区**（server/domain/probe-matrix.ts，纯函数解析永不 throw，lane-graph 同构先例）：
+  M/L 级 plan 必含 fenced 区（每 T 一行 `| T | probe_files | cross_file_import | tsconfig_notes |`）。
+  R-P1 与 checkLaneDeps 同信号 tierOf（评审 F-R1：lane-deps 存在性≠级别信号）；R-P2 矩阵行与 lane-deps
+  nodes **双射**（评审 F-R2：wave≥2 全是消费方，只矩阵化总闸点关不死）；R-P3 行级 yes⇒probe_files≥2∧
+  tsconfig_notes 非空 + 集合级 type 边⇒至少一行 yes∧≥2（parseLaneDeps 派生，零自报）；双执法三同源接线
+  （artifact-tool 写时预检硬拒仅 planning/review / markVerdicts 单点 derive probeMatrixOk / daily+full
+  wf:build 关卡第五要素）+ diagnose/commands 可见性。probe_files 自报残差**接受**（lane-deps 同款信任模型；
+  升级路径=同族复发→探针工件注册抽查）。措辞降级：planner/grill/probe skill 只留方法指引与两表关系
+  （矩阵=拓扑声明执法面，探针三列表=实测证据面）。
+- **W12 scripts/wf-forensics.sh**：单库机械取数标准化（七节只读报表：双墙钟/rounds/流转轨迹/返修链与
+  委派区间/计数器/产物/口径注记；`--db` 直连 + S 级容错）；验收=四库对账（test_53 原库自 tar 附录，
+  test_54 在 test_53 路径——评审 F-R4 身份纠正）。
+- **W13 guard-hook git-init 域规则**：用户敕令「全程不 init」机检化——wf 任务会话内、任务目录未 git 化，
+  一切 git init 拒（保守口径含 `git -C` 越界）；**挂点独立成支、置于 blocking-phase 过滤之前**（评审
+  F-R10：既有 shell 分支在过滤后，building/testing 不生效而 builder 恰是高危角色）；文案循 GATE_ERR
+  约定；引号感知 tokenizer（domain/guard.ts containsGitInit，shellWriteTargets 先例——引号字面量剥离
+  防误伤 grep/echo，命令替换与 sh -c 包装递归）；逃生口 options.allowGitInit（运行时活读）；目录探测
+  异常 fail-open。残差明示接受：变量间接/行续接/别名（防模型漂移非人类攻击）。
+- **正证据与观察**：gate:block ×2（「全部落盘后才注册」纪律拦截提前注册，防截断实证）；ses 转录 M 级
+  ×2 持续零成本（观察池：出现真实返修才议 server 侧归一化）；S 级分类须在 baseline 留痕理由（防判 S 躲门）。
+- **验收口径（test_57 起）**：①M 级 plan-review r1 首过 PASS（主判据）；②**连续两轮 M 级 r1 PASS=
+  「首过常态化」达成**（前门方差归零）；③探针家族第三维零复发（复发→探针模板化升级，措辞路线已终点）；
+  ④ses ≤2 且零成本、零 `state:phantom-*` 持续。

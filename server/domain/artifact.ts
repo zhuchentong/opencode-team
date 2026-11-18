@@ -1,6 +1,7 @@
 // wf-workflow — domain/artifact：kind→文件名/verdict 解析/patch 模糊匹配/阶段纪律/瘦身预算（自 lib.ts 逐字节平移）。
 import { tierOf, type WfState } from "./types.ts"; // R2 T2.1：tierOf 平移至 types 叶子（flow 域消费合法化）
 import { checkLaneDeps } from "./lane-graph.ts"; // 效率批 P1：lane 依赖边表校验（M3 修订——markVerdicts 单点自 derive）
+import { checkProbeMatrix } from "./probe-matrix.ts"; // W11-v2.1：probe-matrix 机器区校验（同 laneDepsOk 口径单点自 derive）
 
 // ── M3：产物 kind → 文件名（循环类产物按轮次编号）──────────────────
 /** 产物 kind → 文件名工厂（循环类产物按当前轮次编号）。 */
@@ -256,5 +257,8 @@ export function markVerdicts(
     //（拿不到 artifact-tool 的预检结果），故判定必须在本单点完成（artifact-tool 预检仅 fail-fast 副本）；
     // 随 mark 无条件重算（laneTableWritten 同款，clearOnPlan 无需清）。tierOf：T2.1 纪律，禁 size 字面量。
     v.laneDepsOk = checkLaneDeps(content, tierOf(st.size)).ok;
+    // W11-v2.1：probeMatrixOk 同点自 derive（gate-reconcile 补记只经 markVerdicts，判定必须在本单点完成；
+    // 随 mark 无条件重算——plan 修订后矩阵合法性以最新内容为准）。
+    v.probeMatrixOk = checkProbeMatrix(content, tierOf(st.size)).ok;
   }
 }

@@ -13,7 +13,7 @@ import { GATES, evaluateTransition, flowFor } from "../server/lib.ts";
 import { withVerdicts } from "./helpers/state-fixture.js"; // R3 T3.1：verdicts 平铺键→子对象翻译
 
 // 效率批 P1：plan 机器区 fixture（M 级真写路径预检要求；单 lane edges 空表合法）
-const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```"; // W11-v2.1：矩阵与 lane-deps 双伴（M 级落盘硬校验）
 
 const DIR = "/tmp/opencode/wf-plan-confirm";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -63,7 +63,7 @@ test("M16-r44 full wf:build 关卡：无确认拒（指路 question）、有确�
   assert.match(String(msg), /批准执行/, "指路含固定选项标签");
   // 效率批 P1（评审 M1 修订）：full 模式 M/L 加边表要件——确认齐缺边表 → 边表关卡拒（size 缺省=M）
   assert.match(String(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z" }))), /lane 依赖边表关卡未过/, "M 确认齐缺边表 → 边表关卡拒");
-  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z", laneDepsOk: true })), null, "确认+边表 → 放行");
+  assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z", laneDepsOk: true, probeMatrixOk: true })), null, "确认+边表+矩阵 → 放行");
   assert.equal(gate(blank({ phase: "test_design", planConfirmedAt: "2026-01-01T00:00:00Z", size: "S" })), null, "S 豁免边表");
 });
 

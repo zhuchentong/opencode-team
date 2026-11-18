@@ -19,6 +19,7 @@ export const VD = {
   intakeConfirmedAt: "intakeConfirmedAt", // intake-discuss-gate T01：identity 映射（无 legacy 平铺别名；JSDoc 键域自动锁）
   laneTableWritten: "laneTableWritten",
   laneDepsOk: "laneDepsOk", // 效率批 P1：lane 依赖边表合法记账（identity 映射）
+  probeMatrixOk: "probeMatrixOk", // W11-v2.1：probe-matrix 机器区合法记账（identity 映射）
   lessonsWritten: "lessonsWritten", // 效率批 P2：lessons 已产出记账（identity 映射）
   gateStatus: "gateStatus",
 };

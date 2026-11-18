@@ -13,4 +13,5 @@ export * from "./domain/report.ts";
 export * from "./domain/policy.ts";
 export * from "./domain/diagnose.ts";
 export * from "./domain/lane-graph.ts"; // 效率批 P1：lane 依赖边表解析/校验（lib-exports 全集锁须同步）
+export * from "./domain/probe-matrix.ts"; // W11-v2.1：probe-matrix 机器区解析/校验（lib-exports 全集锁须同步，+checkProbeMatrix/parseProbeMatrix）
 export { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本单一来源（T13 升 r39）

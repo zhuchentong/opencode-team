@@ -8,6 +8,8 @@
 // opt-agentic 项① 有意 +1：markVerdicts（artifact.ts，产物记账单点——artifact-tool mark 与
 // gate-reconcile 补记共用，消除 laneTableWritten 旧正则口径分叉）→ 81）
 // 效率批 P1 有意 +2：checkLaneDeps/parseLaneDeps（lane-graph.ts，lane 依赖边表机器区解析/校验纯函数）→ 83）
+// W11-v2.1 有意 +3：checkProbeMatrix/parseProbeMatrix（probe-matrix.ts，探针拓扑机器区）+ containsGitInit
+// （guard.ts，git init 引号感知侦测纯函数）→ 86）
 // + barrel 形态判据（lib.ts ≤60 行）。m4-smoke 的 9 名抽查保留不动。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,17 +23,17 @@ const EXPECTED = [
   "HINT_TRIGGERS", "KIND_FILES", "LANE_CAP", "LEADER_AGENT", "LEADER_ALIASES", "LIMITS", "NEXT", "NEXT_DAILY",
   "PHASES_DAILY", "PHASES_FULL", "PROFILES", "READONLY_CMDS", "REJECT_NOTES", "REJECT_PREFIX",
   "SID_ALIAS_AUTO", "SID_ALIAS_USAGE", "VERSION", "WF_ROLES",
-  "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "checkLaneDeps", "clipBrief",
+  "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "checkLaneDeps", "checkProbeMatrix", "clipBrief", "containsGitInit",
   "completeSidPrefix", "diagnoseReport", "evaluateTransition", "extractPaths", "flowFor",
   "fuzzyFind", "gateFor", "hasStrictVerdictLine", "isDaily", "isHintWorthy", "isLeader",
   "LANE_STALE_MS", "isNearTruncation", "isRejectReport", "isSelfModDir", "laneCapNote", "laneTableWritten", "leaderOnlyReject", "levelFor",
-  "makeAllowChecker", "makeInitialWfState", "markVerdicts", "nextFor", "normalizeFuzzy", "normalizeState", "orphanArtifactLines", "parseLaneDeps", "parseVerdict", "pingReport",
+  "makeAllowChecker", "makeInitialWfState", "markVerdicts", "nextFor", "normalizeFuzzy", "normalizeState", "orphanArtifactLines", "parseLaneDeps", "parseProbeMatrix", "parseVerdict", "pingReport",
   "profileOf", "promptText", "registerProfile", "renderReport", "resolveSidAlias", "selfModWarnLine", "sidRefText",
   "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 83 名全集锁", () => {
-  assert.equal(EXPECTED.length, 83);
+test("T02 导出集零漂移：Object.keys(lib) === 86 名全集锁", () => {
+  assert.equal(EXPECTED.length, 86);
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 

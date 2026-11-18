@@ -94,3 +94,49 @@ export function shellWriteTargets(cmd: unknown): string[] {
   }
   return [...found];
 }
+
+// ── W13（2026-11-18 合并批）：git init 引号感知侦测（用户敕令「全程不 init」机检化）────────
+// 误伤防线（评审 F-R6）：①单/双引号字面量先剥离——`grep 'git init' plan.md`、`echo "git init 禁止"`
+//   不得命中；②命令替换 $(…)/`…` 无论外层引号状态都执行 → 递归侦测内层；③sh/bash/zsh -c "<cmd>"
+//   的内层是命令语境（构建器常用形态）→ 仅对该形态递归，其余双引号按字面剥离。
+// 残差明示接受：变量间接（G=git;$G init）、行 Continuation（git\<换行>init）、别名/函数包装——
+//   防的是模型漂移非人类攻击（HOST-CONTRACT W11 节口径）。保守边界：`git -C <任意目录> init` 命中
+//   （init 落点不受 -C 收窄——敕令口径=任务目录未 git 化期间一律禁止）。
+/**
+ * 引号感知侦测命令行中的 git init 调用（含命令替换与 sh -c 包装内层）。
+ * @param cmd shell 命令行原文
+ * @returns 是否命中（true=应拦截）
+ */
+export function containsGitInit(cmd: unknown): boolean {
+  if (typeof cmd !== "string" || !cmd) return false;
+  // ① 命令替换：$(…)/`…` 恒为命令语境（引号内也执行）→ 递归内层（单层嵌套足够，更深视为畸形漏判可接受）
+  const subst = /\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)|`([^`]*)`/g;
+  let sm: RegExpExecArray | null;
+  while ((sm = subst.exec(cmd))) {
+    if (containsGitInit(sm[1] ?? sm[2] ?? "")) return true;
+  }
+  // ② sh -c 包装：内层字符串是命令语境 → 递归（仅此形态递归；echo/printf 的引号串按字面剥离）
+  const wrap = /(?:^|[;&|(]\s*)(?:[a-zA-Z0-9_./-]+\/)?(?:bash|zsh|sh|dash|ksh)\s+(?:-{1,2}[^\s]+\s+)*-c\s+("(?:[^"\\]|\\.)*"|'[^']*')/g;
+  let wm: RegExpExecArray | null;
+  while ((wm = wrap.exec(cmd))) {
+    const inner = wm[1].startsWith("\"") ? wm[1].slice(1, -1).replace(/\\(["\\$`])/g, "$1") : wm[1].slice(1, -1);
+    if (containsGitInit(inner)) return true;
+  }
+  // ③ 剥离引号字面量后分段 tokenize：命令 basename==git → **子命令位置**（首个非旗标 token，
+  //    -C/-c 的值参跳过）是否为 init——位置判定防 `git commit -m init` 值参误伤（评审后首跑实证）。
+  const stripped = cmd.replace(/'[^']*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  for (const seg of stripped.split(/(?:&&|\|\||[;|\n])/)) {
+    const toks = seg.trim().split(/\s+/).filter(Boolean);
+    if (!toks.length) continue;
+    if ((toks[0] ?? "").replace(/^.*\//, "").replace(/^["']+|["']+$/g, "") !== "git") continue;
+    let skipNext = false;
+    for (const t of toks.slice(1)) {
+      const bare = t.replace(/^["']+|["']+$/g, "");
+      if (skipNext) { skipNext = false; continue; }
+      if (/^-{1,2}[^=]/.test(bare) || /^--[^=]/.test(bare)) { if (bare === "-C" || bare === "-c") skipNext = true; continue; }
+      if (bare === "init") return true;
+      break; // 首个非旗标 token=子命令位置；非 init 即非目标（`git commit -m init` 的 init 是 -m 值参，不到此）
+    }
+  }
+  return false;
+}

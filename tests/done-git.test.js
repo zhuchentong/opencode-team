@@ -39,7 +39,7 @@ const toDone = async (h, slug) => {
   await h.run("wf:intake", slug);
   await h.run("wf:plan");
   await h.run("wf:review");
-  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true }); // v2：lane 表关卡记账（效率批 P1：+边表）
+  h.patch({ planConfirmedAt: new Date().toISOString(), planReviewVerdict: "PASS", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true }); // v2：lane 表关卡记账（效率批 P1：+边表） // W11-v2.1：+矩阵记账
   await h.run("wf:build");
   await h.run("wf:test");
   h.patch({ testReportVerdict: "PASS", lessonsWritten: true }); // 效率批 P2：done 关卡校验 lessons 在案

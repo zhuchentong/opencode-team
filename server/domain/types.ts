@@ -110,6 +110,10 @@ export interface WfState {
     //（checkLaneDeps 纯函数：跨 lane 边须 provider.wave<consumer.wave（type 同规）/无环/声明≥层深）；
     // daily+full 双模式 M/L 级 wf:build 关卡校验；plan 修订随 mark 无条件重算（laneTableWritten 同款）。
     laneDepsOk?: boolean;
+    // W11-v2.1（test_54/56 探针盲区家族复盘）：probe-matrix 机器区合法记账——markVerdicts 单点自 derive
+    //（checkProbeMatrix 纯函数：矩阵行与 lane-deps nodes 双射/type 边派生多文件探针强制）；daily+full
+    // 双模式 M/L 级 wf:build 关卡校验；plan 修订随 mark 无条件重算（laneDepsOk 同款）。
+    probeMatrixOk?: boolean;
     // 效率批 P2（learn 前置移交）：lessons.md 已产出记账——GATES["wf:done"] 验收要件
     //（learn 移交 leader 内联，learner 改职 FAIL 取证/显式深审；F4 竞态随之根治：经验落盘先于交付确认）。
     lessonsWritten?: boolean;

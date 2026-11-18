@@ -9,7 +9,7 @@
 //        拒绝返回附 gate 字段（note 值逐字不变——commands.ts logAdd 据此细化审计面）。
 // P2 limits 覆盖、M16-r34 daily 子表、M10-a「进入即计数」语义与旧 lib.ts 逐字一致。
 import { LIMITS, REJECT_NOTES, promptText, slugify, tierOf, type FlowDef, type Gate, type Limits, type PhaseDef, type Slug, type TransitionResult, type WfState, type WorkflowProfile } from "./types.ts";
-import { CONFIRM_GATE_MSG, DONE_LESSONS_GATE_MSG, GATE_DUAL_CHANNEL_MSG, INTAKE_CONFIRM_GATE_MSG, LANE_DEPS_GATE_MSG, LANE_TABLE_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
+import { CONFIRM_GATE_MSG, DONE_LESSONS_GATE_MSG, GATE_DUAL_CHANNEL_MSG, INTAKE_CONFIRM_GATE_MSG, LANE_DEPS_GATE_MSG, LANE_TABLE_GATE_MSG, PROBE_MATRIX_GATE_MSG, gateAcceptanceMsg, gateDailyVerifyMsg } from "../../shared/prompts/gates.ts";
 
 // M16-r28（性能审计批次 1/2）：B1-1 shell 误伤翻案（=>/比较符/tee<）+ guard 项目 containment
 //   （项目外写放行，对齐 shell 分支语义）；B1-2~B1-5 guidance 提速（reconcile 去全量、并发委派、
@@ -94,9 +94,11 @@ export const GATES: Record<string, Gate> = {
   "wf:build": {
     id: "plan-confirm",
     isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt
-      && (tierOf(st.size) === "S" || st.verdicts?.laneDepsOk === true),
+      && (tierOf(st.size) === "S" || st.verdicts?.laneDepsOk === true)
+      && (tierOf(st.size) === "S" || st.verdicts?.probeMatrixOk === true), // W11-v2.1：probe-matrix 机器区（M/L）
     explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG
       : (tierOf(st.size) !== "S" && st.verdicts?.laneDepsOk !== true) ? LANE_DEPS_GATE_MSG
+      : (tierOf(st.size) !== "S" && st.verdicts?.probeMatrixOk !== true) ? PROBE_MATRIX_GATE_MSG
       : CONFIRM_GATE_MSG),
   },
   // 效率批 P2（learn 前置移交）：done 验收=测试 PASS + lessons 在案（learn 移交 leader 内联，
@@ -137,14 +139,17 @@ export const GATES_DAILY: Record<string, Gate> = {
     id: "daily-build",
     // v2：判定顺序=用户确认 → lane 分组表（M/L，并行优先硬卡——串行须以 lane 表书面举证）
     //   → lane 依赖边表（效率批 P1，M/L——结构正确性机械化：跨 lane 边须早波次/无环/声明≥层深）
+    //   → probe-matrix 机器区（W11-v2.1，M/L——探针拓扑声明与 lane-deps 双射/type 边派生多文件探针强制）
     //   → review 结论（M/L）
     isSatisfiedBy: (st) => !!st.verdicts?.confirmedAt
       && (tierOf(st.size) === "S" || !!st.verdicts?.laneTableWritten)
       && (tierOf(st.size) === "S" || st.verdicts?.laneDepsOk === true)
+      && (tierOf(st.size) === "S" || st.verdicts?.probeMatrixOk === true)
       && (tierOf(st.size) === "S" || st.verdicts?.planReview === "PASS"),
     explain: (st) => (!st.verdicts?.confirmedAt ? CONFIRM_GATE_MSG
       : (tierOf(st.size) !== "S" && !st.verdicts?.laneTableWritten) ? LANE_TABLE_GATE_MSG
       : (tierOf(st.size) !== "S" && st.verdicts?.laneDepsOk !== true) ? LANE_DEPS_GATE_MSG
+      : (tierOf(st.size) !== "S" && st.verdicts?.probeMatrixOk !== true) ? PROBE_MATRIX_GATE_MSG
       : gateDailyVerifyMsg(st.verdicts?.planReview)),
   },
   "wf:done": GATES["wf:done"],

@@ -209,7 +209,7 @@ export async function registerCommands(host: Host, deps: CommandDeps): Promise<{
           `wf 工作流(${VERSION})状态｜session=${st.sessionID}`,
           `slug=${st.slug || "(未定)"}  phase=${st.phase}  mode=${st.mode ?? "full"}  size=${st.size ?? "M"}`,
           `rounds: plan_review=${r.plan_review ?? 0}/${LIMS.plan_review}  build_review=${r.build_review ?? 0}/${LIMS.build_review}  test_fix=${r.test_fix ?? 0}/${LIMS.test_fix}`,
-          `gates: testPlan=${st.verdicts?.testPlanWritten ? "✅" : "❌"}  testReport=${st.verdicts?.testReport ?? "-"}  planReview=${st.verdicts?.planReview ?? "-"}  planConfirm=${st.verdicts?.confirmedAt ? "✅" : "❌"}  laneDeps=${st.verdicts?.laneDepsOk === true ? "✅" : st.verdicts?.laneDepsOk === false ? "❌" : "-"}  lessons=${st.verdicts?.lessonsWritten ? "✅" : "❌"}`, // R3 T3.1 子步 B // 效率批 P1/P2：边表+lessons 记账可见
+          `gates: testPlan=${st.verdicts?.testPlanWritten ? "✅" : "❌"}  testReport=${st.verdicts?.testReport ?? "-"}  planReview=${st.verdicts?.planReview ?? "-"}  planConfirm=${st.verdicts?.confirmedAt ? "✅" : "❌"}  laneDeps=${st.verdicts?.laneDepsOk === true ? "✅" : st.verdicts?.laneDepsOk === false ? "❌" : "-"}  probeMatrix=${st.verdicts?.probeMatrixOk === true ? "✅" : st.verdicts?.probeMatrixOk === false ? "❌" : "-"}  lessons=${st.verdicts?.lessonsWritten ? "✅" : "❌"}`, // R3 T3.1 子步 B // 效率批 P1/P2：边表+lessons 记账可见 // W11-v2.1：probe-matrix 记账可见
           `lanes: ${Object.entries(st.lanes ?? {}).map(([k, v]: any) => {
             // v2 耗时观测：done 且双戳齐（at=开工/lastUsedAt=收尾）→ done(Nmin)（口径经 test_007 learner 校准：分钟整数）
             if (v.status === "done" && v.at && v.lastUsedAt) {

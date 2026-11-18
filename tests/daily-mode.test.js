@@ -125,11 +125,12 @@ test("v2 verify 关卡三要素：确认 → lane 分组表（M/L）→ planRevi
   assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true })), /lane 依赖边表关卡未过/, "lane 表齐缺边表 → 边表关卡拒");
   assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: false })), /lane 依赖边表关卡未过/, "显式 false 同拒");
   // 第四要素：review 结论（M/L）
-  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true })), /验证关卡未过/, "lane 表+边表齐无 verdict → verdict 关卡拒");
-  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, planReviewVerdict: "FAIL" })), /验证关卡未过/, "FAIL → 拒");
+  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true })), /验证关卡未过/, "lane 表+边表+矩阵齐无 verdict → verdict 关卡拒");
+  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true, planReviewVerdict: "FAIL" })), /验证关卡未过/, "FAIL → 拒");
   // 放行路径
-  assert.equal(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, planReviewVerdict: "PASS" })), null, "确认+lane 表+边表+PASS → 放行");
-  assert.equal(gate(blank({ mode: "daily", size: "L", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, planReviewVerdict: "PASS" })), null);
+  assert.equal(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true, planReviewVerdict: "PASS" })), null, "确认+lane 表+边表+矩阵+PASS → 放行");
+  assert.equal(gate(blank({ mode: "daily", size: "L", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, probeMatrixOk: true, planReviewVerdict: "PASS" })), null);
+  assert.match(gate(blank({ mode: "daily", size: "M", planConfirmedAt: "x", laneTableWritten: true, laneDepsOk: true, planReviewVerdict: "PASS" })), /probe-matrix 关卡未过/, "矩阵缺区/未记账 → 独立拒（W11-v2.1）");
   // S 级豁免 lane 表与结论
   assert.match(gate(blank({ mode: "daily", size: "S" })), /方案确认关卡未过/, "S 未确认也拒（全 tier 必经）");
   assert.equal(gate(blank({ mode: "daily", size: "S", planConfirmedAt: "x" })), null, "S 已确认跳过 lane 表与结论（自验自律）");
@@ -192,7 +193,7 @@ test("r34 全链路 M：plan-review verdict 关卡 + FAIL→wf:fix 返工", asyn
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] feat" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   // 效率批 P1：plan 须含合法 lane-deps 机器区（单 lane edges 空表合法；planning 期缺块=预检拒落盘）
-  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane（T01）\nT01 功能点\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane（T01）\nT01 功能点\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```" }, { sessionID: sid, agent: "wf/planner" });
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   // 未确认 → 方案确认关卡拒（M16-r44）；确认后未写 plan-review → verdict 关卡拒
   assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /方案确认关卡未过/);
