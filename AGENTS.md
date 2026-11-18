@@ -22,6 +22,9 @@
 - `server/model-tier.ts` 动态档位跟随（M16-r43）：TIER_MAP（builder/learner=low，P0-B）/强度序降级/`inherit` 哨兵（不派生=跟随基座）/项目级派生文件（纯函数+IO 分离，bun test 直测）；`options.tiers` 覆盖经 middleware 白名单过滤（未知角色=幽灵 subagent 防御，P1-B）。
 - `server/state-scan.ts`（P1-A）：selfmod 护栏域（scanActiveTasks/项目清单）自 state.ts 拆出——state.ts re-export 兼容旧导入路径；**新 scan 类代码写本文件，swallow 前缀 `state-scan:*`**；勿建 state/ 子目录（逃逸 swallow-coverage 非递归扫描）。
 - lane 依赖边表 + learn 前置（W8 效率批）：plan.md fenced ```lane-deps 机器区（`server/domain/lane-graph.ts` 纯函数解析/校验，解析永不 throw）——R0 M/L 缺区/S 豁免、R3 跨 lane 边 provider.wave<consumer.wave（kind=value|type 同规）、R6 声明 wave<拓扑层深=违规；双执法=markVerdicts 单点自 derive laneDepsOk + artifact-tool 写时预检（硬拒仅限 planning/review，building/testing 降级 ⚠️）+ daily/full 双模式 wf:build 第四要素；lessons 前置至 testing 由 leader 内联（`wf:done` 关卡校验 lessonsWritten，gate-reconcile 对账含 lessons），learner 改职 FAIL 取证/显式深审；效率四指标（r1 首过率/并行有效度/双墙钟/返修根因）与「反事实必须实测」条款——详见 docs/HOST-CONTRACT.md「W8 效率批」。
+- plan 三机器区写时预检（W8/W11-v2.1/W14 家族，artifact-tool 原生顺序 dep→pm→esc 三块，均挂 writeFileSync **之后**）：「硬拒」真实语义=**拒绝记账不回滚磁盘**（artifacts hash/审计冻结；register 幂等 no-op 早退先于预检=pre-upgrade plan 重放不受拒）——契约与残差见 docs/HOST-CONTRACT.md「W14 节·实现期真机取证」；新增同款预检勿按「未落盘」措辞想当然（dep/pm 文案该处为登记在案的措辞残差）。三件单一来源：`domain/lane-graph.ts`（边表+第四要素）、`domain/probe-matrix.ts`（探针拓扑机器区，与 lane-deps nodes 双射+type 边强制多文件探针，derive probeMatrixOk=wf:build 第五要素）、`domain/plan-escape.ts`（M/L 逃生门条款在场性，仅写时预检不进 gate——评审 Q7 兜底实质面）；均 tierOf!=="S" 统一门、纯函数 never-throw、lib barrel re-export（lib-exports 全集锁+domain-acyclic FILES 须同步）。
+- 取证标准化（W12）：每轮真机复盘用 `scripts/wf-forensics.sh --db <wf.db>` 出七段标准报告（终态/rounds/流转轨迹含 gap/返修与委派区间/计数器/产物/口径注记）；SQL 口径与 wf-headless.sh 同源，S 级无委派容错。
+- git-init 机检（W13）：`domain/guard.ts` containsGitInit（引号感知+子命令位匹配防误报）+ guard-hook 独立分支置于 blocking 过滤**之前**（building/testing 期 builder 也拦）；触发=活跃任务∧shell∧未 allowGitInit∧任务目录无 .git；逃生口=项目 opencode.json options.allowGitInit:true。
 - lane 并行（P1-E）：`LANE_CAP`（types 叶子）、`wf:lane set --areas=T01,T02`/`done <Tnn>`、receipt per-lane `build-receipt-<Tnn>.md`（写读成对）、planner lane 分组表契约——详见 roles/{planner,leader,builder}.md。
 - 测试环境：mock 包自举**只许**在 `tests/_preload.js`（P0-A 单点化，mock-bootstrap.test.js 守卫）；测试文件禁散装自举副本。
 - `server/skills.ts` skill 托管同步（M16-r45；latency-v3+batch-2 共 9 个）：仓库 `skills/{session-lookup,wf-worktrees,wf-verify-criteria,wf-env-contract-probe,wf-plan-grill,wf-batched-execution,wf-build-receipt,wf-codemod,wf-plan-revision}/SKILL.md` 单一来源（`SKILL_IDS` 注册，**新 skill 追加数组尾部**——测试按下标取 session-lookup），setup 同步到宿主全局 `~/.config/opencode/skills/`（默认开启 `syncSkills`，显式 false 关闭；备份/尾行托管标记/hash 跳过同 roles 模式）。wf-worktrees=worktree 生命周期协议（清理五步序/lane 分支命名，P0-E）；wf-verify-criteria=判据前台验证纪律（通用无域门）；wf-env-contract-probe=环境契约四探针（域门）；wf-plan-grill=plan 可验证性拷问（域门）；wf-batched-execution=批量执行/e2e 选链路/裁定合并（域门）；wf-build-receipt=回执撰写协议（域门）；wf-codemod=pattern 批量改写 dryRun 纪律（域门）；wf-plan-revision=plan 返修/增量 patch 协议（域门）。
@@ -38,7 +41,7 @@
 
 ## 约定与证据链
 
-- docs/HOST-CONTRACT.md 是真机契约结论（宿主契约备忘+已知边界，自 README 迁出），事故原始记录在 `.learnings/ERRORS.md`、`LEARNINGS.md`（.gitignore 排除；本机**未生成**——首次沉淀经验时初始化，勿假设其存在）。与该结论冲突的"常识修复"一律先查证再动手。
+- docs/HOST-CONTRACT.md 是真机契约结论（宿主契约备忘+已知边界，自 README 迁出），事故原始记录在 `.learnings/ERRORS.md`、`LEARNINGS.md`（.gitignore 排除；本仓库已生成——只读引用，写入归 learner 链路，勿假设其为空也勿手工清空）。与该结论冲突的"常识修复"一律先查证再动手。
 - 注释、文档、提交信息用中文；提交格式 = 中文约定式提交 + emoji（见 git log）。
 - `.workflow/`（含运行态 `wf.db`）不入库；`.learnings/` 自 M16-r52 起默认 ignore（agent 生成目录不入库，机制性消除 F4「提交后 learner 续写致工作区复脏」竞态；intake 补 gitignore 含两目录）；希望经验随交付提交的项目显式删 `.learnings/` 的 ignore 行（intake 指引已注明该出口）——两库策略各自定，产物 md、overrides 约定见 README。
 - 长 ID 编排纪律（晋升自 LRN-20261112-003，M16-r48 B 层确证）：LLM 编排勿让模型凭记忆复述长不透明 ID——给别名或省略新建、服务端就地自愈改写截断前缀、任何模型可见文本绝不回显完整 ID（回显=转录燃料，抗 compaction 注入点使其常在场自我强化）；DB 审计记录不算回显。

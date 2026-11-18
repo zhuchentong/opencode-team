@@ -70,7 +70,7 @@ server/state.ts         状态层：bun:sqlite 单库 .workflow/wf.db（WAL；ta
 server/rpc-bridge.ts    RPC 桥：Wf.state/list/exec（state 附 lastReport）+ updated/report 事件
 server/commands.ts      /wf:* 命令：10 流转表驱动 + 6 辅助；publishOutput（reports 表+事件）+
                         injectReport（降级轨 wait→prompt resume:false）+ hook 剥离报告消息
-server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账+verdict 指路公告；三模式 content/patch/register（M16-r47，fuzzy 匹配纯函数在 lib.ts）
+server/artifact-tool.ts wf_write_artifact 工具：kind → .workflow/<slug>/ 落盘+记账+verdict 指路公告；三模式 content/patch/register（M16-r47，fuzzy 匹配纯函数在 lib.ts）；plan 三机器区写时预检原生顺序 dep→pm→esc（W8/W11/W14——均挂 writeFileSync 之后，「硬拒」语义=拒绝记账不回滚磁盘，契约见 HOST-CONTRACT W14 节）
 server/guard-hook.ts    execute.before 越权阻断（含 shell 门控）+ subagent 续接自愈（r41）
                         + question 方案确认观察记账（r44）；拒绝消息附下一步命令指引
 server/hint.ts          自动激活：消息 hook 多形态防御注册 → wf.hint 一次性提示
@@ -172,6 +172,10 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | 需求确认关卡（intake→plan） | `options.requireIntakeConfirm` + `server/guidance.ts`（确认卡指引）+ `server/transition.ts`（固化） | 默认 true；显式 false 关闭关卡与卡指引（intake 固化 intakeConfirmOff，re-intake 重算；服务端只保「出过卡」不保「答的是批准」） |
 | 观测 / 探针 | `server/observe.ts` + options | 默认关，`WF_DEBUG=1` 开 |
 | lane 依赖边表（机器区）/ learn 前置移交 | `server/domain/lane-graph.ts`（解析+校验纯函数）+ `server/artifact-tool.ts`（写时预检）+ `server/domain/flow.ts`（GATES/GATES_DAILY 第四要素与 done lessons 要件）+ `roles/{planner,learner,leader}.md` | 效率批 W8：跨 lane 边须早波次（type 同规）/无环/声明≥层深；lessons 前置至 testing 由 leader 内联（done 关卡校验）；learner 改职 FAIL 取证/显式深审；详见 docs/HOST-CONTRACT.md「W8 效率批」 |
+| probe-matrix 探针拓扑机器区（第五要素） | `server/domain/probe-matrix.ts`（解析+校验纯函数，import lane-graph 双射）+ artifact-tool 预检 + flow.ts GATES/GATES_DAILY["wf:build"] probeMatrixOk + `roles/planner.md` L9 + `skills/wf-plan-grill` Q7 | W11-v2.1：与 lane-deps nodes 双射；type 边⇒至少一行 yes∧probe_files≥2（TS5097 类 planning 期自曝）；详见 HOST-CONTRACT「W11 合并节」 |
+| 扩展逃生门条款预检（仅写时不进 gate） | `server/domain/plan-escape.ts`（tierOf!=="S" 统一门纯函数）+ artifact-tool esc 块 | W14：M/L plan 必带条款句（test_54/57 判断类同族→结构强制）；实质面评审 Q7 兜底；详见 HOST-CONTRACT「W14 节」 |
+| git init 拦截 | `server/domain/guard.ts`（containsGitInit 引号感知）+ `server/guard-hook.ts`（独立分支置于 blocking 过滤前） | W13：活跃任务∧shell∧未 allowGitInit∧任务目录无 .git ⇒ 拒（含 building/testing 期）；逃生口 options.allowGitInit:true |
+| 真机复盘取证报告 | `scripts/wf-forensics.sh --db <wf.db>` | W12：七段标准报告（双墙钟/rounds/流转 gap/返修委派区间/计数器/产物/口径注记）；SQL 口径与 wf-headless.sh 同源 |
 | 无头编排（opencode run） | `scripts/wf-headless.sh`（唯一驱动）+ `wf:resume`（审计轨）+ `WF_HEADLESS=1`（确认卡 auto 标记） | 边界与复现命令见 `docs/HOST-CONTRACT.md`「无头模式（opencode run）实测边界」；lane/tier/worktree 架构验收不在无头覆盖面 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 
