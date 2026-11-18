@@ -9,7 +9,7 @@
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
-import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, checkLaneDeps, checkProbeMatrix, tierOf, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源） // 效率批 P1：checkLaneDeps/tierOf（预检 fail-fast 副本）
+import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, checkLaneDeps, checkProbeMatrix, checkPlanEscape, tierOf, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源） // 效率批 P1：checkLaneDeps/tierOf（预检 fail-fast 副本） // W14：checkPlanEscape（扩展逃生门条款写时预检）
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -154,6 +154,14 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           if (pm && !pm.ok && (initial.phase === "planning" || initial.phase === "review")) {
             return { content: `❌ probe-matrix 机器区校验未过（${file}，本次未落盘/未记账——修订机器区后重试；violations 清单如下）：\n` + pm.violations.map((s) => `- ${s}`).join("\n") };
           }
+          // W14：扩展逃生门条款预检（test_57 F1 同族二现、提示词层证伪 → 结构强制）。三模式统一对
+          // finalContent 单点校验（register 主路径实证=test_57 events mode=register）；tierOf!=="S"
+          // 统一门（评审 v1 F-1：裸「写集」标记在真实语料假阳率 2/3）；硬拒窗与上两块同口径，
+          // register 幂等 no-op 早退先于本检查（pre-upgrade 无条款 plan 重放不受拒）。
+          const esc = kind === "plan" ? checkPlanEscape(finalContent, tierOf(initial.size)) : null;
+          if (esc && !esc.ok && (initial.phase === "planning" || initial.phase === "review")) {
+            return { content: `❌ 扩展逃生门条款校验未过（${file}，文本已落盘、记账冻结——修订 plan 补条款后重新注册；violations 清单如下）：\n` + esc.violations.map((s) => `- ${s}`).join("\n") };
+          }
           // M16-r33/M16-r34（语义随 markVerdicts 迁移）：verdict 从**结果全文**解析（patch/register
           // 模式入参无 content——markVerdicts 内部经 domain parseVerdict 对全文判定，否则 done 关卡误拦）
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
@@ -209,6 +217,11 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             note += pm.ok
               ? `\n→ probe-matrix 机器区通过（与 lane-deps 双射）`
               : `\n⚠️ probe-matrix 机器区未过（${pm.violations.length} 项，已记账 probeMatrixOk=false，wf:build 关卡将拒——修订机器区后重新注册）：\n` + pm.violations.map((s) => `- ${s}`).join("\n");
+          }
+          // W14：逃生门条款降级回显（building/testing 窗）。诚实版（评审 v1 F-4）：本批无 verdicts/gate
+          // 元素，不提「已记账/关卡将拒」；残差=此窗删条款无下游兜底（接受，HOST-CONTRACT W14 节声明）。
+          if (esc && !esc.ok) {
+            note += `\n⚠️ plan 缺扩展逃生门条款（写集锁死时下游 T 点需扩声明即死锁——test_54/57 同族实证。修订 plan 后重新 wf:review 补条款）`;
           }
           if ((kind === "test-report" || kind === "plan-review") && !hasStrictVerdictLine(finalContent)) {
             note += `\n⚠️ ${kind} 首行应含「**结论**: PASS|FAIL」（记为 UNKNOWN 后 ${kind === "test-report" ? "/wf:done" : "日常模式 /wf:build"} 会被关卡拦截）`;

@@ -12,7 +12,9 @@ import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（raw
 // 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
 
 // 效率批 P1：plan 机器区 fixture（M 级预检要求；单 lane edges 空表合法——预算用例 M 档专用）
-const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```";
+// W14 补矩阵区+逃生门条款：此前该夹具实证已被 R-P1 静默拒（评审 v1 F-2 核实），断言不查成功故
+// 曾不受影响；补齐三要素使 M 夹具真过全部写时预检，防「靠失败输出假绿」的隐性漂移。
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```\n下游 T 点可对共享声明文件做追加式扩展（只增不改不删），并在回执记录扩展行。\n";
 
 const DIR = "/tmp/opencode/wf-patch";
 const DB = `${DIR}/.workflow/wf.db`;
@@ -248,5 +250,33 @@ test("M16-r47 fuzzy：行尾空白回退命中；归一后歧义报错不落盘�
   // 三阶段全 miss
   const miss = await tool(m).execute({ kind: "plan", patch: [{ old: "完全无关的段落内容", new: "x" }] }, { sessionID: sid, agent: "wf/planner" });
   assert.match(miss.content, /未命中/);
+  dispose?.();
+});
+// ── W14：逃生门条款 × patch 交互——校验对象=patch 应用后的最终文本（非入参片段）──────────
+test("W14 escape：patch 补条款后通过；patch 删条款在 planning/review 窗硬拒不落盘", async () => {
+  const m = mkCtx();
+  const dispose = await plugin.setup(m.ctx);
+  const sid = "ses_esc";
+  await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] esc-demo" } });
+  await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
+  // M 级首写缺三要素 → lane-deps R0 先拒（预检块执行顺序=dep→pm→esc，锁死最前一道既有执法面）
+  const bare = await tool(m).execute({ kind: "plan", content: "# 计划\n旧方案\n" }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(bare.content, /❌ lane 依赖边表校验未过/, "边表缺区应先行硬拒");
+  // 合规首写（BLOCK 三要素齐：边表+矩阵+条款句）
+  const w = await tool(m).execute({ kind: "plan", content: "# 计划\n旧方案\n" + BLOCK }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(w.content, /已写入/, "三要素齐应落盘");
+  // patch 只动无关段：结果文本仍含条款 → 过
+  const keep = await tool(m).execute({ kind: "plan", patch: [{ old: "旧方案", new: "新方案" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(keep.content, /已写入/);
+  // patch 删除条款句 → planning 窗硬拒不落账（W14 实现期真机取证锁定的既有契约：三预检块原生位于
+  // 写盘之后——lane-deps/probe-matrix 自 M16-r33/W11 起即「先落文本、后拒绝记账」语义，strip 类
+  // 修订被拒时盘上保持 patch 结果、仅记账冻结；盘上回滚属三表共同的重构议题，超出 W14 单件批，
+  // 已记 HOST-CONTRACT W14 节残差）。断言=拒绝文案+记账不前进（log 末条仍是 keep 的 mode=patch）。
+  const strip = await tool(m).execute({ kind: "plan", patch: [{ old: "\n下游 T 点可对共享声明文件做追加式扩展（只增不改不删），并在回执记录扩展行。\n", new: "\n" }] }, { sessionID: sid, agent: "wf/planner" });
+  assert.match(strip.content, /❌ 扩展逃生门条款校验未过/, "删条款应硬拒");
+  const stEsc = stOf(sid);
+  const lastLog = String(stEsc.log.filter((e) => e.cmd === "tool:wf_write_artifact").at(-1).note);
+  assert.match(lastLog, /mode=patch/, "硬拒不落账=审计末条仍是上一次成功写入（keep）");
+  assert.ok(!/strip/.test(String(stEsc.artifacts?.["plan.md"]?.hash ?? "")), "记账 hash 未被 strip 覆盖（见 log 末条即证）");
   dispose?.();
 });

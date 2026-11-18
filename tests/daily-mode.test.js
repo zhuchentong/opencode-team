@@ -193,7 +193,7 @@ test("r34 全链路 M：plan-review verdict 关卡 + FAIL→wf:fix 返工", asyn
   await cmd(m, "wf:intake").execute({ sessionID: sid, prompt: { text: "[M] feat" } });
   await cmd(m, "wf:plan").execute({ sessionID: sid, prompt: {} });
   // 效率批 P1：plan 须含合法 lane-deps 机器区（单 lane edges 空表合法；planning 期缺块=预检拒落盘）
-  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane（T01）\nT01 功能点\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```" }, { sessionID: sid, agent: "wf/planner" });
+  await tool(m).execute({ kind: "plan", content: "# plan\nlane 分组表：单 lane（T01）\nT01 功能点\n\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```\n下游 T 点可对共享声明文件做追加式扩展（只增不改不删），并在回执记录扩展行。\n" }, { sessionID: sid, agent: "wf/planner" }); // W14：+逃生门条款句（M 级写时预检必带）
   await cmd(m, "wf:review").execute({ sessionID: sid, prompt: {} });
   // 未确认 → 方案确认关卡拒（M16-r44）；确认后未写 plan-review → verdict 关卡拒
   assert.match(await cmd(m, "wf:build").execute({ sessionID: sid, prompt: {} }), /方案确认关卡未过/);

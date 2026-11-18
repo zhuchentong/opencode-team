@@ -14,7 +14,7 @@ import { trackRoleSession, evaluateTransition } from "../server/lib.ts";
 import { guidance } from "../server/guidance.ts";
 
 // 效率批 P1：plan 机器区 fixture（M 级预检要求；单 lane edges 空表合法）
-const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```"; // W11-v2.1：矩阵与 lane-deps 双伴（M 级落盘硬校验）
+const BLOCK = "\n```lane-deps\nnodes:\n| T | wave | lane |\n|---|---|---|\n| T01 | 0 | lane-0 |\nedges:\n| 消费方 | 提供方 | 符号 | kind |\n|---|---|---|\n```\n\n```probe-matrix\n| T | probe_files | cross_file_import | tsconfig_notes |\n|---|---|---|---|\n| T01 | 1 | no | - |\n```\n下游 T 点可对共享声明文件做追加式扩展（只增不改不删），并在回执记录扩展行。\n"; // W11-v2.1：矩阵与 lane-deps 双伴（M 级落盘硬校验） // W14：+逃生门条款句（M 级写时预检必带）
 
 const DIR = "/tmp/opencode/wf-session-reuse";
 const DB = `${DIR}/.workflow/wf.db`;

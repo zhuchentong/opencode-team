@@ -303,3 +303,38 @@ r29e（server emit 成功但 TUI 零接收）后演化出的报告投递契约�
 - **验收口径（test_57 起）**：①M 级 plan-review r1 首过 PASS（主判据）；②**连续两轮 M 级 r1 PASS=
   「首过常态化」达成**（前门方差归零）；③探针家族第三维零复发（复发→探针模板化升级，措辞路线已终点）；
   ④ses ≤2 且零成本、零 `state:phantom-*` 持续。
+
+## W14 逃生门条款写时预检（test_57 复盘批，2026-11-18）
+
+**背景与根因迁移谱系**：M 级 r1 首过四轮 = PASS(53)/FAIL(54)/FAIL(56)/FAIL(57)。根因类迁移：
+test_54 判断类（ambient 声明死锁，返修 8.2m）→ test_56 结构类（冻结 tsconfig 漂移 TS5097，2.3min，
+已由 W11 probe-matrix 关死）→ test_57 判断类同族二现（写集锁死无扩展逃生门条款，149s）。决定性事实：
+roles/planner.md L9 明载 test_54 同族教训原文，test_57 planner 读着它仍未写条款——提示词路线对该
+pattern 被对照实验证伪，按「凡可机检必机检」升级为结构强制。
+
+**设计（评审 v1 FAIL 四必改全吸收）**：`server/domain/plan-escape.ts` 纯函数 `checkPlanEscape(content, tier)`
+——tierOf!=="S" 统一门（F-R1 同款信号源；评审语料取证：裸「写集」标记在 test_53/56 合法 plan 假阳率
+2/3，planner lane 分组表契约天然含写集列）；条款标记词表任一命中=在场（追加式扩展|逃生门|合法修复路径|
+扩展条款），miss=violations+修复例句。artifact-tool 三模式统一对 finalContent 单点校验，挂 pm 块后
+原生顺序 dep→pm→esc；planning/review 硬拒 ❌、building/testing 降级 ⚠️（诚实文案，无 verdicts/gate
+元素——本批刻意不做 gate 要素，避免八处 fixture 同步重担；评审 Q7 兜底实质面）。两面文本同步：
+planner.md L9 + grill Q7 括注。
+
+**实现期真机取证（重要契约澄清，防后人误读）**：三预检块（lane-deps/probe-matrix/plan-escape）自
+M16-r33/W11 起原生位于 **writeFileSync 之后**——planning/review「硬拒」的真实语义 = **拒绝记账**
+（早退跳过 mark/withStateRetry，artifacts hash 与审计不前进），**不回滚磁盘**：write/patch 文本已先
+落盘。W14 初版测试曾按「盘上保持原状」断言失败暴露此认知偏差；已按真实契约改写（tests/artifact-patch
+W14 用例断言=拒绝文案+审计末条仍为上次成功写入），esc 拒绝文案已改「文本已落盘、记账冻结」精确表述（本轮落地）。
+dep/pm 原生文案「本次未落盘/未记账」对 write/patch 模式而言前半句不准（register 模式才准确），属两表
+既有措辞残差，登记待后续批次统一，不在 W14 单件批内加戏。**盘上回滚是三表共同的重构议题**（涉及
+原子性设计：先验后写 or 写失败回滚），如需做须整批评估，勿单独给 esc 加特殊路径。
+
+**残差声明**：①关键词在场≠语义在场（机器管在场、Q7 评审管实质）；②building/testing 窗 patch 删条款
+无下游兜底（接受，硬拒窗覆盖 plan 全部产生/修订窗口）；③register 幂等 no-op 早退先于预检=pre-upgrade
+无条款 plan 重放不受拒（与两表同语义）。
+
+**候选撤销归档**：探针目录预告提示不做——guard-hook 拒绝文案已自带 /tmp 指引+项目外放行（:3/:458），
+test_57 四次 gate:block 全即时自纠零损耗，机器层已执法到位，再加提示词层=回潮。
+
+**验收口径（test_58/59）**：M 级 plan-review r1 首过且失败根因中「逃生门条款」类=零（写时预检教育
+前置，不可能带病送审）；连续两轮 r1 PASS=首过常态化。
