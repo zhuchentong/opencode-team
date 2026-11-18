@@ -11,6 +11,7 @@ description: >
 
 ## 创建
 - `worktree_create`（opencode 工具）或 `git worktree add <path> -b <branch>`；树内先 `bun install`。
+- 宿主 `worktree_create` 对 `wf/<slug>/lane-Tnn` 斜杠名可能创建失败（test_52 实证，宿主侧根因未明）——失败一次即降级，勿反复重试：`git worktree add -b wf/<slug>/lane-<Tnn> <worktree 绝对路径> HEAD`；主树依赖已冻结（wave0 install 后）且各 lane 依赖与主树一致时，`ln -s <主树绝对路径>/node_modules <树内>/node_modules` 替代树内 `bun install`（lane 需增删依赖 → 先 `rm` symlink 改树内安装）；合并核验与清理复用下方既有节——md5 在「合并」§2，node_modules symlink 属 untracked 副本由「清理」§1 `rm`（必须先于非 force `worktree remove`，顺序不可倒）。
 - 分支命名：批次树 `wf/<slug>/batch<N>`；lane 树 `wf/<slug>/lane-Tnn`（P1-E；lane 写集归属见 `wf:lane ls` 的 areas 列）。
 - lane 树内 `.workflow/`（wf.db 等）不入 git：createStore 已在每个项目目录写 `.workflow/.gitignore`（managed 块）——树内首次跑测试自动生成，勿手工删除该块。
 - 基线陷阱：worktree 基于 HEAD 建树——主树未提交的 carryover 不在树内，开工前主树必须干净。

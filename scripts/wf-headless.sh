@@ -12,6 +12,7 @@
 # 本脚本导出 WF_HEADLESS=1（兼容非守护宿主+语义自描述；确认卡审计标记的权威信号是项目哨兵文件
 #   .workflow/.wf-headless，confirm-sentinel M3 v2——守护宿主 env 不可达）。
 set -u
+bash -n "$0" || { echo "❌ 脚本语法错误（bash -n 预检）"; exit 2; } # bash 逐块惰性解析——分支内语法错误执行到才暴露（test_52 L87 实证烧完 27min），启动即全文预检
 DIR="${1:?用法: wf-headless.sh <项目目录> [初始提示]}"; DIR="$(cd "$DIR" && pwd)"
 T0=$(date +%s) # 效率批 P3：进程墙起点（脚本起止——learner/收尾尾巴不再隐形混入单一墙钟口径）
 # headless-fix W1（test_45 首启事故）：opencode run 按调用者 cwd 定项目——不切换则任务落进
@@ -34,6 +35,58 @@ if [ -n "${WF_HEADLESS_MODEL:-}" ]; then
     [ -f "$f" ] && grep -q "\"$provider\"\|\"$provider/\|$provider/" "$f" 2>/dev/null && { cfg_hit=1; break; }
   done
   [ "$cfg_hit" = 1 ] || { echo "❌ model provider=$provider 未在项目/全局配置或 auth 中找到（复用 anthropic 失败教训——先配置再跑）"; exit 2; }
+  # F3 效率批补（provider env 预检）：{env:VAR} 由守护进程侧解析——模型调用经 service.json 端口
+  # 代理，run 进程自带 key 无效（test_52 实证 401 Invalid token）。检查语义=存在性而非有效性
+  # （key 被吊销仍会运行期 401，探针不覆盖）。作用域=仅本 provider 配置块——全文件提取会误伤
+  # 其它 provider/MCP 的 {env:}（本机实证 4 var 守护进程仅 1 有）。仅 WF_HEADLESS_MODEL 设置时
+  # 执行，与上方 provider 名检查同域；逃生口 WF_HEADLESS_SKIP_ENV_CHECK=1。工具缺失/解析失败/
+  # 权限不足一律 ⚠️ 放行（预检是护栏不是关卡）；唯「守护进程环境缺 VAR」❌ 快速失败。
+  if [ -n "${WF_HEADLESS_SKIP_ENV_CHECK:-}" ]; then
+    echo "· 跳过 provider env 预检（WF_HEADLESS_SKIP_ENV_CHECK=1）"
+  else
+    VARS="$(awk -v re="\"${provider}\"[ ]*:[ ]*[{]" '$0 ~ re {inb=1; next} inb && (/^    "/ || /^  "[a-zA-Z]/) {exit} inb {print}' "$f" 2>/dev/null \
+      | grep -oE '\{env:[A-Za-z_][A-Za-z0-9_]+\}' | sed -E 's/^[{]env:(.+)[}]$/\1/' | sort -u)"
+    if [ -z "$VARS" ]; then
+      echo "⚠️ provider env 预检：未从配置块提取到 $provider 的 {env:} 引用（块锚漂移/auth.json 字面 key），放行"
+    else
+      PORT=""
+      SVC="$HOME/.config/opencode/service.json"
+      [ -f "$SVC" ] && PORT="$(grep -oE '"port"[ ]*:[ ]*[0-9]+' "$SVC" | grep -oE '[0-9]+' | head -1)"
+      DPID=""
+      if [ -n "$PORT" ]; then
+        if command -v ss >/dev/null 2>&1; then
+          LISTENED="$(ss -tln 2>/dev/null | grep -c ":$PORT ")"
+          DPID="$(ss -tlnp 2>/dev/null | grep ":$PORT " | head -1 | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
+        elif command -v lsof >/dev/null 2>&1; then
+          lsof -i ":$PORT" >/dev/null 2>&1 && LISTENED=1 || LISTENED=0
+          DPID="$(lsof -t -i ":$PORT" 2>/dev/null | head -1)"
+        else
+          echo "⚠️ provider env 预检：ss/lsof 均不可用，无法定位守护进程环境（fail-open），放行"; PORT=""
+        fi
+        if [ -n "$PORT" ] && [ "${LISTENED:-}" = "0" ]; then PORT=""; fi # 端口无监听=无守护进程 → 转自查
+        if [ -n "$PORT" ] && [ -z "$DPID" ]; then
+          echo "⚠️ provider env 预检：端口 $PORT 在听但 pid 不可解析（跨用户/无 -p 权限），放行"; PORT=""
+        fi
+      fi
+      MISS=""
+      for v in $VARS; do
+        if [ -n "$PORT" ] && [ -n "$DPID" ]; then
+          if [ -r "/proc/$DPID/environ" ]; then
+            tr '\0' '\n' < "/proc/$DPID/environ" 2>/dev/null | grep -q "^${v}=" || MISS="$MISS $v"
+          else
+            echo "⚠️ provider env 预检：/proc/$DPID/environ 不可读（跨用户？），放行"; MISS=""; break
+          fi
+        else
+          [ -n "${!v:-}" ] || MISS="$MISS $v" # 无守护进程：run 进程自身解析 {env:}，自查 shell 环境（${!v:-} 在 set -u 下安全，已验证）
+        fi
+      done
+      if [ -n "$MISS" ]; then
+        echo "❌ 守护进程环境缺:$MISS——{env:VAR} 在守护进程侧解析（service.json:$PORT 端口代理，run 进程带 key 无效）；用带 key 的 shell 重启守护进程（kill <pid> 后：env ${MISS# }=<值> setsid nohup /usr/bin/opencode serve --service &；test_52 实证）；或 WF_HEADLESS_SKIP_ENV_CHECK=1 跳过"
+        exit 2
+      fi
+      echo "· provider env 预检通过（$VARS）"
+    fi
+  fi
 fi
 export WF_HEADLESS=1
 # confirm-sentinel M3：无头确认标记哨兵——守护宿主（opencode serve --service）不继承 wrapper env，
@@ -84,7 +137,7 @@ for i in $(seq 1 "$MAX_ITER"); do
     # 效率批 P3：双墙钟——流程墙（state_json timing startedAt→finishedAt，GNU date 换算；读失败降级只打进程墙）
     FLOW=""
     TIMING="$(db_retry "$WF_DB" "SELECT json_extract(state_json,'\$.timing.startedAt')||'|'||json_extract(state_json,'\$.timing.finishedAt') FROM tasks WHERE session_id='$SID' LIMIT 1;" 2>/dev/null)" || TIMING=""
-    if [ -n "${TIMING:-}" ] && [[ "$TIMING" == *|* ]]; then
+    if [ -n "${TIMING:-}" ] && [[ "$TIMING" == *"|"* ]]; then
       S_AT="${TIMING%%|*}"; F_AT="${TIMING##*|}"
       S_EPOCH=$(date -d "$S_AT" +%s 2>/dev/null) && F_EPOCH=$(date -d "$F_AT" +%s 2>/dev/null) && [ -n "$S_EPOCH" ] && [ -n "$F_EPOCH" ] && FLOW=$(( F_EPOCH - S_EPOCH ))
     fi
