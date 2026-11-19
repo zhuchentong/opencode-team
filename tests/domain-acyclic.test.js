@@ -13,14 +13,15 @@ const domainDir = new URL("../server/domain/", import.meta.url);
 // 效率批 P1 +1：lane-graph.ts（lane 依赖边表解析/校验，零依赖叶子——任意可 import，不入出边白名单）
 // W11-v2.1 +1：probe-matrix.ts（探针拓扑机器区，import lane-graph 复用 parseLaneDeps 做双射）
 // W14 +1：plan-escape.ts（扩展逃生门条款预检，零依赖叶子——任意可 import，不入出边白名单）
-const FILES = ["types.ts", "flow.ts", "guard.ts", "artifact.ts", "session.ts", "report.ts", "policy.ts", "diagnose.ts", "lane-graph.ts", "probe-matrix.ts", "plan-escape.ts"];
+// W15-a +1：tier-audit.ts（体量漂移观察闸，依赖 lane-graph/artifact/types——出边白名单已扩）
+const FILES = ["types.ts", "flow.ts", "guard.ts", "artifact.ts", "session.ts", "report.ts", "policy.ts", "diagnose.ts", "lane-graph.ts", "probe-matrix.ts", "plan-escape.ts", "tier-audit.ts"];
 
 // 粗筛（允许误报=plan §T02 口径）：from "..." 与副作用 import "..."
 function importsOf(src) {
   return [...src.matchAll(/(?:\bfrom|\bimport)\s*"([^"]+)"/g)].map((m) => m[1]);
 }
 
-test("T02 domain/ 十一文件齐全（效率批 P1 +lane-graph.ts + W11-v2.1 +probe-matrix.ts + W14 +plan-escape.ts）", () => {
+test("T02 domain/ 十二文件齐全（…W14 +plan-escape.ts + W15-a +tier-audit.ts）", () => {
   const have = fs.readdirSync(domainDir).filter((f) => f.endsWith(".ts")).toSorted();
   assert.deepEqual(have, [...FILES].toSorted());
 });
@@ -34,7 +35,8 @@ test("规则①'：domain 内部边 ⊆ {任意→types} ∪ {diagnose→flow,ar
       const allowed = target === "types.ts" ||
         (f === "diagnose.ts" && ["flow.ts", "artifact.ts", "session.ts"].includes(target)) ||
         (f === "artifact.ts" && ["lane-graph.ts", "probe-matrix.ts"].includes(target)) || // 效率批 P1：markVerdicts 单点自 derive 边表校验 // W11-v2.1：probeMatrixOk 同点派生 // W14：plan-escape 为 artifact→[lane-graph,probe-matrix,plan-escape] 第三入边（零依赖叶子，无需出边白名单）
-        (f === "probe-matrix.ts" && target === "lane-graph.ts"); // W11-v2.1：双射与 type 边派生复用 parseLaneDeps
+        (f === "probe-matrix.ts" && target === "lane-graph.ts") || // W11-v2.1：双射与 type 边派生复用 parseLaneDeps
+        (f === "tier-audit.ts" && ["lane-graph.ts", "artifact.ts"].includes(target)); // W15-a：体量漂移观察闸（parseLaneDeps+S 预算常量；零依赖叶子不新增传递闭包）
       assert.ok(allowed, `非法 domain 内部边：${f} → ${target}`);
       assert.ok(FILES.includes(target), `${f} import 了未知 domain 文件：${target}`);
     }

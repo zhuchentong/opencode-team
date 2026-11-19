@@ -10,7 +10,7 @@
 // 效率批 P1 有意 +2：checkLaneDeps/parseLaneDeps（lane-graph.ts，lane 依赖边表机器区解析/校验纯函数）→ 83）
 // W11-v2.1 有意 +3：checkProbeMatrix/parseProbeMatrix（probe-matrix.ts，探针拓扑机器区）+ containsGitInit
 // （guard.ts，git init 引号感知侦测纯函数）→ 86）
-// W14 有意 +1：checkPlanEscape（plan-escape.ts，扩展逃生门条款写时预检纯函数）→ 87）
+// W14 有意 +1：checkPlanEscape（plan-escape.ts，扩展逃生门条款写时预检纯函数）→ 89；W15-a 再 +2：auditTierDrift/TIER_DRIFT_MIN_T）
 // + barrel 形态判据（lib.ts ≤60 行）。m4-smoke 的 9 名抽查保留不动。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ const EXPECTED = [
   "HINT_TRIGGERS", "KIND_FILES", "LANE_CAP", "LEADER_AGENT", "LEADER_ALIASES", "LIMITS", "NEXT", "NEXT_DAILY",
   "PHASES_DAILY", "PHASES_FULL", "PROFILES", "READONLY_CMDS", "REJECT_NOTES", "REJECT_PREFIX",
   "SID_ALIAS_AUTO", "SID_ALIAS_USAGE", "VERSION", "WF_ROLES",
-  "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "checkLaneDeps", "checkPlanEscape", "checkProbeMatrix", "clipBrief", "containsGitInit",
+  "artifactPhaseWarning", "artifactSizeWarning", "briefFallback", "budgetFor", "checkLaneDeps", "checkPlanEscape", "checkProbeMatrix", "auditTierDrift", "TIER_DRIFT_MIN_T", "clipBrief", "containsGitInit",
   "completeSidPrefix", "diagnoseReport", "evaluateTransition", "extractPaths", "flowFor",
   "fuzzyFind", "gateFor", "hasStrictVerdictLine", "isDaily", "isHintWorthy", "isLeader",
   "LANE_STALE_MS", "isNearTruncation", "isRejectReport", "isSelfModDir", "laneCapNote", "laneTableWritten", "leaderOnlyReject", "levelFor",
@@ -33,8 +33,8 @@ const EXPECTED = [
   "shellWriteTargets", "slugify", "tierOf", "trackRoleSession",
 ];
 
-test("T02 导出集零漂移：Object.keys(lib) === 87 名全集锁", () => {
-  assert.equal(EXPECTED.length, 87);
+test("T02 导出集零漂移：Object.keys(lib) === 89 名全集锁", () => {
+  assert.equal(EXPECTED.length, 89); // W15-a +2：auditTierDrift/TIER_DRIFT_MIN_T（tier-audit.ts 体量漂移观察闸）
   assert.deepEqual(Object.keys(lib).toSorted(), [...EXPECTED].toSorted());
 });
 

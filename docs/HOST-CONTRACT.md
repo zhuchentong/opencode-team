@@ -384,3 +384,37 @@ integration 幽灵行夹具补 `run(SCHEMA)`（SCHEMA 已导出）、2 探针用
 疑似既有缺陷，单独立项核实；③budgetFor 调用点参数归一不齐（guidance 传 tier vs artifact-tool 传
 原始 size）随 W15-a 批处理；④真机四步取证（daemon PID→干净目录普通 agent 对话→find .workflow 空
 →intake 后 forensics 出七段）待下一轮 M 级验收顺带执行。
+
+## W15-a 体量自报漂移治理（launch 钉定 + 事后观察闸，2026-11-19）
+
+**背景**：test_58 验收轮 leader 主动降标 `[S]`（test_57 同 spec 判 M），W14 执法面（三机器区写时
+预检+plan-review 四要素，共同信号源 tierOf(st.size)）整链静默旁路，该轮不构成 M 路径样本。
+四角度对抗评审裁定：①纯 prompt 收紧=已证伪路线，否决；②事前硬拒=intake 时刻无可信机器指标
+（baseline 非 KIND_FILES、prompt 字节对「同 spec 换前缀」零分辨力且激励倒挂）+ 撞 r49/W7 重写
+循环否决在案，否决；③launch 钉定=实验控制正解，立即做；②'事后观察闸=最小可信形态，观察批立项。
+
+**实现（三件）**：
+1. **launch 钉定（纯脚本层，插件零改动）**：`WF_HEADLESS_SIZE=M|S|L` 在 FIRST_PROMPT 无方括号
+   前缀时前置 `[$SIZE]`（scripts/wf-headless.sh；已有前缀不覆盖=显式优先）。test_59 实证：
+   前缀经模型转录后 st.size=M 保真，intake:confirm/plan:confirm/三机器区/委派链全要素在场，
+   r1 首过 PASS 墙钟 1792s（区间新低）——W14 验收判据①达成。
+2. **事后观察闸（domain/tier-audit.ts 纯函数 + artifact-tool plan 注册路径第四块回显）**：
+   S 自报 plan 双结构信号同向超标（lane-deps nodes≥TIER_DRIFT_MIN_T=5 ∧ bytes≥S 预算 10KB）→
+   ⚠️ 复判回显 + `size:drift-observe` 事件记账。**不拒绝、不自动改写 st.size**（硬化留待 ≥3 例
+   立项，与「第 3 例立项」纪律同口径）。阈值标定：nodes≥5=超过全部历史 S 轮功能点数
+   （test_41/42/55/58 实测 1~4）；10KB=S 档预算上限自身（无新魔数，T2.1）。已知边界：test_58
+   本身（T4/3.8KB）双信号不同向不判——观察闸不假装能拦已发生的漂移（evidence 角度：T 计数对
+   该轮零分辨力），其价值在拦截未来大 plan 降标 + 记账面供阈值校准。
+3. **budgetFor 调用点归一**：artifact-tool 超预算告警改传 `tierOf(st.size)`（guidance 侧早已归一，
+   此点为 T2.1 纪律漏网——行为等价（tierOf 归一兜底），纯一致性修正）。
+
+**取证口径**：wf-forensics.sh 终态段增 `size=` + `drift-observe=` 两字段——M 级验收轮断言
+`size=M` 在场（events 直查绕 st.log 截断，W6-3 同款口径）；drift-observe 计数供观察闸校准。
+
+**锚**：tests/tier-audit.test.js 6 锚（双信号/单信号/非 S 恒不判/never-throw/阈值边界/
+test_58 历史语料蒸馏不翻案）+ tests/tier-drift-tool.test.js 3 锚（工具接线：S 双信号回显+记账/
+M 合规机器区零记账/单信号不判）。同步面：lib-exports 89 名全集锁（+auditTierDrift/
+TIER_DRIFT_MIN_T）、domain-acyclic 十二文件+tier-audit 出边白名单。
+
+**批次关系**：与 W15-b（惰性创建）文件重叠≈0，分开提交独立可 revert（评审裁定：先 a 后 b，
+本批后置落地因 W15-b 先行收敛）。

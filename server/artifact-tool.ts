@@ -9,7 +9,7 @@
 // （PASS→/wf:done、FAIL→/wf:fix 后重跑 /wf:test）——agent 在 tool output 即可看到下一步。
 import * as fs from "node:fs";
 import { createHash } from "node:crypto"; // r53 批次 1：register 幂等 hash 复核（managed-sync 同款 sha256 前 12 位口径）
-import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, checkLaneDeps, checkProbeMatrix, checkPlanEscape, tierOf, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源） // 效率批 P1：checkLaneDeps/tierOf（预检 fail-fast 副本） // W14：checkPlanEscape（扩展逃生门条款写时预检）
+import { VERSION, KIND_FILES, hasStrictVerdictLine, artifactPhaseWarning, artifactSizeWarning, fuzzyFind, markVerdicts, profileOf, trackRoleSession, CHUNK_KB, checkLaneDeps, checkProbeMatrix, checkPlanEscape, auditTierDrift, tierOf, type WfState } from "./lib.ts"; // R2 T2.1：isDaily→profileOf // CHUNK_KB：分段阈值单一来源 // opt-agentic 项①：markVerdicts 记账单点（verdict/lane 表判定收敛 domain 同源） // 效率批 P1：checkLaneDeps/tierOf（预检 fail-fast 副本） // W14：checkPlanEscape（扩展逃生门条款写时预检）
 import { logAdd, withStateRetry, type Store } from "./state.ts";
 import { type Observer } from "./observe.ts";
 
@@ -162,6 +162,10 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           if (esc && !esc.ok && (initial.phase === "planning" || initial.phase === "review")) {
             return { content: `❌ 扩展逃生门条款校验未过（${file}，文本已落盘、记账冻结——修订 plan 补条款后重新注册；violations 清单如下）：\n` + esc.violations.map((s) => `- ${s}`).join("\n") };
           }
+          // W15-a：体量自报漂移事后观察闸（domain/tier-audit 纯函数）——S 自报 plan 呈 M 形态
+          // （lane-deps nodes≥5 ∧ ≥S 预算 10KB，双信号同向）→ ⚠️ 回显+记账，不拒绝不改档。
+          // 观察闸不进硬拒窗：与三预检「拒绝记账不回滚磁盘」语义正交（observe-only）。
+          const drift = kind === "plan" ? auditTierDrift(finalContent, initial.size) : null;
           // M16-r33/M16-r34（语义随 markVerdicts 迁移）：verdict 从**结果全文**解析（patch/register
           // 模式入参无 content——markVerdicts 内部经 domain parseVerdict 对全文判定，否则 done 关卡误拦）
           // T04：记账写回带冲突重试——文件已落盘不重写，stale-rev 时仅对最新快照重放记账字段（≤3）
@@ -175,6 +179,7 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
             // bytes-no-op 早退不进 mark=保留上次记账的幂等语义不变。
             markVerdicts(row, file, kind, finalContent, bytes, hash, new Date().toISOString(), { clearOnPlan: true });
             logAdd(row, { at: new Date().toISOString(), cmd: "tool:wf_write_artifact", from: row.phase, to: row.phase, ok: true, note: mode === "write" ? file : `${file} mode=${mode}`, detail: `hash=${hash}` }); // r53 批次 1：hash 入审计 detail（wf.db 不进模型上下文）
+            if (drift?.drift) logAdd(row, { at: new Date().toISOString(), cmd: "size:drift-observe", from: row.phase, to: row.phase, ok: true, note: drift.reasons.join("；") }); // W15-a：体量漂移观察记账（不改写 st.size，≥3 例立项硬化）
           };
           // M16-r39 T07：归一 withStateRetry——mark 移入 apply（每 attempt 恰一次，防审计翻倍）；
           // load(1)=初始 st、load(n)=resolveState 最新快照（无 slug→null=gone，行被并发清除）
@@ -201,8 +206,10 @@ export function registerArtifactTool(host: import("./host.ts").Host, deps: Artif
           const phaseWarn = artifactPhaseWarning(kind, st.phase);
           if (phaseWarn) note += `\n${phaseWarn}`;
           // M16-r32：产物瘦身——超预算告警（不阻断，落盘/记账照常）；M16-r33：按任务体量分级
-          const sizeWarn = artifactSizeWarning(kind, bytes, st.size);
+          const sizeWarn = artifactSizeWarning(kind, bytes, tierOf(st.size)); // W15-a：T2.1 归一（评审附注：guidance 侧已传归一 tier，此点漏网）
           if (sizeWarn) note += `\n${sizeWarn}`;
+          // W15-a：漂移观察回显（⚠️ 复判提示；记账已随 mark 落 st.log→events）
+          if (drift?.drift) note += `\n⚠️ 体量漂移观察（W15-a）：plan 呈 M 形态（${drift.reasons.join("；")}）而任务自报 S——三机器区/plan-review 的 S 豁免已不适配，请复判体量标记（观察记账 size:drift-observe，未改写任务体量；硬化留待 ≥3 例立项）`;
           // 效率批 P1：lane-deps 预检结果回显（通过=合并序信息面；未过硬拒降级=⚠️+violation 清单，
           // laneDepsOk=false 已由 markVerdicts 记账、wf:build 关卡兜底）。
           if (dep) {

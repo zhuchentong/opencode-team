@@ -15,4 +15,5 @@ export * from "./domain/diagnose.ts";
 export * from "./domain/lane-graph.ts"; // 效率批 P1：lane 依赖边表解析/校验（lib-exports 全集锁须同步）
 export * from "./domain/probe-matrix.ts"; // W11-v2.1：probe-matrix 机器区解析/校验（lib-exports 全集锁须同步，+checkProbeMatrix/parseProbeMatrix）
 export * from "./domain/plan-escape.ts"; // W14：扩展逃生门条款写时预检（lib-exports 全集锁须同步，+checkPlanEscape）
+export * from "./domain/tier-audit.ts"; // W15-a：体量自报漂移事后观察闸（lib-exports 全集锁须同步，+auditTierDrift/TIER_DRIFT_MIN_T）
 export { VERSION } from "../shared/version.ts"; // M16-r39 T08：版本单一来源（T13 升 r39）

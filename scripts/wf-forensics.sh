@@ -35,7 +35,9 @@ SLUG="$(echo "$ROW" | cut -d'|' -f1)"; PHASE="$(echo "$ROW" | cut -d'|' -f2)"
 [ -z "$SID" ] && SID="$(echo "$ROW" | cut -d'|' -f3)"
 S_AT="$(echo "$ROW" | cut -d'|' -f4)"; F_AT="$(echo "$ROW" | cut -d'|' -f5)"
 echo "═══ ① 终态 ═══"
-echo "slug=$SLUG  phase=$PHASE  session=$SID"
+SIZE="$(q "SELECT coalesce(json_extract(state_json,'$.size'),'∅') FROM tasks $WHERE ORDER BY updated_at DESC LIMIT 1;")"
+DRIFT_N="$(q "SELECT COUNT(*) FROM events WHERE session_id='$SID' AND json_extract(entry_json,'$.cmd')='size:drift-observe';")"
+echo "slug=$SLUG  phase=$PHASE  size=$SIZE  drift-observe=$DRIFT_N  session=$SID" # W15-a：size 口径（M 级验收轮断言 size=M 在场）+漂移观察计数
 FLOW=""
 if [ -n "$S_AT" ] && [ -n "$F_AT" ]; then
   SE=$(date -d "$S_AT" +%s 2>/dev/null); FE=$(date -d "$F_AT" +%s 2>/dev/null)

@@ -22,6 +22,15 @@ cd "$DIR" || exit 2
 echo "· cwd 已切换至 $DIR" # 防静默掩盖调用方路径错误
 FIRST_PROMPT="${2:-${WF_HEADLESS_PROMPT:-}}"
 
+# W15-a：验收实验体量钉定——WF_HEADLESS_SIZE=M|S|L 在 FIRST_PROMPT 无方括号前缀时前置。
+# 动机：flow.ts intake [S]/[M]/[L] 前缀由模型自报，test_58 实证 leader 会主动降标 S 使 W14 执法面
+# （三机器区预检+plan-review 四要素）整链静默旁路，验收轮测错路径。纯脚本层拼前缀（评审裁定：
+# 实验控制问题用 harness 确定性控制自变量解决），插件零改动；已有前缀不覆盖（显式优先）。
+if [ -n "${WF_HEADLESS_SIZE:-}" ] && [ -n "$FIRST_PROMPT" ] && ! printf %s "$FIRST_PROMPT" | grep -qE '^\[(FULL|S|M|L)\]'; then
+  FIRST_PROMPT="[$WF_HEADLESS_SIZE] $FIRST_PROMPT"
+  echo "· 体量钉定：FIRST_PROMPT 前置 [$WF_HEADLESS_SIZE]（WF_HEADLESS_SIZE）"
+fi
+
 # ── 依赖与前置检查（fail-fast）─────────────────────────────────────
 command -v sqlite3 >/dev/null || { echo "❌ 缺 sqlite3（wf.db/事件读取依赖），请安装后重试"; exit 2; }
 command -v opencode >/dev/null || { echo "❌ 缺 opencode CLI"; exit 2; }

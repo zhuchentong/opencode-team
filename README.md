@@ -176,6 +176,8 @@ TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿
 | 扩展逃生门条款预检（仅写时不进 gate） | `server/domain/plan-escape.ts`（tierOf!=="S" 统一门纯函数）+ artifact-tool esc 块 | W14：M/L plan 必带条款句（test_54/57 判断类同族→结构强制）；实质面评审 Q7 兜底；详见 HOST-CONTRACT「W14 节」 |
 | git init 拦截 | `server/domain/guard.ts`（containsGitInit 引号感知）+ `server/guard-hook.ts`（独立分支置于 blocking 过滤前） | W13：活跃任务∧shell∧未 allowGitInit∧任务目录无 .git ⇒ 拒（含 building/testing 期）；逃生口 options.allowGitInit:true |
 | 真机复盘取证报告 | `scripts/wf-forensics.sh --db <wf.db>` | W12：七段标准报告（双墙钟/rounds/流转 gap/返修委派区间/计数器/产物/口径注记）；SQL 口径与 wf-headless.sh 同源 |
+| 体量自报漂移治理 | `WF_HEADLESS_SIZE`（wf-headless.sh 钉前缀）+ `server/domain/tier-audit.ts`（auditTierDrift 纯函数）+ artifact-tool drift 回显块 + forensics `size=/drift-observe=` 口径 | W15-a：launch 钉定控验收自变量（test_58 降标旁路实证）；S 自报 plan 双信号同向（nodes≥5 ∧ ≥S 预算 10KB）→ ⚠️ 复判+记账不拒不改档；详见 HOST-CONTRACT「W15-a 节」 |
+| .workflow 惰性创建 | `server/state.ts`（createStore 读写分级 ensureAlive）+ guard-hook 探针 WF_DEBUG 收门 | W15-b：setup 零磁盘副作用，读口无建写口有建（单槽去重）；详见 HOST-CONTRACT「W15-b 节」 |
 | 无头编排（opencode run） | `scripts/wf-headless.sh`（唯一驱动）+ `wf:resume`（审计轨）+ `WF_HEADLESS=1`（确认卡 auto 标记） | 边界与复现命令见 `docs/HOST-CONTRACT.md`「无头模式（opencode run）实测边界」；lane/tier/worktree 架构验收不在无头覆盖面 |
 | 升级宿主 / 改流程语义 | 先读 `docs/UPGRADE.md` | 不变量、基线表、核对点、验收命令 |
 
