@@ -338,3 +338,49 @@ test_57 四次 gate:block 全即时自纠零损耗，机器层已执法到位，
 
 **验收口径（test_58/59）**：M 级 plan-review r1 首过且失败根因中「逃生门条款」类=零（写时预检教育
 前置，不可能带病送审）；连续两轮 r1 PASS=首过常态化。
+
+## W15-b .workflow 惰性创建（2026-11-19）
+
+**背景与根因**：插件 setup 对每个项目无条件 `createStore(host)` → `openAll()` 构造期同步建库
+（mkdir .workflow + wf.db + .gitignore + registerProject）——普通 build agent 打开任意项目也得到
+`.workflow/`。插件注册是项目级（opencode.jsonc plugins），宿主无按 agent 分叉装载能力（评审实证），
+只能运行期收窄触发时机。四角度对抗评审（结构/时序/边界/战略）收敛为「方案 A′：读写分级惰性化」。
+
+**实现契约（server/state.ts createStore）**：
+- `opened` 与 `curIno===undefined` 哨兵分离——混用会命中幻影防御分支「两者皆不可证→维持现状」致
+  永不 open（全站静默失明）；未开态不参与 inode 判定，首开天然取新 inode（O1 简化红利）。
+- 读口无建（load/resolveState/scanStates/getReport/dumpStates/countEvents → `ensureAlive(false)`：
+  未开且库文件不存在 → 空态返回不物化）；写口有建（save/putReport/removeState → `ensureAlive(true)`）。
+- 并发单槽：`openPromise` in-flight 去重 + 失败 CAS 回滚（防「半开库误报无任务」——幻影镜像事故类，
+  评审时序角度唯一阻断项）；openAll 保持同步体，await 边界压到迁移一处；reopen 归一同一 ensureOpen。
+- 迁移惰性单飞 `runMigration`（原构造期 eager IIFE）：体内 scan→导入循环纯同步原子段论证不变
+  （半迁移态不存在）；`migrateDone` 闩=本 store 生命周期一次（幻影重开不重跑=既有语义）。
+- `ready` 契约键保留（helpers-contract 逐键断言），语义改=**显式 open 触发**——生产装配期消费者
+  已删（index.ts 原 `await store.ready`）；任何生产代码新增 await store.ready 即等于显式建库，慎用。
+- close 未开态 no-op（`if (opened)` 守卫）：杜绝 db.close() TypeError 污染 swallow 环（诊断面假故障）。
+
+**边界分类（用户原话「使用 workflow agent 时才创建」的可执行翻译）**：
+- 物化触发=首个 **workflow 写意图**：`/wf:*` 命令、`wf_command`/`wf_write_artifact` 工具、
+  guard-hook 对管辖会话的 save、headless 脚本自建（scripts/wf-headless.sh:97 mkdir 显式豁免）。
+- 不物化：TUI sidebar 轮询（rpc state/list 读口空态投影）、普通 agent 会话的工具事件
+  （resolveState 读口短路）、hint 路径、只读命令（status/ping/diagnose 无任务时）。
+- 伴随收门：guard-hook 8 处一次性 `_debug` 取证探针 mkdirSync 挂 `dbgProbe()`（WF_DEBUG=1 惰性求值）
+  ——否则普通项目任意一次工具调用即经探针旁路物化目录（评审边界角度最大旁路面）。
+
+**既有防线回归核对（评审时序角度）**：幻影自愈 O1 三断言全保留（closed 早退次序不变量、
+`state:phantom-db-reopen` code 不复用于惰性首开）；迁移幂等 T01 不变；selfmod 登记窗口≈0
+（自身库 open 后才可达 intake/lane）且从未跑 workflow 的项目不再进 wf-projects.jsonl=清单去污染（正向）。
+
+**实现期证伪记录**：评审「resolveState agent 身份门前置」SHOULD 项被既有测试契约打回——
+state-db「resolveState own 优先」锚锁死普通 agent 命中自有行也须返回（:382 门只在项目反查分支）；
+且读口 ensureAlive(false) 对未开库本就零 IO，前置门无增量收益——不采纳，原语义保留。
+
+**锚**：tests/lazy-state.test.js 5 锚（①构造期零副作用+close no-op 无假故障 ②读口无建
+③写口首达即建 ④并发单槽 ⑤ready=显式触发）。测试适配面：12 文件 stOf 补 catch（无库=无行=undefined）、
+integration 幽灵行夹具补 `run(SCHEMA)`（SCHEMA 已导出）、2 探针用例 WF_DEBUG 置位。
+
+**残差与后续**：①wf-headless WAIT 分支「待 wf.db 出现」新增合法静默态（首轮未进 workflow），
+超时文案补排查指引未做（非阻塞）；②hint.ts resolveState 恒 null（「已有状态不打扰」判定失效）
+疑似既有缺陷，单独立项核实；③budgetFor 调用点参数归一不齐（guidance 传 tier vs artifact-tool 传
+原始 size）随 W15-a 批处理；④真机四步取证（daemon PID→干净目录普通 agent 对话→find .workflow 空
+→intake 后 forensics 出七段）待下一轮 M 级验收顺带执行。

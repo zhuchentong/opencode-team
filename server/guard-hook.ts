@@ -48,6 +48,10 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
     try { await save(st); } catch (e) { swallow(e, "guard-hook:block-log-save-fail"); }
   };
 
+  // W15-b 伴随收门：8 处一次性取证探针的 mkdirSync(.workflow/_debug) 会旁路惰性创建边界
+  //（普通项目任意一次工具调用即物化目录），统一挂 WF_DEBUG 常驻门——历史取证结论已入册
+  //（HOST-CONTRACT 2.2.6 节），常态关闭零信息损失；取证时 WF_DEBUG=1 重启即复得全套探针。
+  const dbgProbe = (): boolean => process.env.WF_DEBUG === "1"; // 惰性求值：取证可在会话中途开（测试置位晚于 setup）
   // M16-r41 B 层：subagent 形状探针一次性开关（ERR-002 先探形状再使用；existsSync 自禁用，非 P6 常态探针）
   let subagentProbed = false;
   let sessionGetProbed = false;
@@ -108,7 +112,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
             try { await save(regSt); } catch (e) { swallow(e, "guard-hook:universal-reg-save-fail"); }
           }
           // 一次性形状取证：子会话工具调用 input.agent 的到达性/兜底路径（评审项#1 唯一未证形态）
-          if (!agentKeyProbed) {
+          if (dbgProbe() && !agentKeyProbed) {
             agentKeyProbed = true;
             try {
               let dir = process.cwd();
@@ -133,7 +137,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
       // 收窄（多 lane 安全）：全形状合法且非前缀非近似→不干预，放行交宿主归属校验。
       if (toolName === "subagent" || toolName === "task") {
         // probe 1：subagent 首次接入 hook，一次性取证「触发 + 入参形状」（best-effort，不影响守卫）
-        if (!subagentProbed) {
+        if (dbgProbe() && !subagentProbed) {
           subagentProbed = true;
           try {
             let dir = process.cwd();
@@ -151,7 +155,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           } catch (e) { swallow(e, "guard-hook:subagent-probe-fail"); }
         }
         // probe 4：session.get 返回形状一次性取证（parentID/time.busy/idle → 归属+存活校验可行性）
-        if (!sessionGetProbed) {
+        if (dbgProbe() && !sessionGetProbed) {
           sessionGetProbed = true;
           try {
             const callerSid = String(input?.sessionID ?? "");
@@ -203,7 +207,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
               tierLogPending = true;
               // 一次性探针按 target 分键（R1）：只保「记录了注入尝试」，宿主生效性以子会话 model 回读为准
               const probePath = `${dir}/.workflow/_debug/model-inject-probe-${target.replace(/^wf\//, "")}.json`;
-              if (!tierInjectProbed.has(target) && !fs.existsSync(probePath)) {
+              if (dbgProbe() && !tierInjectProbed.has(target) && !fs.existsSync(probePath)) {
                 tierInjectProbed.add(target);
                 try {
                   fs.mkdirSync(`${dir}/.workflow/_debug`, { recursive: true });
@@ -257,7 +261,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
             throw new Error(`${GATE_ERR} 别名续接失败：${res.reason}${res.candidates?.length ? `（可用：${res.candidates.join(", ")}）` : ""}`);
           }
           // 一次性取证：记录改写尝试与形状——真机核对该文件 + 后续 subagent 是否命中改写后 sessionID
-          if (!rewriteProbed) {
+          if (dbgProbe() && !rewriteProbed) {
             rewriteProbed = true;
             try {
               let dir = process.cwd();
@@ -300,7 +304,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
             try { await save(st); } catch (e) { swallow(e, "guard-hook:normalize-save-fail"); }
             // exec-strip-probe：一次性取证宿主对「删键≈省略」的尊重（零真机证据前不宣称此路径已修复；
             //   失败方向=仍报 not found，不劣于现状）
-            if (!stripProbed) {
+            if (dbgProbe() && !stripProbed) {
               stripProbed = true;
               try {
                 const dirS = st.directory ?? await resolveProjectDir?.(st, input?.sessionID);
@@ -330,7 +334,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
           const dirP = st.directory ?? await resolveProjectDir?.(st, input?.sessionID);
           const dbgP = dirP ? `${dirP}/.workflow/_debug` : null;
           const probeFile = dbgP ? `${dbgP}/sid-alias-probe-${target.replace(/^wf\//, "")}.json` : null;
-          if (dbgP && probeFile && !fs.existsSync(probeFile)) {
+          if (dbgProbe() && dbgP && probeFile && !fs.existsSync(probeFile)) {
             fs.mkdirSync(dbgP, { recursive: true });
             const tables = { role: target, roleSessions: st.reuse?.roleSessions, lanes: st.lanes };
             fs.writeFileSync(probeFile, JSON.stringify({
@@ -368,7 +372,7 @@ export function registerGuardHook(host: Host, deps: any) { // T03：ctx→Host
       // 本记账保证「问过了」，不保证「答的是批准」；审计留痕供 /wf:diagnose / /wf:status 取证。
       if (toolName === "question") {
         // 一次性形状取证（best-effort，先于 leader 过滤——任意会话首个 question 都取证一次）
-        if (!questionProbed) {
+        if (dbgProbe() && !questionProbed) {
           questionProbed = true;
           try {
             let dir = process.cwd();

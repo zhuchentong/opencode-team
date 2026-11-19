@@ -40,6 +40,7 @@ const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const stOf = (sid) => {
   const d = new Database(DB);
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
+   catch { return undefined; } // W15-b：无库/无表=无行（惰性语义）
   finally { try { d.close(); } catch { } }
 };
 const setup = async (childShape) => {
@@ -82,10 +83,13 @@ test("W6-2：lane 语境残渣 → loud-fail 指路 @Tnn + lane-context-reject �
 // ── W6-1：通用登记——bash-only 子会话首个工具调用即登记（不依赖 wf_write_artifact/edit）──
 test("W6-1：子会话 bash 调用（projectID 同源）→ roleSessions 即登记 + agent-key 探针落盘", async () => {
   const m = await setup(() => ({ projectID: "pi1", agent: "wf/builder", location: { directory: DIR }, parentID: LEADER }));
-  await m.hook()({ tool: "bash", sessionID: "ses_normChildX", agent: "wf/builder", input: { command: "ls" } }, {});
-  const rs = stOf(LEADER).reuse?.roleSessions;
-  assert.equal(rs?.["wf/builder"]?.sessionID, "ses_normChildX", "首调 bash 即登记（生产端固化）");
-  assert.ok(fs.existsSync(`${DIR}/.workflow/_debug/agent-key-probe.json`), "一次性形状取证落盘");
+  process.env.WF_DEBUG = "1"; // W15-b：探针 mkdir 已收 WF_DEBUG 门，取证用例显式置位
+  try {
+    await m.hook()({ tool: "bash", sessionID: "ses_normChildX", agent: "wf/builder", input: { command: "ls" } }, {});
+    const rs = stOf(LEADER).reuse?.roleSessions;
+    assert.equal(rs?.["wf/builder"]?.sessionID, "ses_normChildX", "首调 bash 即登记（生产端固化）");
+    assert.ok(fs.existsSync(`${DIR}/.workflow/_debug/agent-key-probe.json`), "一次性形状取证落盘");
+  } finally { delete process.env.WF_DEBUG; }
 });
 
 // ── W6-0：身份漂移 fixture（projectID 不匹配 + parentID 链）→ 三级回退命中仍登记 ──

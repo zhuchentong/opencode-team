@@ -36,6 +36,7 @@ const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid) => {
   const d = new Database(DB);
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
+   catch { return undefined; } // W15-b：无库/无表=无行（惰性语义）
   finally { try { d.close(); } catch { } }
 };
 fs.rmSync(DIR, { recursive: true, force: true });

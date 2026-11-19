@@ -90,7 +90,7 @@ scripts/tui-restart.sh      完全重启 TUI 进程（宿主对 TUI 插件模块
 
 TypeScript：全仓 `strict`（tsconfig），`bunx tsc --noEmit` 零错误；宿主注入 API 边界显式 `any`（无官方类型），内部数据流用 lib.ts 领域类型。`bun test` 为行为锚，含 wf.db 落库、RPC 契约快照、双轨注入断言。
 
-状态按会话存 `.workflow/wf.db` 的 `tasks` 表（项目根 = 会话 `location.directory`）；`wf/*` 子会话经 `project_id` 反查管辖状态，同样受闸门约束。`.workflow/.gitignore` 自动写入（wf.db 及其 WAL 附属文件不入库，产物 md 可提交）。
+状态按会话存 `.workflow/wf.db` 的 `tasks` 表（项目根 = 会话 `location.directory`）；`wf/*` 子会话经 `project_id` 反查管辖状态，同样受闸门约束。`.workflow/.gitignore` 自动写入（wf.db 及其 WAL 附属文件不入库，产物 md 可提交）。**惰性创建（W15-b）**：`.workflow/` 仅在首个 workflow 写入（如 `/wf:intake`）时创建；只读命令、TUI 面板、非 workflow 会话不会创建该目录（读口空态投影；取证探针挂 `WF_DEBUG=1` 门）。
 
 ## 插件 options（仅 server 部件生效）
 

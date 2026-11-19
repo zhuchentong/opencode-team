@@ -32,6 +32,7 @@ const cmd = (m, name) => m.cmds.find((c) => c.name === name);
 const stOf = (sid) => {
   const d = new Database(DB);
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
+   catch { return undefined; } // W15-b：无库/无表=无行（惰性语义）
   finally { try { d.close(); } catch { } }
 };
 // leader question 调用模拟（默认=intake 讨论确认卡三选项，锚「需求无误」）

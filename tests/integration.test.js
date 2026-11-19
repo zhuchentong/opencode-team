@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import plugin from "../server/index.ts";
+import { SCHEMA } from "../server/state.ts"; // W15-b：惰性化后 setup 不建库，裸库夹具须先 run(SCHEMA)
 import { mkHostStub } from "./helpers/host-stub.js"; // T04：装配收敛（rawCtx=setup(ctx) 消费者视图）
 
 // 虚拟模块占位包自举已单点化到 tests/_preload.js（P0-A，latency-v3.1）——本文件不再自举（副本=漂移源）。
@@ -276,6 +277,7 @@ test("T03 幽灵行不占面板：state() active:false；status/diagnose 报无�
   const dispose = await plugin.setup(m.ctx);
   {
     const d = new Database(DB);
+    d.run(SCHEMA); // W15-b：惰性化后 setup 零建库——夹具直开裸库先补 DDL
     d.run("INSERT INTO tasks (session_id, slug, phase, rev, state_json) VALUES ('ses_gh', '', NULL, 1, ?)",
       JSON.stringify({ sessionID: "ses_gh", slug: "", phase: null, rounds: {} }));
     d.close();

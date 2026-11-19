@@ -25,8 +25,10 @@ export default {
     const opt = host.options;
 
     // 状态存取（P1：SQLite 单库 .workflow/wf.db，含一次性旧 storage 迁移）与观测通道
+    // W15-b 惰性创建：createStore 不再产生磁盘副作用（原 `await store.ready` 装配期收口已删）——
+    // .workflow/ 仅在首个 workflow 写入事件物化；读口（load/scanStates 等）对未开库返回空态。
+    // 「迁移完成前不接命令」纪律由 ensureAlive 运行期逐点重建（任一命令首步 load 头部先收口迁移）。
     const store = createStore(host);
-    await store.ready; // 迁移完成前不接命令（防半迁移窗口读到空库）
     const { load, save, resolveState, resolveProjectDir, scanStates,
       putReport, getReport, dumpStates, removeState, close: closeStore } = store;
     const { debugDirFor, probeOnce, logToolsOnce } = createObserver(host, opt);

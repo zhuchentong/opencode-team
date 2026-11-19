@@ -39,6 +39,7 @@ const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid) => {
   const d = new Database(DB);
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
+   catch { return undefined; } // W15-b：无库/无表=无行（惰性语义）
   finally { try { d.close(); } catch { } }
 };
 fs.rmSync(DIR, { recursive: true, force: true });
@@ -209,8 +210,11 @@ const tierNotes = (leader) => stOf(leader).log.filter((l) => l.cmd === "tier:inj
 test("T03 新建：省略 sessionID → args.model 注入 builder=low + tier:inject 审计 + 按角色分键探针 + 零回显", async () => {
   const leader = "ses_leadT1"; const m = await setupLeader(leader);
   enableTier(m, leader);
+  process.env.WF_DEBUG = "1"; // W15-b：探针 mkdir 已收 WF_DEBUG 门，取证用例显式置位
   const input = { agent: "wf/builder" };
-  await callSub(m, leader, input);
+  try {
+    await callSub(m, leader, input);
+  } finally { delete process.env.WF_DEBUG; }
   assert.equal(input.model, "tu-coding/base-m#low", "就地改写 args.model（P0-B builder=low）");
   const ev = stOf(leader).log.find((l) => l.cmd === "tier:inject");
   assert.ok(ev, "审计含 cmd=tier:inject");

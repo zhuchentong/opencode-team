@@ -39,6 +39,7 @@ const tool = (m) => m.tools.find((t) => t.name === "wf_write_artifact");
 const stOf = (sid = "ses_d") => {
   const d = new Database(DB);
   try { const row = d.query("SELECT state_json FROM tasks WHERE session_id = ?").get(sid); return row ? JSON.parse(row.state_json) : undefined; }
+   catch { return undefined; } // W15-b：无库/无表=无行（惰性语义）
   finally { try { d.close(); } catch { } }
 };
 const blank = (over = {}) => withVerdicts({ slug: "t", phase: null, rounds: { plan_review: 0, build_review: 0, test_fix: 0 }, artifacts: {}, lanes: {}, ...over });

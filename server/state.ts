@@ -153,7 +153,8 @@ export {
 import { registerProject } from "./state-scan.ts"; // createStore 自身调用（re-export 不入当前作用域）
 
 
-const SCHEMA = `
+/** 建表 DDL（W15-b 导出：测试夹具直开裸库时须先 run(SCHEMA)——惰性化后 setup 不再建库）。 */
+export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tasks (
   session_id TEXT PRIMARY KEY,
   slug TEXT NOT NULL DEFAULT '',
@@ -207,9 +208,20 @@ export function createStore(host: Host): Store {
   // peers 查询）读到幻影旧行误报冲突、headless 磁盘监控轨永久失明（test_53 实证）。
   // ensureAlive 在各方法头检测 dbFile 消失/同路径换 inode（目录重建）→ 关旧连接重跑 openAll。
   // 扫描通道（state-scan.ts）无辜：每次开新 readonly 连接且逐条目 existsSync，不在本修复面。
+  // ── W15-b 惰性创建：setup 阶段零磁盘副作用（评审 B-必改①②③落地）──
+  // openAll() 从构造期移出；opened 与 curIno 哨兵分离（curIno===undefined 兼作「记录失败」退化态，
+  // 若混用「未开」会命中 ensureAlive 防御分支 → 永不 open → 全站静默失明）；读口无建（load/
+  // scanStates/getReport/dumpStates/countEvents 未开且库文件不存在 → 空态返回，不物化目录）、
+  // 写口有建（save/putReport/removeState 首达 ensureOpen）；并发经 openPromise 单槽去重 +
+  // 失败 CAS 回滚（防「半开库误报无任务」——幻影事故镜像形态，评审时序角度阻断项）。
+  // 未开态不参与 inode 判定：首开天然取新 inode（O1 简化红利）。
   let db: any;
   let curIno: number | undefined; // openAll 成功后的 inode；undefined=记录失败（退化为现状：仅按消失检测）
   let closed = false;             // close() 置位——防迟到调用经 ensureAlive 复活已删目录（mkdirSync 副作用）
+  let opened = false;             // W15-b：是否已 openAll（独立于 curIno；勿混用哨兵）
+  let openPromise: Promise<void> | null = null; // W15-b：单槽 in-flight（null=无进行中/已结算）
+  let migration: Promise<void> | null = null;   // 一次性迁移（惰性单飞；原构造期 eager IIFE 改造）
+  let migrateDone = false;                      // 迁移收口闩（本 store 生命周期一次；幻影重开不重跑=现状语义）
   // 幻影自愈批 O1：15 条 prepared 语句 const→let（openAll 重开时统一重建；SQL 文本单一来源在 openAll 内）
   let qGet: any; let qUpsert: any; let qEv: any; let qRep: any; let qRepGet: any; let qRepDel: any;
   let qTaskDel: any; let qProj: any; let qAll: any; let qGc: any; let qGhost: any; let qEvCount: any;
@@ -281,32 +293,54 @@ export function createStore(host: Host): Store {
     qMetaGet = db.prepare("SELECT value FROM meta WHERE key = ?");
     qMetaSet = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
   };
-  openAll();
   // r54 A1b：显式 WAL 收口（done 终态/reset 后调用；并发读 busy 时 PRAGMA 自身返回 busy=1 不抛错，
   // 失败仅 swallow 记账，绝不影响 save/removeState 返回值——数据安全增益，fail-open 语义）。
   const checkpointWal = (): void => {
     try { db.run("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) { swallow(e, "state:checkpoint-fail"); }
   };
-  // O1：幻影存活检测（各公开方法头调用）。dbFile 消失（rm -rf）或同路径换 inode（目录重建）→ 关旧连接重跑
-  // openAll（新文件）。F4：先 await ready——防同步 swap 落在迁移 await 窗口内致迁移半途 abort
-  //（meta.migrated 未置位=重复迁移+events 整批重复追加风险，migrate-meta-fix T01 修过的形态）。
-  // F3：closed 早退——close 后迟到调用维持现状 throw→swallow→write-error 路径，不复活已删目录。
-  const ensureAlive = async (): Promise<void> => {
+  // W15-b：写口单槽 ensureOpen——openAll 保持同步体（单线程下 check-and-set 原子，把 await 边界
+  // 压到迁移一处）；失败 CAS 回滚（允许下个事件重试，不留永久坏 promise；判等防旧 catch 迟到误清新槽）。
+  const ensureOpen = (): Promise<void> => {
+    if (closed) return Promise.resolve(); // F3 次序不变量：closed 最先，绝不建目录
+    if (!openPromise) {
+      const p = (async () => {
+        if (!opened) { openAll(); opened = true; } // 同步首开：无 await，不可能半开
+        if (!migrateDone && !migration) migration = runMigration(); // F4：迁移窗口先收口再放行
+        if (migration) await migration;
+      })();
+      openPromise = p.catch((e) => {
+        swallow(e, "state:lazy-open-fail");
+        if (openPromise === p) openPromise = null; // CAS 清槽：防竞态误清新 promise
+      });
+    }
+    return openPromise;
+  };
+  // O1 幻影存活检测 + W15-b 惰性打开合并单点（各公开方法头调用：读口 create=false / 写口 true）。
+  // 次序铁律：closed 早退 → 未开则 open（读口要求库文件已存在，否则空态返回不物化目录）→ 幻影检测。
+  // 未开态不参与 inode 判定（首开天然取新 inode——O1 简化红利）；close 后迟到调用维持
+  // throw→swallow→write-error 路径，不复活已删目录（O1③ 语义不变）。
+  const ensureAlive = async (create: boolean): Promise<void> => {
     try {
       if (closed) return;
-      try { await ready; } catch (e) { swallow(e, "state:phantom-ready-await-fail"); } // ready 内部已全捕获不会 reject；防御性记账
+      if (!opened) {
+        if (!create) {
+          try { if (!fs.existsSync(dbFile)) return; } catch { return; } // 读口无建：库不存在=空态
+        }
+        await ensureOpen();
+      }
       let st: fs.Stats | null = null;
       try { st = fs.statSync(dbFile); } catch { st = null; }
       if (st && curIno !== undefined && st.ino === curIno) return; // 正常：同 inode，无需重开
       if (!st && curIno === undefined) return;                     // 防御：两者皆不可证 → 维持现状
       try { db.close(); } catch (e) { swallow(e, "state:phantom-close-fail"); }
       openAll();
+      opened = true;
       swallow(new Error("phantom reopened"), "state:phantom-db-reopen"); // 观测形状先例 state:migrate-skip-no-dir
     } catch (e) { swallow(e, "state:phantom-ensure-fail"); }
   };
 
   const load = async (sessionID: string): Promise<WfState | null> => {
-    await ensureAlive();
+    await ensureAlive(false);
     try { return parse(qGet.get(String(sessionID ?? ""))) ?? null; } catch { return null; }
   };
 
@@ -314,7 +348,7 @@ export function createStore(host: Host): Store {
   // 丢更新，现在保新弃旧；console.warn 进 server 日志可回看）。无 rev 的新建快照 → 显式覆盖。
   // M16-r39 T04：pre-check 快速路径保留，实际写入委托 writeTaskRow 单语句 CAS（消除读-写窗口）。
   const save = async (st: WfState): Promise<SaveResult> => {
-    await ensureAlive();
+    await ensureAlive(true);
     if (!st || st.sessionID == null) return { ok: false, reason: "no-session" };
     st.updatedAt = new Date().toISOString();
     const sid = String(st.sessionID);
@@ -357,7 +391,7 @@ export function createStore(host: Host): Store {
 
   // reset：清除任务行与报告槽（events 流水为审计保留，不删）；r54 A1b：收拢 WAL（events 是 reset 后唯一剩余数据）
   const removeState = async (sessionID: string): Promise<void> => {
-    await ensureAlive();
+    await ensureAlive(true);
     try { qTaskDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:task-del-fail"); }
     try { qRepDel.run(String(sessionID ?? "")); } catch (e) { swallow(e, "state:report-del-fail"); }
     checkpointWal();
@@ -374,7 +408,10 @@ export function createStore(host: Host): Store {
   const parentMemo = new Map<string, string>();
   const PARENT_MEMO_CAP = 512;
   const resolveState = async (sessionID: string, agent?: string): Promise<WfState | null> => {
-    await ensureAlive();
+    // W15-b 评审曾提「agent 身份门前置」——实现期被既有测试契约证伪（resolveState own 优先锚锁死
+    // 普通 agent 命中自有行也须返回，:382 门只在项目反查分支），且读口 ensureAlive(false) 对未开库
+    // 本就零 IO（existsSync 短路），前置门无增量收益——不采纳，保持原语义。
+    await ensureAlive(false);
     const own = await load(sessionID);
     if (own) return own;
     const a = String(agent ?? "");
@@ -416,7 +453,7 @@ export function createStore(host: Host): Store {
   //（写放大 + WAL 空帧 + 锁竞争窗口）；60s 窗口内跳过，判定纯函数 shouldRunGc 可直测。
   let lastGcAt = 0;
   const scanStates = async (projectID?: string | null, directory?: string | null): Promise<StateListItem[]> => {
-    await ensureAlive();
+    await ensureAlive(false);
     const out: StateListItem[] = [];
     try {
       const now = Date.now();
@@ -452,12 +489,13 @@ export function createStore(host: Host): Store {
   //    ——bug A 教训：缺 sessionID 字段 TUI toastReport 过滤器会把 toast 全拦掉。
   //    T01 扩 brief/level：可选入参，缺省落 null（旧调用方零改动）──
   const putReport = async (r: { sessionID: string; text: string; at: string; brief?: string; level?: ReportLevel }): Promise<void> => {
-    await ensureAlive();
+    await ensureAlive(true);
     qRep.run(String(r.sessionID ?? ""), String(r.text ?? ""), r.at ? String(r.at) : null,
       r.brief != null ? String(r.brief) : null, r.level != null ? String(r.level) : null);
   };
   const getReport = async (sessionID: string): Promise<ReportRow | null> => {
-    await ensureAlive();
+    await ensureAlive(false);
+    if (!opened) return null; // W15-b：读口未开态显式空返（qRepGet 未备语句，裸引用=TypeError——lazy-state 锚捕获）
     const row = qRepGet.get(String(sessionID ?? ""));
     if (!row) return null;
     return { sessionID: row.session_id, text: row.text, at: row.at ?? null, brief: row.brief ?? null, level: row.level ?? null };
@@ -465,7 +503,7 @@ export function createStore(host: Host): Store {
 
   // wf:debug 转储用：近似旧 storage scan 的 [{key, value}] 形状
   const dumpStates = async (): Promise<{ key: string; value: unknown }[]> => {
-    await ensureAlive();
+    await ensureAlive(false);
     try {
       return qAll.all().map((row: any) => ({
         key: `${STATE_PREFIX}${row.session_id}`,
@@ -480,7 +518,9 @@ export function createStore(host: Host): Store {
   // projectID 不可信，勿做 fallback）；无 directory 行跳过+记账（scanStates A6 下本就项目不可见，
   // 与现有读语义一致）。双侧 path.resolve 纯串归一（与 A6 先例同款，勿引 realpathSync）。
   // 失败按空库处理（新开始，不阻塞启动）。
-  const ready = (async () => {
+  // W15-b：迁移体惰性单飞（原构造期 eager IIFE）。前置条件：openAll 已执行（备语句可用）。
+  // 体内逻辑逐字平移；migrateDone 闩=本 store 生命周期一次（幻影重开不重跑=既有语义：ready 只结算一次）。
+  const runMigration = async (): Promise<void> => {
     try {
       // 幂等收口：迁移完成即置 meta.migrated=1（含零导入），此后永不再触发——
       // 防过滤后空库反复扫描 + 防 done GC 清空 tasks 后 events 整批重复追加（events 无唯一约束）。
@@ -532,12 +572,19 @@ export function createStore(host: Host): Store {
       }
       qMetaSet.run("migrated", "1");
     } catch (e) { swallow(e, "state:storage-migrate-fail"); }
-  })();
+    migrateDone = true; // 成功/失败均收口：失败按空库处理（新开始），不重试阻塞后续事件
+  };
 
   return {
     load, save, removeState, resolveState, resolveProjectDir, scanStates,
-    putReport, getReport, dumpStates, ready,
-    countEvents: async (cmd: string) => { await ensureAlive(); try { return Number(qEvCount.get(String(cmd))?.n ?? 0); } catch { return 0; } },
-    close: () => { closed = true; try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } },
+    putReport, getReport, dumpStates,
+    // W15-b：ready 契约键保留（helpers-contract 逐键断言 + store-stub 同步面），语义改=「显式
+    // open+迁移触发」——生产装配期消费者已删（index.ts），唯一遗留消费面是测试 helper（newStore
+    // 的 await s.ready 正好充当触发点）；任何生产代码新增 await store.ready 即等于显式建库，慎用。
+    get ready() { return ensureOpen(); },
+    countEvents: async (cmd: string) => { await ensureAlive(false); try { return Number(qEvCount.get(String(cmd))?.n ?? 0); } catch { return 0; } },
+    // W15-b：closed 置位保持最前（拦截迟到调用）；未开态 close no-op——杜绝 db.close() 抛 TypeError
+    // 污染 swallow 环（诊断面假故障）。
+    close: () => { closed = true; if (opened) { try { db.close(); } catch (e) { swallow(e, "state:store-close-fail"); } } },
   };
 }
